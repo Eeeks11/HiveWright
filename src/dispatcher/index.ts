@@ -48,6 +48,7 @@ import { validateBrief } from "./pre-task-qa";
 import { checkDispatcherModelRouteHealth } from "./adapter-health";
 import { decideProviderFailoverRoute } from "./provider-failover";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
+import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
 import type { Adapter } from "../adapters/types";
 import {
@@ -57,6 +58,7 @@ import {
   isCodexRolloutRegistrationFailure,
 } from "../adapters/codex";
 import { emitBinaryWorkProduct, emitWorkProduct, shouldEmitWorkProduct } from "../work-products/emitter";
+import { loadDeliverableManifest } from "../work-products/manifest";
 import { writeTaskLog } from "./task-log-writer";
 import { recordTaskCost, checkGoalBudget, checkAiBudget } from "./cost-tracker";
 import { calculateCostCents } from "../adapters/provider-config";
@@ -75,6 +77,7 @@ import type { ExtractionContext } from "../memory/types";
 import { buildSessionContextProvenance, writeTaskContextProvenanceLog } from "../provenance/task-context";
 import { runInsightCurator } from "../insights/curator";
 import { emitTaskEvent } from "./event-emitter";
+import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 import { sendNotification } from "../notifications/sender";
 import { pruneStaleGoalSupervisors } from "../openclaw/goal-supervisor-cleanup";
 import { buildGoalCreatedNotificationMessage } from "./goal-notification";
@@ -706,7 +709,21 @@ export class Dispatcher {
       // same-adapter behaviour.
       const primaryAdapterType = (ctx.primaryAdapterType as string) || "claude-code";
       let adapterType = primaryAdapterType;
-      let adapter = await this.resolveAdapter(adapterType);
+      let adapter: Adapter;
+      try {
+        adapter = await this.resolveAdapter(adapterType);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.warn(`[dispatcher] Unsupported runtime adapter for task ${task.id}: ${reason}`);
+        await handleTaskFailureAndDoctor(
+          this.sql,
+          task.id,
+          FailureCategory.SpawnFailure,
+          `Unsupported runtime adapter: ${reason}`,
+          this.config,
+        );
+        return;
+      }
 
       const primaryHealthy = await this.isAdapterHealthy(adapterType, task.assignedTo, ctx.model, task.hiveId);
       let fallbackHealthy: boolean | undefined;
@@ -975,7 +992,118 @@ export class Dispatcher {
         return;
       }
 
-      // 8. Emit work product + extract facts
+      // 8. Emit work products + extract facts
+      const emittedDeliverables: Array<{ title: string; openUrl: string; reviewUrl: string }> = [];
+      const recordDeliverableLink = (wp: { id?: unknown; title?: unknown; summary?: unknown; filename?: unknown } | null | undefined) => {
+        const id = typeof wp?.id === "string" ? wp.id : null;
+        if (!id) return;
+        const title = (typeof wp?.title === "string" && wp.title.trim())
+          || (typeof wp?.summary === "string" && wp.summary.split(/\r?\n/).find(Boolean)?.trim())
+          || (typeof wp?.filename === "string" && wp.filename.trim())
+          || task.title;
+        emittedDeliverables.push({
+          title,
+          openUrl: `/deliverables/${id}/open`,
+          reviewUrl: `/deliverables/${id}`,
+        });
+      };
+
+      const explicitManifestDeliverables = await loadDeliverableManifest({
+        hiveWorkspacePath: ctx.hiveWorkspacePath,
+        taskId: task.id,
+      });
+
+      for (const manifestDeliverable of explicitManifestDeliverables) {
+        const metadata = {
+          ...(manifestDeliverable.metadata ?? {}),
+          source: "deliverables-manifest",
+          reviewRequired: manifestDeliverable.reviewRequired,
+        };
+        const common = {
+          taskId: task.id,
+          hiveId: task.hiveId,
+          roleSlug: task.assignedTo,
+          department: ctx.roleTemplate.department,
+          content: manifestDeliverable.summary ?? result.output,
+          summary: manifestDeliverable.summary ?? result.output,
+          title: manifestDeliverable.title,
+          filename: manifestDeliverable.filename,
+          artifactKind: manifestDeliverable.kind,
+          mimeType: manifestDeliverable.mimeType,
+          renderMode: manifestDeliverable.renderMode,
+          reviewStatus: manifestDeliverable.reviewRequired ? "needs_review" as const : "ready" as const,
+          metadata,
+          usageDetails: result.usageDetails ?? null,
+        };
+        if (manifestDeliverable.kind === "external_url") {
+          recordDeliverableLink(await emitWorkProduct(this.sql, {
+            ...common,
+            publicUrl: manifestDeliverable.publicUrl,
+          }));
+        } else if (manifestDeliverable.path) {
+          recordDeliverableLink(await emitBinaryWorkProduct(this.sql, {
+            ...common,
+            filePath: manifestDeliverable.path,
+            mimeType: manifestDeliverable.mimeType ?? "application/octet-stream",
+          }));
+        }
+      }
+
+      if (result.artifacts?.length) {
+        for (const artifact of result.artifacts) {
+          const renderMode = artifact.kind === "external_url" ? "external_url" : artifact.kind === "file" ? null : artifact.kind;
+          const reviewStatus = artifact.reviewRequired ? "needs_review" as const : "ready" as const;
+          if (artifact.kind === "external_url") {
+            recordDeliverableLink(await emitWorkProduct(this.sql, {
+              taskId: task.id,
+              hiveId: task.hiveId,
+              roleSlug: task.assignedTo,
+              department: ctx.roleTemplate.department,
+              content: artifact.summary ?? result.output,
+              summary: artifact.summary ?? result.output,
+              title: artifact.title ?? null,
+              artifactKind: artifact.kind,
+              mimeType: artifact.mimeType,
+              renderMode,
+              reviewStatus,
+              publicUrl: artifact.path,
+              usageDetails: artifact.usageDetails ?? result.usageDetails ?? null,
+              metadata: artifact.metadata ?? null,
+            }));
+            continue;
+          }
+          recordDeliverableLink(await emitBinaryWorkProduct(this.sql, {
+            taskId: task.id,
+            hiveId: task.hiveId,
+            roleSlug: task.assignedTo,
+            department: ctx.roleTemplate.department,
+            content: artifact.summary ?? result.output,
+            summary: artifact.summary ?? result.output,
+            title: artifact.title ?? null,
+            artifactKind: artifact.kind,
+            filePath: artifact.path,
+            mimeType: artifact.mimeType,
+            renderMode,
+            reviewStatus,
+            width: artifact.width ?? null,
+            height: artifact.height ?? null,
+            modelName: artifact.modelName ?? null,
+            modelSnapshot: artifact.modelSnapshot ?? null,
+            promptTokens: artifact.promptTokens ?? result.tokensInput ?? null,
+            outputTokens: artifact.outputTokens ?? result.tokensOutput ?? null,
+            costCents: artifact.costCents ?? (artifact.kind === "image" && artifact.modelSnapshot
+              ? calculateCostCents(
+                  artifact.modelSnapshot,
+                  artifact.promptTokens ?? result.tokensInput ?? 0,
+                  artifact.outputTokens ?? result.tokensOutput ?? 0,
+                )
+              : null),
+            usageDetails: artifact.usageDetails ?? result.usageDetails ?? null,
+            metadata: artifact.metadata ?? null,
+          }));
+        }
+      }
+
       if (shouldEmitWorkProduct(task.title)) {
         const wp = await emitWorkProduct(this.sql, {
           taskId: task.id,
@@ -984,38 +1112,13 @@ export class Dispatcher {
           department: ctx.roleTemplate.department,
           content: result.output,
           summary: result.output,
+          title: task.title,
+          artifactKind: "text",
+          mimeType: "text/markdown",
+          renderMode: "markdown",
           usageDetails: result.usageDetails ?? null,
         });
-
-        if (result.artifacts?.length) {
-          for (const artifact of result.artifacts) {
-            if (artifact.kind !== "image") continue;
-            await emitBinaryWorkProduct(this.sql, {
-              taskId: task.id,
-              hiveId: task.hiveId,
-              roleSlug: task.assignedTo,
-              department: ctx.roleTemplate.department,
-              content: result.output,
-              summary: result.output,
-              artifactKind: "image",
-              filePath: artifact.path,
-              mimeType: artifact.mimeType,
-              width: artifact.width,
-              height: artifact.height,
-              modelName: artifact.modelName,
-              modelSnapshot: artifact.modelSnapshot,
-              promptTokens: artifact.promptTokens ?? result.tokensInput ?? null,
-              outputTokens: artifact.outputTokens ?? result.tokensOutput ?? null,
-              costCents: artifact.costCents ?? calculateCostCents(
-                artifact.modelSnapshot,
-                artifact.promptTokens ?? result.tokensInput ?? 0,
-                artifact.outputTokens ?? result.tokensOutput ?? 0,
-              ),
-              usageDetails: artifact.usageDetails ?? result.usageDetails ?? null,
-              metadata: artifact.metadata ?? null,
-            });
-          }
-        }
+        recordDeliverableLink(wp);
 
         // 8b. Extract facts from work product
         try {
@@ -1128,6 +1231,7 @@ export class Dispatcher {
               title: task.title,
               assignedTo: task.assignedTo,
               hiveId: task.hiveId,
+              deliverables: emittedDeliverables,
             });
           } catch { /* ignore event emission errors */ }
         }
@@ -1180,6 +1284,7 @@ export class Dispatcher {
               title: task.title,
               assignedTo: task.assignedTo,
               hiveId: task.hiveId,
+              deliverables: emittedDeliverables,
             });
           } catch { /* ignore event emission errors */ }
         }
@@ -1267,41 +1372,27 @@ export class Dispatcher {
         await persistRuntimeWarnings();
         console.log(`[dispatcher] Task ${task.id} routed to QA.`);
         try {
-          await emitTaskEvent(this.sql, { type: "task_completed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId });
+          await emitTaskEvent(this.sql, { type: "task_completed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId, deliverables: emittedDeliverables });
         } catch { /* ignore event emission errors */ }
       } else {
-        // Auto-detect question-like output and block the task pending owner input
-        const QUESTION_PATTERN = /clarifying question|which approach|before I proceed|need.*clarification|awaiting.*decision/i;
-        if (task.goalId && QUESTION_PATTERN.test(result.output)) {
-          try {
-            const decisionRes = await fetch("http://localhost:3002/api/decisions", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                hiveId: task.hiveId,
-                taskId: task.id,
-                question: result.output,
-                context: task.title,
-                options: [],
-                goalId: task.goalId,
-              }),
-            });
-            if (!decisionRes.ok) {
-              console.error(`[dispatcher] Failed to create decision for task ${task.id}: ${decisionRes.status}`);
-            } else {
-              console.log(`[dispatcher] Auto-created decision for task ${task.id} (question detected in output).`);
-            }
-          } catch (decisionErr) {
-            console.error("[dispatcher] Error auto-creating decision:", decisionErr);
-          }
+        const ownerHandoff = task.goalId
+          ? await ensureOwnerHandoffDecision(this.sql, {
+              hiveId: task.hiveId,
+              goalId: task.goalId,
+              taskId: task.id,
+              taskTitle: task.title,
+              deliverable: result.output,
+            })
+          : { created: false, reason: "no_goal" };
+        if (ownerHandoff.created || ownerHandoff.reason?.startsWith("existing_")) {
           await blockTask(this.sql, task.id);
-          console.log(`[dispatcher] Task ${task.id} blocked — awaiting owner decision.`);
+          console.log(`[dispatcher] Task ${task.id} blocked — awaiting owner handoff decision ${ownerHandoff.decisionId ?? "(existing)"}.`);
         } else {
           await completeTask(this.sql, task.id, result.output, completionOptions);
           await markCapsuleCompleted(this.sql, task.id);
           console.log(`[dispatcher] Task ${task.id} completed.`);
           try {
-            await emitTaskEvent(this.sql, { type: "task_completed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId });
+            await emitTaskEvent(this.sql, { type: "task_completed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId, deliverables: emittedDeliverables });
           } catch { /* ignore event emission errors */ }
         }
       }
@@ -1732,11 +1823,8 @@ export class Dispatcher {
   }
 
   private async resolveAdapter(adapterType: string): Promise<Adapter> {
-    switch (adapterType) {
-      case "openclaw": {
-        const { OpenClawAdapter } = await import("../adapters/openclaw");
-        return new OpenClawAdapter();
-      }
+    const supportedAdapterType = assertSupportedRuntimeAdapter(adapterType);
+    switch (supportedAdapterType) {
       case "ollama": {
         const { OllamaAdapter } = await import("../adapters/ollama");
         return new OllamaAdapter();
@@ -1755,8 +1843,6 @@ export class Dispatcher {
         const { OpenAIImageAdapter } = await import("../adapters/openai-image");
         return new OpenAIImageAdapter();
       }
-      default:
-        return new ClaudeCodeAdapter();
     }
   }
 
@@ -1945,12 +2031,13 @@ export class Dispatcher {
           title: string;
           context: string;
           recommendation: string | null;
+          options: unknown;
           priority: string;
           kind: string;
           ea_attempts: number;
         }[]>`
           SELECT id, hive_id, goal_id, task_id, title, context, recommendation,
-                 priority, kind, ea_attempts
+                 options, priority, kind, ea_attempts
           FROM decisions
           WHERE status = 'ea_review'
           ORDER BY created_at ASC
@@ -1976,6 +2063,7 @@ export class Dispatcher {
           recommendation: row.recommendation,
           priority: row.priority,
           kind: row.kind,
+          options: row.options,
         });
 
         if (!outcome.ok) {

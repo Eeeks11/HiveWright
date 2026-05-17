@@ -126,20 +126,14 @@ describe("<DashboardShell>", () => {
   it("preserves the locked dashboard navigation vocabulary and global Call EA affordance without legacy settings links", () => {
     renderShell();
 
-    for (const label of [
-      "Dashboard",
-      "Work",
-      "Inbox",
-      "Operations",
-      "Memory",
-      "Hives",
-      "Schedules",
-      "Global Settings",
-    ]) {
+    for (const label of ["Dashboard", "Schedules", "Hives", "Global Settings"]) {
       expect(screen.getByRole("link", { name: label })).toBeTruthy();
     }
+    for (const label of ["Work", "Inbox", "Operations", "Memory"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
 
-    expect(screen.getByRole("link", { name: "Global Settings" }).getAttribute("href")).toBe("/setup");
+    expect(screen.getByRole("link", { name: "Global Settings" }).getAttribute("href")).toBe("/settings");
     expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Adapter Config" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Embedding Config" })).toBeNull();

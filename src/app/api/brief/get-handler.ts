@@ -17,6 +17,7 @@ import { getHiveCreationPause } from "@/operations/creation-pause";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { summarizeAiBudget } from "@/budget/ai-budget-policy";
 import { serializeGoalBudgetStatus } from "@/budget/status";
+import { countOwnerOutcomes, listOwnerOutcomes } from "@/outcomes/queries";
 
 /**
  * Owner Brief — the synthesis surface that makes HiveWright feel like it's
@@ -229,6 +230,11 @@ async function getBrief(request: Request, db: Sql) {
       resumeReadiness,
     };
 
+    const [latestOutcomes, unreadOutcomes] = await Promise.all([
+      listOwnerOutcomes(db, { hiveId, limit: 5 }),
+      countOwnerOutcomes(db, { hiveId }),
+    ]);
+
     const [ideasRow] = (await db`
       SELECT
         COUNT(*) FILTER (WHERE status = 'open')::int AS open_ideas_count,
@@ -346,6 +352,7 @@ async function getBrief(request: Request, db: Sql) {
       ).length,
       pendingDecisions: decisionRows.length,
       pendingQualityFeedback: Number(qualityFeedbackRow?.pending_quality_feedback ?? 0),
+      unreadOutcomes,
       totalPendingDecisions: decisionRows.length,
       stalledGoals: goals.filter((g) => g.health === "stalled").length,
       waitingGoals: goals.filter((g) => g.health === "waiting_on_owner").length,
@@ -373,6 +380,14 @@ async function getBrief(request: Request, db: Sql) {
           completedAt: t.updated_at,
         }),
       ),
+      latestOutcomes: latestOutcomes.map((outcome) => ({
+        id: outcome.id,
+        goalId: outcome.goalId,
+        goalTitle: outcome.goalTitle,
+        summary: outcome.summary,
+        createdAt: outcome.createdAt,
+        status: outcome.status,
+      })),
       newInsights: (newInsightRows as unknown as Record<string, unknown>[]).map((i) => ({
         id: i.id,
         content: i.content,

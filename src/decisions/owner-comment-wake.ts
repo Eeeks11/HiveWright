@@ -72,17 +72,18 @@ export async function mirrorOwnerDecisionCommentToGoalComment(
       return { status: "skipped", decisionMessageId, reason: "non_owner_sender" };
     }
     if (!row.goal_id) return { status: "skipped", decisionMessageId, reason: "no_goal" };
-    if (row.goal_status !== "active") {
-      return { status: "skipped", decisionMessageId, reason: "goal_not_active" };
-    }
-    if (!row.session_id) {
-      return { status: "skipped", decisionMessageId, reason: "no_supervisor_session" };
-    }
 
     // Claim the message before mirroring. Route-time handling and the dispatcher
     // LISTEN/fallback paths can race for the same decision message; this guarded
     // update is the idempotency lock that makes only one caller insert a wake
     // comment.
+    //
+    // Important: mirror owner comments even when the linked goal is no longer
+    // active or has no live supervisor session. The goal UI is the owner's audit
+    // trail; suppressing the mirror on achieved/no-session goals makes decision
+    // discussions disappear from the goal view. Actual supervisor wake remains
+    // gated by the normal goal-comment handler, which only wakes active goals
+    // with a session.
     const [claimed] = await tx<{ id: string }[]>`
       UPDATE decision_messages
       SET supervisor_woken_at = NOW()

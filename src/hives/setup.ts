@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
 import { getConnectorDefinition } from "@/connectors/registry";
+import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { storeCredential } from "@/credentials/manager";
 import { isValidHiveAddress } from "@/hives/address";
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
@@ -18,6 +19,15 @@ export type ConnectorSetup = {
   connectorSlug: string;
   displayName: string;
   fields: Record<string, string>;
+  grantedScopes?: string[];
+};
+
+export type InstalledConnectorSetupResult = {
+  id: string;
+  connectorSlug: string;
+  displayName: string;
+  requiresDispatcherRestart: boolean;
+  hasSafeTest: boolean;
 };
 
 export type ProjectSetup = {
@@ -34,6 +44,8 @@ export type OperatingPreferences = {
   requestSorting?: "balanced" | "direct" | "goals";
 };
 
+export type SafetyPreset = "open" | "owner_review_first" | "locked_down" | "custom";
+
 export type HiveSetupRequest = {
   hive?: {
     name?: string;
@@ -47,11 +59,13 @@ export type HiveSetupRequest = {
   projects?: ProjectSetup[];
   initialGoal?: string;
   operatingPreferences?: OperatingPreferences;
+  safetyPreset?: SafetyPreset;
 };
 
 export type HiveSetupStep =
   | "hive-record"
   | "role-overrides"
+  | "action-policies"
   | "connectors"
   | "projects"
   | "initial-goal";
@@ -219,10 +233,191 @@ async function saveAdapterConfig(
   `;
 }
 
-async function installConnector(tx: SqlExecutor, hiveId: string, connector: ConnectorSetup) {
+async function seedSafetyPolicies(tx: SqlExecutor, hiveId: string, preset: SafetyPreset = "owner_review_first") {
+  const policies = preset === "open"
+    ? [
+      {
+        name: "Allow read-only work",
+        effectType: "read",
+        effect: "allow",
+        priority: 1000,
+        reason: "Green preset: agents may inspect context and prepare work.",
+      },
+      {
+        name: "Allow notifications",
+        effectType: "notify",
+        effect: "allow",
+        priority: 990,
+        reason: "Green preset: outbound messages and notifications are allowed for connected services.",
+      },
+      {
+        name: "Allow external changes",
+        effectType: "write",
+        effect: "allow",
+        priority: 980,
+        reason: "Green preset: agents may make external changes through connected services.",
+      },
+      {
+        name: "Allow financial actions",
+        effectType: "financial",
+        effect: "allow",
+        priority: 970,
+        reason: "Green preset: financial actions are allowed when the connected service permits them.",
+      },
+      {
+        name: "Allow system changes",
+        effectType: "system",
+        effect: "allow",
+        priority: 960,
+        reason: "Green preset: configuration and system-level actions are allowed.",
+      },
+      {
+        name: "Allow destructive actions",
+        effectType: "destructive",
+        effect: "allow",
+        priority: 950,
+        reason: "Green preset: deletes and irreversible actions are allowed without approval gates.",
+      },
+    ]
+    : preset === "locked_down"
+    ? [
+      {
+        name: "Allow read-only setup checks",
+        effectType: "read",
+        effect: "allow",
+        priority: 1000,
+        reason: "Locked down preset: agents may inspect context but cannot act externally.",
+      },
+      {
+        name: "Block notifications",
+        effectType: "notify",
+        effect: "block",
+        priority: 960,
+        reason: "Locked down preset: outbound messages and notifications are blocked until explicitly enabled.",
+      },
+      {
+        name: "Block external changes",
+        effectType: "write",
+        effect: "block",
+        priority: 950,
+        reason: "Locked down preset: owner approval is required before enabling external changes.",
+      },
+      {
+        name: "Block financial actions",
+        effectType: "financial",
+        effect: "block",
+        priority: 940,
+        reason: "Locked down preset: financial actions are blocked until explicitly enabled.",
+      },
+      {
+        name: "Block system changes",
+        effectType: "system",
+        effect: "block",
+        priority: 930,
+        reason: "Locked down preset: configuration and system-level changes are blocked until explicitly enabled.",
+      },
+      {
+        name: "Block destructive actions",
+        effectType: "destructive",
+        effect: "block",
+        priority: 920,
+        reason: "Locked down preset: deletes and irreversible actions are blocked.",
+      },
+    ]
+    : [
+      {
+        name: "Allow low-risk read-only work",
+        effectType: "read",
+        effect: "allow",
+        priority: 1000,
+        reason: "Owner review first preset: agents may read context and prepare useful work.",
+      },
+      {
+        name: "Allow owner notification Discord webhook",
+        connector: "discord-webhook",
+        operation: "send_message",
+        effectType: "notify",
+        effect: "allow",
+        priority: 1200,
+        reason: "Owner review first preset: the system may notify the owner through the configured Discord webhook without creating a recursive approval loop.",
+      },
+      {
+        name: "Allow owner notification Discord bot",
+        connector: "ea-discord",
+        operation: "send_channel",
+        effectType: "notify",
+        effect: "allow",
+        priority: 1190,
+        reason: "Owner review first preset: the system may notify the owner through the configured EA Discord channel without creating a recursive approval loop.",
+      },
+      {
+        name: "Require approval before notifications",
+        effectType: "notify",
+        effect: "require_approval",
+        priority: 950,
+        reason: "Owner review first preset: messages and outbound notifications wait for approval.",
+      },
+      {
+        name: "Require approval before external changes",
+        effectType: "write",
+        effect: "require_approval",
+        priority: 940,
+        reason: "Owner review first preset: agents can draft changes, but the owner approves before anything changes outside HiveWright.",
+      },
+      {
+        name: "Require approval before financial actions",
+        effectType: "financial",
+        effect: "require_approval",
+        priority: 930,
+        reason: "Owner review first preset: spending, refunds, or payment changes require owner approval.",
+      },
+      {
+        name: "Require approval before system changes",
+        effectType: "system",
+        effect: "require_approval",
+        priority: 920,
+        reason: "Owner review first preset: configuration and system-level changes require owner approval.",
+      },
+      {
+        name: "Block destructive actions",
+        effectType: "destructive",
+        effect: "block",
+        priority: 910,
+        reason: "Owner review first preset: deletes and irreversible actions stay blocked until you change this rule.",
+      },
+    ];
+
+  for (const policy of policies) {
+    await tx`
+      INSERT INTO action_policies (
+        hive_id, name, enabled, connector, operation, effect_type, role_slug,
+        effect, priority, reason, conditions
+      )
+      VALUES (
+        ${hiveId}::uuid,
+        ${policy.name},
+        true,
+        ${"connector" in policy ? policy.connector ?? null : null},
+        ${"operation" in policy ? policy.operation ?? null : null},
+        ${policy.effectType},
+        null,
+        ${policy.effect},
+        ${policy.priority},
+        ${policy.reason},
+        ${tx.json({} as Parameters<Sql["json"]>[0])}
+      )
+    `;
+  }
+}
+
+async function installConnector(tx: SqlExecutor, hiveId: string, connector: ConnectorSetup): Promise<InstalledConnectorSetupResult> {
   const def = getConnectorDefinition(connector.connectorSlug);
   if (!def) {
     throw new HiveSetupError("One selected service is no longer available. Please review your services and try again.");
+  }
+
+  if (def.authType === "oauth2") {
+    throw new HiveSetupError(`${def.name} needs browser authorization after the hive is created.`);
   }
 
   for (const field of def.setupFields) {
@@ -230,6 +425,20 @@ async function installConnector(tx: SqlExecutor, hiveId: string, connector: Conn
       throw new HiveSetupError(`Please complete ${field.label} before creating this hive.`);
     }
   }
+
+  const requestedScopes: unknown[] = Array.isArray(connector.grantedScopes) ? connector.grantedScopes : [];
+  if (!requestedScopes.every((scope) => typeof scope === "string")) {
+    throw new HiveSetupError("One selected service has invalid permissions. Please review your services and try again.", 400);
+  }
+  const declaredScopes = new Set(def.scopes.map((scope) => scope.key));
+  const unknownScope = requestedScopes.find((scope): scope is string => typeof scope === "string" && !declaredScopes.has(scope));
+  if (unknownScope) {
+    throw new HiveSetupError("One selected service requested an unknown permission. Please review your services and try again.", 400);
+  }
+  const grantedScopes = Array.from(new Set([
+    ...def.scopes.filter((scope) => scope.required).map((scope) => scope.key),
+    ...(requestedScopes as string[]),
+  ]));
 
   const secretValues: Record<string, string> = {};
   const publicConfig: Record<string, string> = {};
@@ -260,10 +469,39 @@ async function installConnector(tx: SqlExecutor, hiveId: string, connector: Conn
     credentialId = credential.id;
   }
 
-  await tx`
-    INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, credential_id)
-    VALUES (${hiveId}::uuid, ${def.slug}, ${connector.displayName}, ${tx.json(publicConfig)}, ${credentialId})
+  const [row] = await tx`
+    INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, credential_id)
+    VALUES (${hiveId}::uuid, ${def.slug}, ${connector.displayName}, ${tx.json(publicConfig)}, ${tx.json(grantedScopes)}, ${credentialId})
+    RETURNING id, connector_slug AS "connectorSlug", display_name AS "displayName"
   `;
+
+  const testOperation = def.operations.find((operation) =>
+    ["test_connection", "self_test"].includes(operation.slug)
+    && operation.governance.effectType === "system"
+    && operation.governance.defaultDecision === "allow"
+    && operation.governance.riskTier === "low"
+  );
+  const hasSafeTest = Boolean(testOperation);
+
+  if (testOperation) {
+    const testResult = await invokeConnectorReadOnlyOrSystem(tx as unknown as Sql, {
+      installId: row.id as string,
+      operation: testOperation.slug,
+      args: {},
+      actor: "setup-wizard",
+    });
+    if (!testResult.success) {
+      throw new HiveSetupError(`${def.name} did not pass its setup test: ${testResult.error ?? "test failed"}`);
+    }
+  }
+
+  return {
+    id: row.id as string,
+    connectorSlug: row.connectorSlug as string,
+    displayName: row.displayName as string,
+    requiresDispatcherRestart: def.requiresDispatcherRestart === true,
+    hasSafeTest,
+  };
 }
 
 async function saveRoleOverrides(tx: SqlExecutor, roleOverrides: Record<string, RoleOverride>) {
@@ -353,7 +591,8 @@ export async function runHiveSetup(
         name: hiveRow.name as string,
         description: (hiveRow.description as string | null) ?? null,
       }, {
-        enabled: operatingPreferences.proactiveWork,
+        coreEnabled: true,
+        proactiveEnabled: operatingPreferences.proactiveWork,
       });
 
       await saveAdapterConfig(tx, "dispatcher", {
@@ -370,8 +609,12 @@ export async function runHiveSetup(
       await saveRoleOverrides(tx, body.roleOverrides ?? {});
       maybeFailSetup("role-overrides", options);
 
+      await seedSafetyPolicies(tx, hiveId, body.safetyPreset ?? "owner_review_first");
+      maybeFailSetup("action-policies", options);
+
+      const installedConnectors: InstalledConnectorSetupResult[] = [];
       for (const connector of connectors) {
-        await installConnector(tx, hiveId, connector);
+        installedConnectors.push(await installConnector(tx, hiveId, connector));
       }
       maybeFailSetup("connectors", options);
 
@@ -403,7 +646,13 @@ export async function runHiveSetup(
       }
       maybeFailSetup("initial-goal", options);
 
-      return { id: hiveId, name: hiveRow.name, slug: hiveRow.slug, type: hiveRow.type };
+      return {
+        id: hiveId,
+        name: hiveRow.name,
+        slug: hiveRow.slug,
+        type: hiveRow.type,
+        installedConnectors,
+      };
     });
   } catch (error) {
     cleanupDirectories(createdDirectories);

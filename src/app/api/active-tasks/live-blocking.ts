@@ -2,7 +2,12 @@
 // belongs to is still active (or it is a direct task with no goal). Failures
 // under achieved/cancelled/abandoned/completed goals are kept as historical
 // audit context and excluded from the live-critical state.
-export function isTaskLiveBlocking(taskStatus: string, goalStatus: string | null): boolean {
+export function isTaskLiveBlocking(
+  taskStatus: string,
+  goalStatus: string | null,
+  assignedTo?: string | null,
+): boolean {
+  if (assignedTo === "hive-supervisor") return false;
   if (!["blocked", "failed", "unresolvable"].includes(taskStatus)) return false;
   if (goalStatus === null) return true;
   return goalStatus === "active";

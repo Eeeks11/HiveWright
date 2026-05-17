@@ -6,6 +6,11 @@ export interface TaskEvent {
   title: string;
   assignedTo: string;
   hiveId?: string;
+  deliverables?: Array<{
+    title: string;
+    openUrl: string;
+    reviewUrl: string;
+  }>;
 }
 
 export interface DecisionEvent {

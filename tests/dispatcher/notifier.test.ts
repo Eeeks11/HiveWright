@@ -126,6 +126,35 @@ describe("outbound notifier", () => {
     expect(sent[0].content).toContain("Decision needs you");
   });
 
+  it("does not recurse by notifying on Discord send approval decisions", async () => {
+    await insertExternalActionApprovalDecision();
+
+    const sent: { channelId: string; content: string }[] = [];
+    const notifier = new OutboundNotifier(sql, testConfig(), captureSender(sent));
+
+    await notifier.scanAndQueue();
+    await notifier.flushAll();
+
+    expect(sent).toHaveLength(0);
+    const rows = await sql`
+      SELECT id FROM outbound_notifications
+      WHERE source_id = ${"00000000-0000-4000-8000-000000000302"}::uuid
+    `;
+    expect(rows).toHaveLength(0);
+  });
+
+  it("discovers owner decisions but skips notification-approval decisions in the legacy path", async () => {
+    await insertPendingDecision("decision-1");
+    await insertExternalActionApprovalDecision();
+
+    const events = await import("@/dispatcher/notifier").then((mod) =>
+      mod.discoverOutboundNotificationEvents(sql, testConfig()),
+    );
+
+    expect(events.map((event) => event.entityId)).toContain("00000000-0000-4000-8000-000000000001");
+    expect(events.map((event) => event.entityId)).not.toContain("00000000-0000-4000-8000-000000000302");
+  });
+
   it("dry-run mode records the payload without hitting Discord", async () => {
     await insertGoal("goal-dry-run", "achieved");
     const sender = vi.fn<NotifierSender>(async () => ({ ok: true }));
@@ -234,6 +263,25 @@ async function insertSupervisorEaReviewDecision() {
       'ea_review',
       'normal',
       'supervisor_flagged'
+    )
+  `;
+}
+
+async function insertExternalActionApprovalDecision() {
+  await sql`
+    INSERT INTO decisions (
+      id, hive_id, title, context, recommendation, status, priority, kind, route_metadata
+    )
+    VALUES (
+      ${"00000000-0000-4000-8000-000000000302"}::uuid,
+      ${HIVE_ID}::uuid,
+      'Approve HiveWright EA (Discord) Send Discord channel message?',
+      'Outbound notifier wants to send a Discord message.',
+      'Approve only if expected.',
+      'pending',
+      'normal',
+      'external_action_approval',
+      ${sql.json({ connectorSlug: "ea-discord", operation: "send_channel" })}
     )
   `;
 }

@@ -133,6 +133,7 @@ export async function GET(request: Request) {
         LEFT JOIN goals g ON g.id = t.goal_id AND g.hive_id = t.hive_id
         WHERE t.hive_id = ${hiveId}::uuid
           AND t.status IN ('blocked', 'failed', 'unresolvable')
+          AND t.assigned_to <> 'hive-supervisor'
       ) critical_tasks
       WHERE status_rank <= 4
       ORDER BY
@@ -185,7 +186,7 @@ export async function GET(request: Request) {
         goalStatus: row.goal_status,
         taskId: row.id,
         assignedTo: row.assigned_to,
-        liveBlocking: isTaskLiveBlocking(row.status, row.goal_status),
+        liveBlocking: isTaskLiveBlocking(row.status, row.goal_status, row.assigned_to),
       })),
       ...criticalDecisionRows.map((row) => ({
         id: row.id,

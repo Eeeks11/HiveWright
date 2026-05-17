@@ -5,7 +5,9 @@ import { serializeGoalBudgetStatus } from "@/budget/status";
 import { LiveActivityPanel } from "@/components/live-activity-panel";
 import { AttachmentsPanel } from "@/components/attachments-panel";
 import { TaskPipelineRouter } from "@/components/task-pipeline-router";
+import { TaskDeliverablesPanel } from "@/components/deliverables/task-deliverables-panel";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
+import { listDeliverables } from "@/deliverables/queries";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
 import { toPublicUsageSummary } from "@/usage/billable-usage";
 
@@ -51,22 +53,6 @@ type TaskRow = {
   completed_at: Date | null;
   created_at: Date;
   updated_at: Date;
-};
-
-type WorkProductRow = {
-  id: string;
-  content: string;
-  summary: string | null;
-  artifact_kind: string | null;
-  mime_type: string | null;
-  width: number | null;
-  height: number | null;
-  model_name: string | null;
-  model_snapshot: string | null;
-  prompt_tokens: number | null;
-  output_tokens: number | null;
-  cost_cents: number | null;
-  created_at: Date;
 };
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -176,13 +162,7 @@ export default async function TaskDetailPage({
   const codexEmptyOutputDiagnostic = await readLatestCodexEmptyOutputDiagnostic(sql, id);
   const provenance = await readLatestTaskContextProvenance(sql, id);
 
-  const workProducts = await sql<WorkProductRow[]>`
-    SELECT id, content, summary, artifact_kind, mime_type, width, height,
-           model_name, model_snapshot, prompt_tokens, output_tokens, cost_cents, created_at
-    FROM work_products
-    WHERE task_id = ${id}
-    ORDER BY created_at ASC
-  `;
+  const deliverables = await listDeliverables(sql, { taskId: id });
 
   return (
     <div className="space-y-6">
@@ -347,49 +327,7 @@ export default async function TaskDetailPage({
         )}
       </div>
 
-      {workProducts.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Work Products</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {workProducts.map((wp) => {
-              const isImage = wp.artifact_kind === "image" && wp.mime_type?.startsWith("image/");
-              const href = `/api/work-products/${wp.id}/download`;
-              return (
-                <div key={wp.id} className="rounded-lg border p-4 space-y-3">
-                  {isImage ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={href}
-                      alt={wp.summary ?? "Generated work product image"}
-                      className="aspect-video w-full rounded-md border object-contain"
-                    />
-                  ) : (
-                    <p className="text-sm whitespace-pre-wrap">{wp.summary ?? wp.content}</p>
-                  )}
-                  <div className="space-y-1 text-xs text-zinc-500">
-                    {wp.mime_type && <p>MIME: {wp.mime_type}</p>}
-                    {wp.model_name && <p>Model: {wp.model_name}</p>}
-                    {wp.model_snapshot && <p>Snapshot: {wp.model_snapshot}</p>}
-                    {wp.width && wp.height && <p>Dimensions: {wp.width}x{wp.height}</p>}
-                    {wp.prompt_tokens !== null && wp.output_tokens !== null && (
-                      <p>
-                        Tokens: {wp.prompt_tokens.toLocaleString()} in /{" "}
-                        {wp.output_tokens.toLocaleString()} out
-                      </p>
-                    )}
-                    {wp.cost_cents !== null && <p>Cost: ${(wp.cost_cents / 100).toFixed(4)}</p>}
-                  </div>
-                  {isImage && (
-                    <Link href={href} className="text-sm text-blue-600 hover:underline dark:text-blue-400">
-                      Open artifact
-                    </Link>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      <TaskDeliverablesPanel deliverables={deliverables} />
 
       {/* Details */}
       <div className="rounded-lg border px-4">

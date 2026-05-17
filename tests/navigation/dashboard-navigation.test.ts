@@ -6,12 +6,15 @@ import {
 } from "../../src/navigation/dashboard-navigation";
 
 describe("dashboard navigation model", () => {
-  it("keeps setup canonical and global items visually separated without settings hrefs", () => {
+  it("separates selected-hive setup from global HiveWright settings", () => {
     const groups = buildDashboardNavigation({
       activeHiveId: "hive-2",
       qualityFeedbackCount: 4,
+      unreadOutcomesCount: 2,
     });
     const links = groups.flatMap((group) => group.links.map((link) => ({ ...link, groupId: group.id })));
+    const setupLinks = links.filter((link) => link.groupId === "setup");
+    const globalLinks = links.filter((link) => link.groupId === "global");
 
     expect(groups.map((group) => group.id)).toEqual([
       "dashboard",
@@ -25,25 +28,44 @@ describe("dashboard navigation model", () => {
       "global",
     ]);
     expect(groups.find((group) => group.id === "global")?.global).toBe(true);
-    expect(groups.find((group) => group.id === "work")).toMatchObject({
-      href: "/tasks",
-      label: "Work",
+    expect(groups.find((group) => group.id === "setup")).toMatchObject({
+      label: "Hive Setup",
     });
-    expect(groups.find((group) => group.id === "memory")).toMatchObject({
-      href: "/memory",
-      label: "Memory",
-    });
+    expect(groups.find((group) => group.id === "work")?.href).toBeUndefined();
+    expect(groups.find((group) => group.id === "memory")?.href).toBeUndefined();
+
+    expect(setupLinks.map((link) => link.id)).toEqual([
+      "setup",
+      "models",
+      "connectors",
+      "action-policies",
+      "setup-health",
+    ]);
+    expect(globalLinks.map((link) => link.id)).toEqual([
+      "hives",
+      "global-settings",
+      "adapter-settings",
+      "embedding-settings",
+      "work-intake-settings",
+      "updates",
+    ]);
     expect(links.find((link) => link.id === "global-settings")).toMatchObject({
-      href: "/setup",
+      href: "/settings",
       label: "Global Settings",
       groupId: "global",
     });
     expect(links.find((link) => link.id === "updates")).toMatchObject({
       href: "/setup/updates",
-      label: "Updates",
-      groupId: "setup",
+      label: "HiveWright Updates",
+      groupId: "global",
     });
-    expect(links.map((link) => link.href).filter((href) => href.startsWith("/settings"))).toEqual([]);
+    expect(links.find((link) => link.id === "deliverables")).toMatchObject({
+      href: "/deliverables",
+      label: "Final outputs",
+      badgeCount: 2,
+      groupId: "work",
+    });
+    expect(setupLinks.map((link) => link.href).filter((href) => href.startsWith("/settings"))).toEqual([]);
   });
 
   it("frames pipeline and capture routes as Procedures instead of separate Operations tools", () => {

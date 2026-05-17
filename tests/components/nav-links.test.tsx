@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NavLinks } from "../../src/components/nav-links";
 
@@ -131,50 +131,57 @@ describe("<NavLinks>", () => {
     );
   });
 
-  it("keeps Quality feedback visible when there are no pending ratings", () => {
+  it("uses top-level groups as disclosure buttons instead of links to first child pages", () => {
     vi.mocked(usePathname).mockReturnValue("/tasks");
     mockHiveContext();
     mockBriefCount(0);
 
     renderWithQueryClient(<NavLinks />);
 
-    expect(screen.getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("/decisions");
+    const inboxButton = screen.getByRole("button", { name: /Inbox/ });
+    const setupButton = screen.getByRole("button", { name: /Hive Setup/ });
+
+    expect(inboxButton.getAttribute("aria-expanded")).not.toBe("true");
+    expect(setupButton.getAttribute("aria-expanded")).not.toBe("true");
+    expect(screen.queryByRole("link", { name: "Inbox" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Setup" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Quality feedback" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Setup" }).getAttribute("href")).toBe("/setup");
     expect(screen.queryByRole("link", { name: "Models" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Setup Health" })).toBeNull();
+
+    fireEvent.click(inboxButton);
+    expect(inboxButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("link", { name: "Decisions" }).getAttribute("href")).toBe("/decisions");
+    expect(screen.getByRole("link", { name: "Quality feedback" }).getAttribute("href")).toBe("/quality-feedback");
   });
 
-  it("renders grouped sidebar sections with separated canonical global links", () => {
+  it("renders a single top-level control for each navigation group", () => {
     vi.mocked(usePathname).mockReturnValue("/setup/models");
     mockHiveContext();
     mockBriefCount(0);
 
     renderWithQueryClient(<NavLinks />);
 
-    for (const groupLabel of [
-      "Dashboard",
-      "Work",
-      "Inbox",
-      "Schedules",
-      "Memory",
-      "Analytics",
-      "Operations",
-      "Setup",
-      "Global",
-    ]) {
-      expect(screen.getByRole("group", { name: groupLabel })).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Dashboard" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/");
+    expect(screen.getByRole("link", { name: "Schedules" }).getAttribute("href")).toBe("/schedules");
+    expect(screen.getByRole("link", { name: "Analytics" }).getAttribute("href")).toBe("/analytics");
+
+    for (const groupLabel of ["Work", "Inbox", "Memory", "Operations", "Hive Setup", "Global"]) {
+      expect(screen.getByRole("button", { name: new RegExp(groupLabel) })).toBeTruthy();
+      expect(screen.queryByRole("link", { name: groupLabel })).toBeNull();
     }
 
-    expect(screen.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/");
-    expect(screen.getByRole("link", { name: "Operations" }).getAttribute("href")).toBe("/roles");
     expect(screen.queryByRole("link", { name: "Board" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Voice" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Docs" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Overview" }).getAttribute("href")).toBe("/setup");
     expect(screen.getByRole("link", { name: "Models" }).getAttribute("href")).toBe("/setup/models");
     expect(screen.getByRole("link", { name: "Setup Health" }).getAttribute("href")).toBe("/setup/health");
     expect(screen.getByRole("link", { name: "Hives" }).getAttribute("href")).toBe("/hives");
-    expect(screen.getByRole("link", { name: "Global Settings" }).getAttribute("href")).toBe("/setup");
+    expect(screen.getByRole("link", { name: "Global Settings" }).getAttribute("href")).toBe("/settings");
+    expect(screen.getByRole("link", { name: "Adapters" }).getAttribute("href")).toBe("/settings/adapters");
+    expect(screen.getByRole("link", { name: "Embedding settings" }).getAttribute("href")).toBe("/settings/embeddings");
+    expect(screen.getByRole("link", { name: "Work Intake Classifier" }).getAttribute("href")).toBe("/settings/work-intake");
     expect(screen.queryByRole("link", { name: "Settings" })).toBeNull();
   });
 
@@ -185,17 +192,15 @@ describe("<NavLinks>", () => {
 
     renderWithQueryClient(<NavLinks />);
 
-    const workGroup = screen.getByRole("group", { name: "Work" });
-    const memoryGroup = screen.getByRole("group", { name: "Memory" });
-    const workSectionLink = within(workGroup).getByRole("link", { name: "Work" });
-    const tasksLink = within(workGroup).getByRole("link", { name: "Tasks" });
+    const workButton = screen.getByRole("button", { name: /Work/ });
+    const memoryButton = screen.getByRole("button", { name: /Memory/ });
+    const tasksLink = screen.getByRole("link", { name: "Tasks" });
 
-    expect(workSectionLink.getAttribute("href")).toBe("/tasks");
-    expect(workSectionLink.getAttribute("aria-current")).toBe("page");
+    expect(workButton.getAttribute("aria-expanded")).toBe("true");
+    expect(memoryButton.getAttribute("aria-expanded")).not.toBe("true");
     expect(tasksLink.getAttribute("aria-current")).toBe("page");
-    expect(within(workGroup).getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals");
-    expect(within(memoryGroup).getByRole("link", { name: "Memory" }).getAttribute("href")).toBe("/memory");
-    expect(within(memoryGroup).queryByRole("link", { name: "Memory Health" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals");
+    expect(screen.queryByRole("link", { name: "Memory Health" })).toBeNull();
   });
 
   it("moves expansion from Work to Memory when the current route changes", () => {
@@ -205,17 +210,35 @@ describe("<NavLinks>", () => {
 
     renderWithQueryClient(<NavLinks />);
 
-    const workGroup = screen.getByRole("group", { name: "Work" });
-    const memoryGroup = screen.getByRole("group", { name: "Memory" });
-    const memorySectionLink = within(memoryGroup).getByRole("link", { name: "Memory" });
-    const timelineLink = within(memoryGroup).getByRole("link", { name: "Memory Timeline" });
+    const workButton = screen.getByRole("button", { name: /Work/ });
+    const memoryButton = screen.getByRole("button", { name: /Memory/ });
+    const timelineLink = screen.getByRole("link", { name: "Memory Timeline" });
 
-    expect(within(workGroup).queryByRole("link", { name: "Tasks" })).toBeNull();
-    expect(within(workGroup).queryByRole("link", { name: "Goals" })).toBeNull();
-    expect(memorySectionLink.getAttribute("aria-current")).toBe("page");
+    expect(workButton.getAttribute("aria-expanded")).not.toBe("true");
+    expect(memoryButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("link", { name: "Tasks" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Goals" })).toBeNull();
     expect(timelineLink.getAttribute("href")).toBe("/memory/timeline");
     expect(timelineLink.getAttribute("aria-current")).toBe("page");
-    expect(within(memoryGroup).getByRole("link", { name: "Memory Health" }).getAttribute("href")).toBe("/memory/health");
+    expect(screen.getByRole("link", { name: "Memory Health" }).getAttribute("href")).toBe("/memory/health");
+  });
+
+  it("expands Global instead of Hive Setup for global settings routes and aliases", () => {
+    vi.mocked(usePathname).mockReturnValue("/settings/adapters");
+    mockHiveContext();
+    mockBriefCount(0);
+
+    renderWithQueryClient(<NavLinks />);
+
+    const hiveSetupButton = screen.getByRole("button", { name: /Hive Setup/ });
+    const globalButton = screen.getByRole("button", { name: /Global/ });
+    const adaptersLink = screen.getByRole("link", { name: "Adapters" });
+
+    expect(hiveSetupButton.getAttribute("aria-expanded")).not.toBe("true");
+    expect(globalButton.getAttribute("aria-expanded")).toBe("true");
+    expect(adaptersLink.getAttribute("href")).toBe("/settings/adapters");
+    expect(adaptersLink.getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("link", { name: "Models" })).toBeNull();
   });
 
   it("shows a pending count badge for Quality feedback when ratings are waiting", async () => {
@@ -225,11 +248,11 @@ describe("<NavLinks>", () => {
 
     renderWithQueryClient(<NavLinks />);
 
-    const inboxLink = screen.getByRole("link", { name: "Inbox" });
-    expect(inboxLink.getAttribute("href")).toBe("/decisions");
+    const inboxButton = screen.getByRole("button", { name: /Inbox/ });
+    expect(inboxButton.getAttribute("aria-expanded")).not.toBe("true");
     expect(screen.queryByRole("link", { name: "Quality feedback" })).toBeNull();
     await waitFor(() => {
-      expect(within(inboxLink).getByText("3").textContent).toContain("3");
+      expect(within(inboxButton).getByText("3").textContent).toContain("3");
     });
   });
 });

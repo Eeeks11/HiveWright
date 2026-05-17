@@ -9,6 +9,7 @@ export type SetupHealthRowKey =
   | "ea"
   | "dispatcher"
   | "connectors"
+  | "safety"
   | "schedules"
   | "memory";
 
@@ -45,6 +46,12 @@ export type SetupHealthSnapshot = {
     tested: number;
     withErrors: number;
   };
+  actionPolicies: {
+    total: number;
+    enabled: number;
+    blocksDestructive: boolean;
+    requiresApprovalForExternalWrites: boolean;
+  };
   schedules: {
     total: number;
     enabled: number;
@@ -78,6 +85,7 @@ export function buildSetupHealthRows(snapshot: SetupHealthSnapshot): SetupHealth
     buildEaRow(snapshot),
     buildDispatcherRow(snapshot),
     buildConnectorsRow(snapshot),
+    buildSafetyRow(snapshot),
     buildSchedulesRow(snapshot),
     buildMemoryRow(snapshot),
   ];
@@ -228,6 +236,39 @@ function buildConnectorsRow(snapshot: SetupHealthSnapshot): SetupHealthRow {
     summary: "Saved service connections have passed their checks.",
     href: "/setup/connectors",
     hrefLabel: "Review connections",
+  });
+}
+
+function buildSafetyRow(snapshot: SetupHealthSnapshot): SetupHealthRow {
+  if (snapshot.actionPolicies.total === 0 || snapshot.actionPolicies.enabled === 0) {
+    return row({
+      key: "safety",
+      title: "Safety rules",
+      status: "needs_attention",
+      summary: "No first-run safety rules are active yet. Apply a safe preset before agents send, spend, delete, or change external systems.",
+      href: "/setup/action-policies",
+      hrefLabel: "Review safety rules",
+    });
+  }
+
+  if (!snapshot.actionPolicies.blocksDestructive || !snapshot.actionPolicies.requiresApprovalForExternalWrites) {
+    return row({
+      key: "safety",
+      title: "Safety rules",
+      status: "needs_attention",
+      summary: "Safety rules exist, but destructive actions must be blocked and external changes should require owner approval.",
+      href: "/setup/action-policies",
+      hrefLabel: "Review safety rules",
+    });
+  }
+
+  return row({
+    key: "safety",
+    title: "Safety rules",
+    status: "ready",
+    summary: "Owner-review safety rules are active: read-only work can proceed, external changes wait for approval, and destructive actions stay blocked.",
+    href: "/setup/action-policies",
+    hrefLabel: "Review safety rules",
   });
 }
 

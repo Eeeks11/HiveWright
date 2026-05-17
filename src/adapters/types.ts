@@ -246,13 +246,16 @@ export interface CodexEmptyOutputDiagnostic {
 }
 
 export interface AdapterArtifact {
-  kind: "image";
+  kind: "file" | "html" | "markdown" | "image" | "external_url";
   path: string;
-  mimeType: "image/png" | "image/jpeg";
-  width: number;
-  height: number;
-  modelName: string;
-  modelSnapshot: string;
+  mimeType: string;
+  title?: string;
+  summary?: string;
+  reviewRequired?: boolean;
+  width?: number;
+  height?: number;
+  modelName?: string;
+  modelSnapshot?: string;
   promptTokens?: number;
   outputTokens?: number;
   costCents?: number;

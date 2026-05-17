@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import type { Sql } from "postgres";
 import type { AdapterProbe, AdapterProbeCredential, ProbeResult } from "@/adapters/types";
+import { assertSupportedRuntimeAdapter } from "@/adapters/adapter-routing";
 import { decrypt } from "@/credentials/encryption";
 import {
   canonicalModelIdForAdapter,
@@ -542,11 +543,8 @@ async function upsertCredentialError(
 }
 
 export async function defaultAdapterFactory(adapterType: string, sql: Sql): Promise<AdapterProbe> {
-  switch (adapterType) {
-    case "openclaw": {
-      const { OpenClawAdapter } = await import("@/adapters/openclaw");
-      return new OpenClawAdapter();
-    }
+  const supportedAdapterType = assertSupportedRuntimeAdapter(adapterType);
+  switch (supportedAdapterType) {
     case "ollama": {
       const { OllamaAdapter } = await import("@/adapters/ollama");
       return new OllamaAdapter();
@@ -566,10 +564,6 @@ export async function defaultAdapterFactory(adapterType: string, sql: Sql): Prom
     case "openai-image": {
       const { OpenAIImageAdapter } = await import("@/adapters/openai-image");
       return new OpenAIImageAdapter();
-    }
-    default: {
-      const { ClaudeCodeAdapter } = await import("@/adapters/claude-code");
-      return new ClaudeCodeAdapter();
     }
   }
 }

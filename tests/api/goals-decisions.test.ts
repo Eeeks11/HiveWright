@@ -400,6 +400,72 @@ describe("Decisions API", () => {
     expect(row.selected_option_label).toBe("Use GCA login");
   });
 
+  it("POST /api/decisions/[id]/respond — accepts owner-handoff options with plain-English instruction responses and resumes parked goals", async () => {
+    const instruction = "Keep this goal constrained to model-only/general education.";
+    await sql`UPDATE goals SET status = 'achieved', session_id = NULL WHERE id = ${goalId}`;
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, options, priority, status)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Choose how the investing hive should proceed',
+        'The investing hive needs a simple path choice.',
+        'Pick the option that matches your intent.',
+        ${sql.json({
+          options: [
+            {
+              key: "generic_education_only",
+              label: "Keep it general",
+              response: instruction,
+              consequence: "The hive can continue with education-only material.",
+            },
+          ],
+        })},
+        'high',
+        'pending'
+      )
+      RETURNING id
+    `;
+
+    const res = await respondToDecision(
+      new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          response: instruction,
+          selectedOptionKey: "generic_education_only",
+          selectedOptionLabel: "Keep it general",
+        }),
+      }),
+      { params: Promise.resolve({ id: decision.id }) },
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe("resolved");
+    expect(body.data.ownerResponse).toContain("approved");
+    expect(body.data.ownerResponse).toContain("Keep it general");
+    expect(body.data.ownerResponse).toContain(instruction);
+    expect(body.data.selectedOptionKey).toBe("generic_education_only");
+
+    const [updatedGoal] = await sql<{ status: string; session_id: string | null }[]>`
+      SELECT status, session_id FROM goals WHERE id = ${goalId}
+    `;
+    expect(updatedGoal.status).toBe("active");
+    expect(updatedGoal.session_id).toBeNull();
+    const [comment] = await sql<{ body: string; created_by: string }[]>`
+      SELECT body, created_by
+      FROM goal_comments
+      WHERE goal_id = ${goalId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    expect(comment.created_by).toBe("owner");
+    expect(comment.body).toContain("Owner resolved decision");
+    expect(comment.body).toContain("Keep it general");
+    expect(comment.body).toContain(instruction);
+  });
+
   it("POST /api/decisions/[id]/respond — approved release-scan proposal queues one model-registry patch task", async () => {
     const releaseDecisionId = await createReleaseScanModelDecision();
     const req = new Request(

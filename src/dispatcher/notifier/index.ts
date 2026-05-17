@@ -264,6 +264,7 @@ export class OutboundNotifier {
         LIMIT 1
       ) ci ON true
       WHERE d.status = 'pending'
+        AND d.kind <> 'external_action_approval'
         AND COALESCE(d.ea_decided_at, d.created_at) > NOW() - (${lookbackHours} * INTERVAL '1 hour')
     `;
 
@@ -486,6 +487,7 @@ export async function discoverOutboundNotificationEvents(
       LIMIT 1
     ) ci ON true
     WHERE d.status = 'pending'
+      AND d.kind <> 'external_action_approval'
       AND NOT EXISTS (
         SELECT 1 FROM outbound_notifications n
         WHERE n.category = 'owner_decision'

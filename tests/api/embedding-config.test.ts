@@ -36,6 +36,8 @@ describe("GET /api/embedding-config", () => {
     const body = await res.json();
     expect(Array.isArray(body.data.catalog)).toBe(true);
     expect(body.data.catalog.some((entry: { provider: string }) => entry.provider === "openrouter")).toBe(true);
+    const ollamaCatalog = body.data.catalog.find((entry: { provider: string }) => entry.provider === "ollama");
+    expect(ollamaCatalog?.models).toContainEqual({ modelName: "nomic-embed-text-v2-moe:latest", dimension: 768 });
     expect(body.data.config.provider).toBe("openrouter");
     expect(body.data.config.modelName).toBe("openai/text-embedding-3-small");
     expect(body.data.config.dimension).toBe(1536);

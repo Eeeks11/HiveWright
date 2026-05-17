@@ -18,6 +18,7 @@ interface BriefPayload {
     atRiskGoals: number;
     unresolvableTasks: number;
     expiringCreds: number;
+    unreadOutcomes?: number;
   };
   pendingDecisions: Array<{
     id: string;
@@ -43,6 +44,14 @@ interface BriefPayload {
     title: string;
     role: string;
     completedAt: string;
+  }>;
+  latestOutcomes: Array<{
+    id: string;
+    goalId: string;
+    goalTitle: string;
+    summary: string;
+    createdAt: string;
+    status: "unread" | "reviewed" | "accepted" | "changes_requested" | "archived";
   }>;
   newInsights: Array<{
     id: string;
@@ -238,6 +247,8 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
     return <p className="text-[13px] text-[#F0A096]">Brief unavailable.</p>;
 
   const urgent = data.flags.urgentDecisions > 0 || data.flags.unresolvableTasks > 0;
+  const latestOutcome = data.latestOutcomes?.[0];
+  const unreadOutcomeCount = data.flags.unreadOutcomes ?? data.latestOutcomes?.filter((outcome) => outcome.status === "unread").length ?? 0;
   const creationPaused = data.operationLock?.creationPause?.paused ?? false;
   const resumeReadiness = data.operationLock?.resumeReadiness;
   const aiBudget = data.aiBudget;
@@ -326,6 +337,33 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
           href="/analytics"
         />
       </section>
+
+      {latestOutcome && (
+        <section className="rounded-[12px] border border-[rgba(126,155,126,0.36)] bg-[rgba(126,155,126,0.10)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#C7D8C2]">
+                Final output ready
+              </p>
+              <h2 className="mt-1 text-[20px] leading-[26px] font-semibold text-foreground">
+                {latestOutcome.goalTitle}
+              </h2>
+              <p className="mt-1 line-clamp-2 text-[13px] leading-[18px] text-muted-foreground">
+                {latestOutcome.summary}
+              </p>
+              <p className="mt-2 text-[12px] text-[#6F6A60] tabular-nums">
+                {relTime(latestOutcome.createdAt)} · {unreadOutcomeCount} unread final output{unreadOutcomeCount === 1 ? "" : "s"}
+              </p>
+            </div>
+            <Link
+              href="/deliverables"
+              className="shrink-0 rounded-[8px] border border-honey-700/40 bg-honey-700/15 px-3 py-2 text-[12px] font-semibold text-honey-300 hover:bg-honey-700/25"
+            >
+              Review final outputs
+            </Link>
+          </div>
+        </section>
+      )}
 
       {urgent && (
         <section className="rounded-[12px] border border-[rgba(194,74,44,0.4)] bg-[rgba(194,74,44,0.08)] p-4 shadow-[0_0_24px_-4px_rgba(194,74,44,0.35)]">

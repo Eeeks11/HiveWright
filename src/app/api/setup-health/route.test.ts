@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
   requireSystemOwner: vi.fn(),
   canAccessHive: vi.fn(),
+  getHiveOperatorVerdict: vi.fn(),
   defaultEnvFilePath: vi.fn(() => "/repo/.env"),
   upsertEnvFileValue: vi.fn(() => ({ envFilePath: "/repo/.env", updated: true })),
 }));
@@ -22,6 +23,10 @@ vi.mock("../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+}));
+
+vi.mock("@/operations/operator-verdict", () => ({
+  getHiveOperatorVerdict: mocks.getHiveOperatorVerdict,
 }));
 
 vi.mock("@/lib/env-file", () => ({
@@ -41,6 +46,14 @@ describe("/api/setup-health", () => {
     });
     mocks.requireSystemOwner.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.getHiveOperatorVerdict.mockResolvedValue({
+      status: "running",
+      canRunNow: true,
+      summary: "Hive is running.",
+      blockers: [],
+      signals: {},
+      checkedAt: "2026-05-17T19:00:00.000Z",
     });
   });
 
@@ -86,6 +99,7 @@ describe("/api/setup-health", () => {
       .mockResolvedValueOnce([{ open: 1 }])
       .mockResolvedValueOnce([{ installed: 1, active: 1, tested: 0, errors: 0 }])
       .mockResolvedValueOnce([{ total: 2, enabled: 0 }])
+      .mockResolvedValueOnce([{ total: 2, enabled: 0 }])
       .mockResolvedValueOnce([{ config: { enabled: false, prepareOnSetup: false } }])
       .mockResolvedValueOnce([]);
 
@@ -122,6 +136,12 @@ describe("/api/setup-health", () => {
         }),
       ]),
     );
+    expect(body.data.operatorVerdict).toMatchObject({
+      status: "running",
+      canRunNow: true,
+      summary: "Hive is running.",
+    });
+    expect(mocks.getHiveOperatorVerdict).toHaveBeenCalledWith(mocks.sql, { hiveId: "hive-1" });
     expect(body.data.sources).toMatchObject({
       models: "model_catalog, hive_models, model_health, and role_templates",
       schedules: "schedules",

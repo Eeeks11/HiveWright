@@ -91,6 +91,9 @@ export async function POST(request: Request) {
         id: row.id as string,
         name: row.name as string,
         description: (row.description as string | null) ?? null,
+      }, {
+        coreEnabled: true,
+        proactiveEnabled: true,
       });
     } catch (err) {
       console.warn("[api/hives POST] failed to seed default schedules:", err);

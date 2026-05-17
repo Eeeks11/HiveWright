@@ -69,6 +69,7 @@ export const EMBEDDING_CATALOG: readonly EmbeddingCatalogProvider[] = [
     models: [
       { modelName: "all-minilm", dimension: 768 },
       { modelName: "nomic-embed-text", dimension: 768 },
+      { modelName: "nomic-embed-text-v2-moe:latest", dimension: 768 },
       { modelName: "mxbai-embed-large", dimension: 1024 },
       { modelName: "bge-large", dimension: 1024 },
     ],

@@ -134,6 +134,12 @@ function findNamedDecisionOption(value: unknown, key: string): NamedDecisionOpti
   return getNamedDecisionOptions(value).find((option) => option.key === key) ?? null;
 }
 
+function isValidDecisionResponse(value: unknown): value is ValidResponse | QualityFeedbackResponse {
+  return typeof value === "string" &&
+    (VALID_RESPONSES.includes(value as ValidResponse) ||
+      QUALITY_FEEDBACK_RESPONSES.includes(value as QualityFeedbackResponse));
+}
+
 function responseForExternalActionOption(option: NamedDecisionOption): ValidResponse | null {
   if (option.key === "approve") {
     return "approved";
@@ -205,6 +211,58 @@ function extractReleaseScanModelPayload(
 
 function isDirectTaskQaCapAction(response: string): response is DirectTaskQaCapAction {
   return (DIRECT_TASK_QA_CAP_ACTIONS as readonly string[]).includes(response);
+}
+
+async function mirrorResolvedDecisionToGoal(
+  decision: DecisionRowForModelProposal,
+  ownerResponse: string,
+  selectedOptionLabel: string | null,
+): Promise<void> {
+  if (!decision.goal_id) return;
+
+  await sql.begin(async (tx) => {
+    const [goal] = await tx<{ status: string }[]>`
+      SELECT status
+      FROM goals
+      WHERE id = ${decision.goal_id}
+        AND hive_id = ${decision.hive_id}
+      FOR UPDATE
+    `;
+    if (!goal) return;
+
+    const selectedLine = selectedOptionLabel ? `\nSelected option: ${selectedOptionLabel}` : "";
+    await tx`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES (
+        ${decision.goal_id},
+        ${`Owner resolved decision "${decision.title}" (${decision.id}).${selectedLine}\n\n${ownerResponse}`},
+        'owner'
+      )
+    `;
+
+    // A pending owner decision attached to a parked/closed goal is a resume
+    // signal once the owner chooses a path. Re-open it so the dispatcher can
+    // create a fresh supervisor session; otherwise the response is recorded but
+    // nothing can pick it up.
+    if (["achieved", "execution_ready", "blocked_on_owner_channel"].includes(goal.status)) {
+      await tx`
+        UPDATE goals
+        SET status = 'active',
+            session_id = NULL,
+            updated_at = NOW()
+        WHERE id = ${decision.goal_id}
+          AND hive_id = ${decision.hive_id}
+      `;
+    } else if (goal.status === "active") {
+      await tx`
+        UPDATE goals
+        SET session_id = NULL,
+            updated_at = NOW()
+        WHERE id = ${decision.goal_id}
+          AND hive_id = ${decision.hive_id}
+      `;
+    }
+  });
 }
 
 function isDirectTaskQaCapDecision(decision: Pick<DecisionRowForModelProposal, "options">): boolean {
@@ -538,10 +596,17 @@ export async function POST(
     }
 
     let selectedOption: NamedDecisionOption | null = null;
+    let selectedOptionInstruction: string | null = null;
     if (requestedOptionKey) {
       selectedOption = findNamedDecisionOption(decisionForAuth.options, requestedOptionKey);
       if (!selectedOption) {
         return jsonError("Selected option was not found on this decision", 400);
+      }
+      if (selectedOption.response && !isValidDecisionResponse(selectedOption.response)) {
+        selectedOptionInstruction = selectedOption.response;
+        if (!response || response === selectedOption.response) {
+          response = "approved";
+        }
       }
       response = response ?? selectedOption.response ?? (
         decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
@@ -552,7 +617,7 @@ export async function POST(
 
     if (
       !response ||
-      (!VALID_RESPONSES.includes(response as ValidResponse) && !isQualityFeedbackResponse(response))
+      !isValidDecisionResponse(response)
     ) {
       return jsonError(
         `Invalid response. Must be one of: ${[...VALID_RESPONSES, ...QUALITY_FEEDBACK_RESPONSES].join(", ")}`,
@@ -596,7 +661,14 @@ export async function POST(
       (typeof selectedOptionLabel === "string" && selectedOptionLabel.trim()
         ? selectedOptionLabel.trim()
         : null);
-    const ownerResponse = isQualityFeedbackResponse(response)
+    const ownerResponse = selectedOptionInstruction
+      ? [
+          response,
+          optionLabel ? `selected option: ${optionLabel}` : null,
+          selectedOptionInstruction,
+          normalisedComment ? `comment: ${normalisedComment}` : null,
+        ].filter(Boolean).join(" — ")
+      : isQualityFeedbackResponse(response)
       ? JSON.stringify({
           response,
           rating: response === "quality_feedback" ? normalisedRating : null,
@@ -864,6 +936,10 @@ export async function POST(
 
     if (response === "quality_feedback") {
       await applyTaskQualityFeedbackResponse(decisionRow, normalisedRating, normalisedComment);
+    }
+
+    if (response !== "discussed") {
+      await mirrorResolvedDecisionToGoal(decisionRow, ownerResponse, optionLabel);
     }
 
     const queuedTaskId = response === "approved"

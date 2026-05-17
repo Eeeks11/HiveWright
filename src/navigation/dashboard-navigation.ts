@@ -1,6 +1,7 @@
 export type DashboardNavigationContext = {
   activeHiveId?: string;
   qualityFeedbackCount?: number;
+  unreadOutcomesCount?: number;
 };
 
 export type DashboardNavigationLink = {
@@ -40,6 +41,10 @@ function proceduresIsActive(pathname: string) {
   );
 }
 
+function globalSettingsIsActive(...paths: string[]) {
+  return (pathname: string) => paths.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+}
+
 export function dashboardNavigationLinkIsActive(link: DashboardNavigationLink, pathname: string) {
   return link.isActive
     ? link.isActive(pathname)
@@ -60,6 +65,7 @@ export function dashboardNavigationGroupIsActive(group: DashboardNavigationGroup
 export function buildDashboardNavigation({
   activeHiveId,
   qualityFeedbackCount = 0,
+  unreadOutcomesCount = 0,
 }: DashboardNavigationContext): DashboardNavigationGroup[] {
   const ideasHref = hiveHref(activeHiveId, "ideas");
   const initiativesHref = hiveHref(activeHiveId, "initiatives");
@@ -76,9 +82,14 @@ export function buildDashboardNavigation({
     {
       id: "work",
       label: "Work",
-      href: "/tasks",
       links: [
         { id: "tasks", href: "/tasks", label: "Tasks" },
+        {
+          id: "deliverables",
+          href: "/deliverables",
+          label: "Final outputs",
+          badgeCount: unreadOutcomesCount > 0 ? unreadOutcomesCount : undefined,
+        },
         { id: "procedures", href: "/pipelines", label: "Procedures", isActive: proceduresIsActive },
         { id: "goals", href: "/goals", label: "Goals" },
         {
@@ -100,7 +111,6 @@ export function buildDashboardNavigation({
     {
       id: "inbox",
       label: "Inbox",
-      href: "/decisions",
       links: [
         { id: "decisions", href: "/decisions", label: "Decisions" },
         {
@@ -120,9 +130,8 @@ export function buildDashboardNavigation({
     {
       id: "memory",
       label: "Memory",
-      href: "/memory",
       links: [
-        { id: "memory", href: "/memory", label: "Memory" },
+        { id: "memory", href: "/memory", label: "Overview" },
         { id: "memory-health", href: "/memory/health", label: "Memory Health" },
         { id: "memory-timeline", href: "/memory/timeline", label: "Memory Timeline" },
         { id: "insights", href: "/memory/insights", label: "Insights" },
@@ -137,7 +146,6 @@ export function buildDashboardNavigation({
     {
       id: "operations",
       label: "Operations",
-      href: "/roles",
       links: [
         { id: "roles", href: "/roles", label: "Roles" },
         { id: "board", href: "/board", label: "Board" },
@@ -153,16 +161,13 @@ export function buildDashboardNavigation({
     },
     {
       id: "setup",
-      label: "Setup",
-      href: "/setup",
+      label: "Hive Setup",
       links: [
-        { id: "setup", href: "/setup", label: "Setup", isActive: (pathname) => pathname === "/setup" },
+        { id: "setup", href: "/setup", label: "Overview", isActive: (pathname) => pathname === "/setup" },
         { id: "models", href: "/setup/models", label: "Models" },
         { id: "connectors", href: "/setup/connectors", label: "Connectors" },
         { id: "action-policies", href: "/setup/action-policies", label: "Action Policies" },
         { id: "setup-health", href: "/setup/health", label: "Setup Health" },
-        { id: "embedding-settings", href: "/setup/embeddings", label: "Embedding settings" },
-        { id: "updates", href: "/setup/updates", label: "Updates" },
       ],
     },
     {
@@ -173,9 +178,32 @@ export function buildDashboardNavigation({
         { id: "hives", href: "/hives", label: "Hives" },
         {
           id: "global-settings",
-          href: "/setup",
+          href: "/settings",
           label: "Global Settings",
-          isActive: (pathname) => pathname === "/setup",
+          isActive: (pathname) => pathname === "/settings",
+        },
+        {
+          id: "adapter-settings",
+          href: "/settings/adapters",
+          label: "Adapters",
+          isActive: globalSettingsIsActive("/settings/adapters", "/setup/adapters"),
+        },
+        {
+          id: "embedding-settings",
+          href: "/settings/embeddings",
+          label: "Embedding settings",
+          isActive: globalSettingsIsActive("/settings/embeddings", "/setup/embeddings"),
+        },
+        {
+          id: "work-intake-settings",
+          href: "/settings/work-intake",
+          label: "Work Intake Classifier",
+          isActive: globalSettingsIsActive("/settings/work-intake", "/setup/work-intake"),
+        },
+        {
+          id: "updates",
+          href: "/setup/updates",
+          label: "HiveWright Updates",
         },
       ],
     },

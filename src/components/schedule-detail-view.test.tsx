@@ -38,6 +38,8 @@ const detail: ScheduleDetail = {
     lastRunAt: new Date("2026-04-20T09:00:00.000Z"),
     nextRunAt: new Date("2026-04-27T09:00:00.000Z"),
     createdBy: "goal-supervisor",
+    originType: "system_default",
+    originKey: "weekly-implementation-review",
     createdAt: new Date("2026-04-01T00:00:00.000Z"),
   },
   role: {
@@ -63,6 +65,7 @@ const detail: ScheduleDetail = {
 const schedules: ScheduleListItem[] = [
   {
     id: "schedule-1",
+    hiveId: "hive-1",
     cronExpression: "0 9 * * 1",
     taskTemplate: {
       assignedTo: "developer-agent",

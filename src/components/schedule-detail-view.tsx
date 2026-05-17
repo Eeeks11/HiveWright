@@ -85,6 +85,11 @@ export function ScheduleDetailView({ detail }: { detail: ScheduleDetail }) {
           <DetailRow label="Last Run" value={formatDate(schedule.lastRunAt)} />
           <DetailRow label="Next Run" value={formatDate(schedule.nextRunAt)} />
           <DetailRow label="Created At" value={formatDate(schedule.createdAt)} />
+          <DetailRow
+            label="Origin"
+            value={schedule.originType === "system_default" ? "System default" : "Custom"}
+          />
+          <DetailRow label="Default Key" value={schedule.originKey} />
           <DetailRow label="Kind" value={template.kind ?? "task"} />
         </dl>
       </div>

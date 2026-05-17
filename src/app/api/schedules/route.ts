@@ -14,6 +14,8 @@ type ScheduleRow = {
   last_run_at: Date | null;
   next_run_at: Date | null;
   created_by: string;
+  origin_type: string;
+  origin_key: string | null;
   created_at: Date;
 };
 
@@ -51,6 +53,8 @@ function mapScheduleRow(r: ScheduleRow) {
     lastRunAt: r.last_run_at,
     nextRunAt: r.next_run_at,
     createdBy: r.created_by,
+    originType: r.origin_type ?? "custom",
+    originKey: r.origin_key ?? null,
     createdAt: r.created_at,
   };
 }
@@ -68,6 +72,12 @@ export async function GET(request: Request) {
     const values: unknown[] = [];
     let paramIdx = 1;
 
+    if (!hiveId) {
+      if (!authz.user.isSystemOwner || params.get("scope") !== "global") {
+        return jsonError("hiveId is required", 400);
+      }
+    }
+
     if (hiveId) {
       if (!authz.user.isSystemOwner) {
         const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
@@ -75,9 +85,6 @@ export async function GET(request: Request) {
       }
       conditions.push(`hive_id = $${paramIdx++}`);
       values.push(hiveId);
-    } else if (!authz.user.isSystemOwner) {
-      conditions.push(`hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = $${paramIdx++})`);
-      values.push(authz.user.id);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -85,7 +92,7 @@ export async function GET(request: Request) {
     const countQuery = `SELECT COUNT(*) as total FROM schedules ${whereClause}`;
     const dataQuery = `
       SELECT id, hive_id, cron_expression, task_template, enabled,
-             last_run_at, next_run_at, created_by, created_at
+             last_run_at, next_run_at, created_by, origin_type, origin_key, created_at
       FROM schedules ${whereClause}
       ORDER BY created_at DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
@@ -113,11 +120,13 @@ export async function PATCH(request: Request) {
   try {
     const body = await request.json();
     const {
+      hiveId,
       id,
       enabled,
       cronExpression,
       taskTemplate,
     }: {
+      hiveId?: unknown;
       id?: unknown;
       enabled?: unknown;
       cronExpression?: unknown;
@@ -125,6 +134,9 @@ export async function PATCH(request: Request) {
     } = body;
 
     if (!id || typeof id !== "string") return jsonError("id is required", 400);
+    if (hiveId !== undefined && typeof hiveId !== "string") {
+      return jsonError("hiveId must be a string", 400);
+    }
 
     const updates: string[] = [];
     const values: unknown[] = [];
@@ -133,12 +145,20 @@ export async function PATCH(request: Request) {
     if (enabled !== undefined) {
       if (typeof enabled !== "boolean") return jsonError("enabled must be a boolean", 400);
       if (enabled) {
-        const [schedule] = await sql<{ hive_id: string }[]>`
-          SELECT hive_id
-          FROM schedules
-          WHERE id = ${id}
-          LIMIT 1
-        `;
+        const [schedule] = hiveId
+          ? await sql<{ hive_id: string }[]>`
+              SELECT hive_id
+              FROM schedules
+              WHERE id = ${id}
+                AND hive_id = ${hiveId}::uuid
+              LIMIT 1
+            `
+          : await sql<{ hive_id: string }[]>`
+              SELECT hive_id
+              FROM schedules
+              WHERE id = ${id}
+              LIMIT 1
+            `;
         if (!schedule) return jsonError("Schedule not found", 404);
         const pause = await assertHiveCreationAllowed(sql, schedule.hive_id);
         if (pause) return creationPausedResponse(pause);
@@ -202,13 +222,14 @@ export async function PATCH(request: Request) {
     if (updates.length === 0) return jsonError("Nothing to update", 400);
 
     values.push(id);
+    if (hiveId) values.push(hiveId);
     const rows = await sql.unsafe(
       `
         UPDATE schedules
         SET ${updates.join(", ")}
-        WHERE id = $${idx}
+        WHERE id = $${idx}${hiveId ? ` AND hive_id = $${idx + 1}::uuid` : ""}
         RETURNING id, hive_id, cron_expression, task_template, enabled,
-                  last_run_at, next_run_at, created_by, created_at
+                  last_run_at, next_run_at, created_by, origin_type, origin_key, created_at
       `,
       values as string[],
     );
@@ -242,20 +263,48 @@ export async function POST(request: Request) {
     }
 
     const rows = await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, created_by)
+      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, created_by, origin_type, origin_key)
       VALUES (
         ${hiveId},
         ${cronExpression},
         ${sql.json(taskTemplate)},
         ${scheduleEnabled},
-        ${createdBy ?? "system"}
+        ${createdBy ?? "system"},
+        'custom',
+        null
       )
       RETURNING id, hive_id, cron_expression, task_template, enabled,
-                last_run_at, next_run_at, created_by, created_at
+                last_run_at, next_run_at, created_by, origin_type, origin_key, created_at
     `;
 
     return jsonOk(mapScheduleRow(rows[0] as unknown as ScheduleRow), 201);
   } catch {
     return jsonError("Failed to create schedule", 500);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const unauth = await requireApiAuth();
+  if (unauth) return unauth;
+  const authz = await requireSystemOwner();
+  if ("response" in authz) return authz.response;
+
+  try {
+    const body = await request.json();
+    const { id, hiveId }: { id?: unknown; hiveId?: unknown } = body;
+    if (!id || typeof id !== "string") return jsonError("id is required", 400);
+    if (!hiveId || typeof hiveId !== "string") return jsonError("hiveId is required", 400);
+
+    const rows = await sql`
+      DELETE FROM schedules
+      WHERE id = ${id}
+        AND hive_id = ${hiveId}::uuid
+      RETURNING id
+    `;
+    if (rows.length === 0) return jsonError("Schedule not found", 404);
+
+    return jsonOk({ id });
+  } catch {
+    return jsonError("Failed to delete schedule", 500);
   }
 }

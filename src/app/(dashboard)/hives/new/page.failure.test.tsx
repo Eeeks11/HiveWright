@@ -20,6 +20,15 @@ beforeEach(() => {
   fetchMock.mockReset();
   fetchMock.mockImplementation((input: string | URL) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url === "/api/embedding-config/local-setup") {
+      return Promise.resolve(new Response(JSON.stringify({ data: {
+        defaultConfig: { modelName: "nomic-embed-text-v2-moe:latest" },
+        status: { ollamaReachable: true, modelInstalled: true, embeddingTest: "passed", modelName: "nomic-embed-text-v2-moe:latest", error: null },
+      } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    }
     if (url === "/api/hives/setup") {
       return Promise.resolve(new Response(JSON.stringify({
         error: "We couldn't finish setting up one of the selected services. Please try again.",

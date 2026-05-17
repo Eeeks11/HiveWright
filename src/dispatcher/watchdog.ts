@@ -41,6 +41,7 @@ export async function recoverInterruptedActiveTasks(
   sql: Sql,
   currentPid: number,
   pidAlive: (pid: number) => boolean = isPidAlive,
+  options: { hiveId?: string; titlePrefix?: string } = {},
 ): Promise<InterruptedActiveTask[]> {
   const rows = await sql`
     SELECT
@@ -52,6 +53,8 @@ export async function recoverInterruptedActiveTasks(
     WHERE status = 'active'
       AND dispatcher_pid IS NOT NULL
       AND dispatcher_pid <> ${currentPid}
+      AND (${options.hiveId ?? null}::uuid IS NULL OR hive_id = ${options.hiveId ?? null}::uuid)
+      AND (${options.titlePrefix ?? null}::text IS NULL OR title LIKE ${`${options.titlePrefix ?? ""}%`})
     ORDER BY started_at ASC NULLS FIRST, created_at ASC
   `;
 

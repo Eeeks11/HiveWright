@@ -52,9 +52,25 @@ beforeEach(async () => {
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
   delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.HIVEWRIGHT_RUNTIME_ROOT;
 });
 
 describe("completeGoal", () => {
+  it("blocks completion while a linked owner decision is pending", async () => {
+    await sql`
+      INSERT INTO decisions (hive_id, goal_id, title, context, status, kind)
+      VALUES (${bizId}, ${goalId}, 'Needs owner choice', 'Waiting for owner direction', 'pending', 'decision')
+    `;
+
+    await expect(
+      completeGoal(sql, goalId, "goalcomp: should not complete while waiting"),
+    ).rejects.toThrow("pending owner decision");
+
+    const [goal] = await sql`SELECT status, session_id FROM goals WHERE id = ${goalId}`;
+    expect(goal.status).toBe("active");
+    expect(goal.session_id).toBe("gs-test-123");
+  });
+
   it("marks goal as achieved and clears session", async () => {
     await completeGoal(sql, goalId, "goalcomp: Everything was accomplished successfully");
 
@@ -138,6 +154,192 @@ describe("completeGoal", () => {
       taskIds: [taskId],
       bundle: evidenceBundle,
     });
+  });
+
+  it("normalizes verified HTML bundle artifacts into owner-openable final work products before markdown evidence", async () => {
+    const workspace = path.join(tmp, "hive-workspace");
+    const landingDir = path.join(workspace, "projects", "marketing", "landing-page");
+    fs.mkdirSync(landingDir, { recursive: true });
+    fs.writeFileSync(path.join(landingDir, "styles.css"), "body { background: rgb(1, 2, 3); }\n");
+    fs.writeFileSync(
+      path.join(landingDir, "index.html"),
+      '<!doctype html><html><head><link rel="stylesheet" href="styles.css"></head><body><h1>HiveWright</h1></body></html>',
+    );
+    fs.writeFileSync(path.join(landingDir, "signoff.md"), "# Compliance signoff\n");
+    await sql`UPDATE hives SET workspace_path = ${workspace} WHERE id = ${bizId}`;
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'goalcomp-role', 'system', 'Build landing page', 'build real page', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+    const complianceId = (await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, department, content, summary, title, filename, artifact_kind, mime_type, render_mode, review_status)
+      VALUES (${taskId}, ${bizId}, 'qa', null, '# QA review', 'QA review', 'Compliance review', 'compliance.md', 'document', 'text/markdown', 'markdown', 'ready')
+      RETURNING id
+    `)[0].id;
+
+    await completeGoal(sql, goalId, "goalcomp: landing page shipped", {
+      evidenceWorkProductIds: [complianceId],
+      evidenceBundle: [
+        {
+          type: "artifact",
+          description: "Final HiveWright landing page package.",
+          reference: path.join(landingDir, "index.html"),
+          verified: true,
+        },
+        {
+          type: "artifact",
+          description: "Styles for final HiveWright landing page package.",
+          reference: path.join(landingDir, "styles.css"),
+          verified: true,
+        },
+        {
+          type: "artifact",
+          description: "Compliance signoff notes.",
+          reference: path.join(landingDir, "signoff.md"),
+          verified: true,
+        },
+      ],
+    });
+
+    const [completion] = await sql<{ evidence: { workProductIds?: string[] } }[]>`
+      SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.evidence.workProductIds).toHaveLength(2);
+    expect(completion.evidence.workProductIds?.[1]).toBe(complianceId);
+    const htmlWorkProductId = completion.evidence.workProductIds?.[0];
+    expect(htmlWorkProductId).toBeDefined();
+
+    const [htmlWp] = await sql<{ id: string; title: string; content: string; file_path: string | null; mime_type: string; render_mode: string; artifact_kind: string; filename: string }[]>`
+      SELECT id, title, content, file_path, mime_type, render_mode, artifact_kind, filename
+      FROM work_products
+      WHERE id = ${htmlWorkProductId as string}
+    `;
+    expect(htmlWp.title).toBe("HiveWright Landing Page");
+    expect(htmlWp.filename).toBe("index.html");
+    expect(htmlWp.mime_type).toBe("text/html; charset=utf-8");
+    expect(htmlWp.render_mode).toBe("html");
+    expect(htmlWp.artifact_kind).toBe("final_artifact");
+    expect(htmlWp.file_path).toBeNull();
+    expect(htmlWp.content).toContain("<h1>HiveWright</h1>");
+    expect(htmlWp.content).toContain("body { background: rgb(1, 2, 3); }");
+  });
+
+  it("normalizes verified HTML artifacts from HiveWright runtime workspace even when hive.workspace_path is stale", async () => {
+    const configuredWorkspace = path.join(tmp, "configured-workspace");
+    const runtimeRoot = path.join(tmp, "runtime-root");
+    const runtimeProjects = path.join(runtimeRoot, "hives", "goalcomp-biz", "projects");
+    const landingDir = path.join(runtimeProjects, "marketing", "landing-page");
+    fs.mkdirSync(configuredWorkspace, { recursive: true });
+    fs.mkdirSync(landingDir, { recursive: true });
+    fs.writeFileSync(path.join(landingDir, "styles.css"), "main { color: honeydew; }\n");
+    fs.writeFileSync(
+      path.join(landingDir, "index.html"),
+      '<!doctype html><html><head><link rel="stylesheet" href="styles.css"></head><body><h1>Runtime landing</h1></body></html>',
+    );
+    await sql`UPDATE hives SET workspace_path = ${configuredWorkspace} WHERE id = ${bizId}`;
+    process.env.HIVEWRIGHT_RUNTIME_ROOT = runtimeRoot;
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'goalcomp-role', 'system', 'Build runtime landing page', 'build real page', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+
+    await completeGoal(sql, goalId, "goalcomp: runtime landing page shipped", {
+      evidenceTaskIds: [taskId],
+      evidenceBundle: [
+        {
+          type: "artifact",
+          description: "Final landing page HTML in the runtime workspace.",
+          reference: path.join(landingDir, "index.html"),
+          verified: true,
+        },
+        {
+          type: "artifact",
+          description: "Stylesheet for final landing page HTML.",
+          reference: path.join(landingDir, "styles.css"),
+          verified: true,
+        },
+      ],
+    });
+
+    const [completion] = await sql<{ evidence: { workProductIds?: string[] } }[]>`
+      SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.evidence.workProductIds).toHaveLength(1);
+    const htmlWorkProductId = completion.evidence.workProductIds?.[0];
+    expect(htmlWorkProductId).toBeDefined();
+    const [htmlWp] = await sql<{ title: string; content: string; render_mode: string }[]>`
+      SELECT title, content, render_mode
+      FROM work_products
+      WHERE id = ${htmlWorkProductId as string}
+    `;
+    expect(htmlWp.title).toBe("Landing Page");
+    expect(htmlWp.render_mode).toBe("html");
+    expect(htmlWp.content).toContain("Runtime landing");
+    expect(htmlWp.content).toContain("main { color: honeydew; }");
+  });
+
+  it("blocks achieved landing-page completion when only support docs are registered", async () => {
+    await sql`UPDATE goals SET title = 'Build HiveWright landing page' WHERE id = ${goalId}`;
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'qa', 'system', 'Review claims', 'support docs only', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+    const supportDocId = (await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, department, content, summary, title, filename, artifact_kind, mime_type, render_mode, review_status)
+      VALUES (${taskId}, ${bizId}, 'qa', null, '# Claims guardrails', 'Claims guardrails', 'HiveWright Landing Page: Claims & Compliance Guardrails', 'claims.md', 'document', 'text/markdown', 'markdown', 'ready')
+      RETURNING id
+    `)[0].id;
+
+    await expect(
+      completeGoal(sql, goalId, "goalcomp: landing page done", {
+        evidenceWorkProductIds: [supportDocId],
+      }),
+    ).rejects.toThrow("owner-openable HTML or URL final artifact");
+
+    const [goal] = await sql`SELECT status FROM goals WHERE id = ${goalId}`;
+    expect(goal.status).toBe("active");
+    const [completionCount] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completionCount.count).toBe(0);
+  });
+
+  it("does not normalize verified artifact references that escape the hive workspace", async () => {
+    const workspace = path.join(tmp, "safe-workspace");
+    const outside = path.join(tmp, "outside", "index.html");
+    fs.mkdirSync(path.dirname(outside), { recursive: true });
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.writeFileSync(outside, "<html><body>outside</body></html>");
+    await sql`UPDATE hives SET workspace_path = ${workspace} WHERE id = ${bizId}`;
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'goalcomp-role', 'system', 'Unsafe artifact task', 'unsafe artifact', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+
+    await completeGoal(sql, goalId, "goalcomp: unsafe path ignored", {
+      evidenceTaskIds: [taskId],
+      evidenceBundle: [
+        {
+          type: "artifact",
+          description: "Unsafe escaped artifact.",
+          reference: outside,
+          verified: true,
+        },
+      ],
+    });
+
+    const [completion] = await sql<{ evidence: { workProductIds?: string[] } }[]>`
+      SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.evidence.workProductIds).toBeUndefined();
+    const [count] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM work_products WHERE task_id = ${taskId}
+    `;
+    expect(count.count).toBe(0);
   });
 
   it("defaults createdBy to 'goal-supervisor' and records a no-op learning gate when omitted", async () => {

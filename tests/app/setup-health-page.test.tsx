@@ -98,6 +98,7 @@ describe("SetupHealthPage", () => {
                   row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
                   row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
                   row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
+                  row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
                   row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
                   row("memory", "Memory search", "needs_attention", "Needs attention", "/setup/embeddings", "Fix memory search"),
                 ],
@@ -125,20 +126,22 @@ describe("SetupHealthPage", () => {
       "EA",
       "Work queue",
       "Service connections",
+      "Safety rules",
       "Recurring work",
       "Memory search",
     ]) {
       expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     }
 
-    expect(screen.getByText("2 of 6 ready")).toBeTruthy();
+    expect(screen.getByText("2 of 7 ready")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Connect EA" }).getAttribute("href")).toBe("/setup/connectors");
     expect(screen.getByRole("link", { name: "View work queue" }).getAttribute("href")).toBe("/tasks");
+    expect(screen.getByRole("link", { name: "Review safety rules" }).getAttribute("href")).toBe("/setup/action-policies");
     expect(screen.getByRole("link", { name: "Turn on recurring work" }).getAttribute("href")).toBe("/schedules");
     expect(screen.getByRole("link", { name: "Fix memory search" }).getAttribute("href")).toBe("/setup/embeddings");
 
     const pageText = document.body.textContent ?? "";
-    expect(pageText).not.toMatch(/adapter_config|raw model|cron|route hint/i);
+    expect(pageText).not.toMatch(/adapter_config|raw model|cron|route hint|action_policies|effect_type|jsonb/i);
     expect(within(screen.getByText("Service connections").closest("article")!).getByText("Pending/not checked")).toBeTruthy();
   });
 });

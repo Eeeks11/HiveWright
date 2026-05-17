@@ -19,6 +19,8 @@ type ScheduleRow = {
   last_run_at: Date | null;
   next_run_at: Date | null;
   created_by: string;
+  origin_type: string;
+  origin_key: string | null;
   created_at: Date;
 };
 
@@ -49,6 +51,8 @@ export type ScheduleDetail = {
     lastRunAt: Date | string | null;
     nextRunAt: Date | string | null;
     createdBy: string;
+    originType: string;
+    originKey: string | null;
     createdAt: Date | string;
   };
   role: {
@@ -114,7 +118,7 @@ export async function loadScheduleDetail(
 ): Promise<ScheduleDetail | null> {
   const [scheduleRow] = await sql<ScheduleRow[]>`
     SELECT id, hive_id, cron_expression, task_template, enabled,
-           last_run_at, next_run_at, created_by, created_at
+           last_run_at, next_run_at, created_by, origin_type, origin_key, created_at
     FROM schedules
     WHERE id = ${id}
     LIMIT 1
@@ -161,6 +165,8 @@ export async function loadScheduleDetail(
       lastRunAt: scheduleRow.last_run_at,
       nextRunAt: scheduleRow.next_run_at,
       createdBy: scheduleRow.created_by,
+      originType: scheduleRow.origin_type,
+      originKey: scheduleRow.origin_key,
       createdAt: scheduleRow.created_at,
     },
     role: roleRow

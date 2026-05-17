@@ -65,18 +65,17 @@ describe("PATCH/POST /api/schedules owner gate", () => {
     expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 
-  it("filters broad non-owner schedule reads to accessible hives", async () => {
+  it("requires an explicit hiveId unless a system owner requests global scope", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
-    mocks.sql.unsafe.mockResolvedValueOnce([{ total: "0" }]).mockResolvedValueOnce([]);
 
     const res = await GET(new Request("http://localhost/api/schedules?limit=10&offset=0"));
+    const body = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(mocks.sql.unsafe).toHaveBeenCalledTimes(2);
-    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("hive_memberships");
-    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["member-1"]);
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 
   it("normalizes stringified task templates when listing schedules", async () => {
@@ -97,6 +96,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
           last_run_at: null,
           next_run_at: null,
           created_by: "owner-1",
+          origin_type: "custom",
+          origin_key: null,
           created_at: createdAt,
         },
       ]);
@@ -193,6 +194,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
       lastRunAt: null,
       nextRunAt: null,
       createdBy: "owner-1",
+      originType: "custom",
+      originKey: null,
       createdAt: createdAt.toISOString(),
     });
     expect(mocks.sql.unsafe).toHaveBeenCalledTimes(1);
@@ -229,6 +232,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
         last_run_at: null,
         next_run_at: new Date("2026-04-27T00:15:00.000Z"),
         created_by: "scheduler",
+        origin_type: "custom",
+        origin_key: null,
         created_at: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -284,6 +289,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
         last_run_at: null,
         next_run_at: null,
         created_by: "scheduler",
+        origin_type: "custom",
+        origin_key: null,
         created_at: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -325,6 +332,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
         last_run_at: null,
         next_run_at: null,
         created_by: "scheduler",
+        origin_type: "custom",
+        origin_key: null,
         created_at: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -370,6 +379,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
         last_run_at: null,
         next_run_at: null,
         created_by: "scheduler",
+        origin_type: "custom",
+        origin_key: null,
         created_at: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -412,6 +423,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
         last_run_at: null,
         next_run_at: new Date("2026-04-27T10:00:00.000Z"),
         created_by: "scheduler",
+        origin_type: "custom",
+        origin_key: null,
         created_at: new Date("2026-04-01T00:00:00.000Z"),
       },
     ]);
@@ -480,6 +493,8 @@ describe("PATCH/POST /api/schedules owner gate", () => {
       lastRunAt: null,
       nextRunAt: null,
       createdBy: "owner-1",
+      originType: "custom",
+      originKey: null,
       createdAt: createdAt.toISOString(),
     });
     expect(mocks.sql.json).toHaveBeenCalledWith({ title: "Check hive" });

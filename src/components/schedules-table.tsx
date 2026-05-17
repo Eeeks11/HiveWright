@@ -5,12 +5,15 @@ import { RunsTable, type RunsTableRow } from "@/components/runs-table";
 
 export interface ScheduleListItem {
   id: string;
+  hiveId: string;
   cronExpression: string;
   taskTemplate: { assignedTo?: string; title?: string; brief?: string };
   enabled: boolean;
   lastRunAt: string | null;
   nextRunAt: string | null;
   createdBy: string;
+  originType?: string;
+  originKey?: string | null;
 }
 
 interface SchedulesTableProps {
@@ -42,7 +45,13 @@ export function SchedulesTable({
       label: schedule.enabled ? "Active" : "Paused",
       tone: schedule.enabled ? "green" : "neutral",
     },
-    primaryMeta: [{ label: "Role", value: schedule.taskTemplate?.assignedTo ?? "-" }],
+    primaryMeta: [
+      { label: "Role", value: schedule.taskTemplate?.assignedTo ?? "-" },
+      {
+        label: "Origin",
+        value: schedule.originType === "system_default" ? "System default" : "Custom",
+      },
+    ],
     secondaryMeta: [
       {
         label: "Next",

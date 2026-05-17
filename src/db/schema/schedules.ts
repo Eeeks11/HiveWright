@@ -15,6 +15,8 @@ export const schedules = pgTable("schedules", {
     priority?: number;
   }>().notNull(),
   enabled: boolean("enabled").default(true).notNull(),
+  originType: varchar("origin_type", { length: 32 }).default("custom").notNull(),
+  originKey: varchar("origin_key", { length: 128 }),
   lastRunAt: timestamp("last_run_at"),
   nextRunAt: timestamp("next_run_at"),
   createdBy: varchar("created_by", { length: 255 }).notNull(),

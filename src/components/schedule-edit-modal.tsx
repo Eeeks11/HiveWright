@@ -90,6 +90,7 @@ export function ScheduleEditModal({
 
     const payload = {
       id: schedule.id,
+      hiveId: schedule.hiveId,
       cronExpression,
       taskTemplate: {
         ...schedule.taskTemplate,

@@ -66,6 +66,8 @@ const connectorDefinition = {
     { key: "defaultUsername", label: "Sender name" },
   ],
   secretFields: ["webhookUrl"],
+  scopes: [],
+  operations: [],
 };
 
 function setupRequest(body: Record<string, unknown>) {
@@ -98,6 +100,9 @@ describe("POST /api/hives/setup", () => {
           type: "digital",
           description: null,
         }];
+      }
+      if (query.includes("INSERT INTO connector_installs")) {
+        return [{ id: "install-1", connectorSlug: "discord-webhook", displayName: "Discord" }];
       }
       if (query.includes("INSERT INTO goals")) {
         return [{ id: "goal-1" }];
@@ -140,7 +145,8 @@ describe("POST /api/hives/setup", () => {
       name: "Test Hive",
       description: null,
     }, {
-      enabled: true,
+      coreEnabled: true,
+      proactiveEnabled: true,
     });
     expect(mocks.tx).toHaveBeenCalledWith(
       expect.arrayContaining([expect.stringContaining("SELECT id FROM adapter_config WHERE adapter_type = ")]),
@@ -209,7 +215,8 @@ describe("POST /api/hives/setup", () => {
       name: "Test Hive",
       description: null,
     }, {
-      enabled: false,
+      coreEnabled: true,
+      proactiveEnabled: false,
     });
     expect(mocks.tx.json).toHaveBeenCalledWith({ maxConcurrentTasks: 6, setupPreset: "owner-setup" });
     expect(mocks.tx.json).toHaveBeenCalledWith(expect.objectContaining({ setupPreset: "goals", confidenceThreshold: 0.75 }));

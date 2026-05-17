@@ -47,6 +47,24 @@ function createDb() {
     if (query.includes("FROM goals g")) return Promise.resolve([]);
     if (query.includes("FROM tasks t") && query.includes("recentCompletionRows")) return Promise.resolve([]);
     if (query.includes("FROM insights")) return Promise.resolve([]);
+    if (query.includes("COUNT(*)::int AS count") && query.includes("FROM goal_completions gc")) {
+      return Promise.resolve([{ count: 11 }]);
+    }
+    if (query.includes("JOIN work_products wp") && query.includes("FROM goal_completions gc")) {
+      return Promise.resolve([{
+        id: "completion-1",
+        goal_id: "a6b815ba-5109-4066-8a33-cc5560d3a0e1",
+        hive_id: "b6b815ba-5109-4066-8a33-cc5560d3a0e1",
+        goal_title: "Final owner handoff",
+        summary: "Completed final result.",
+        evidence: { workProductIds: ["c6b815ba-5109-4066-8a33-cc5560d3a0e1"] },
+        primary_work_product_id: "c6b815ba-5109-4066-8a33-cc5560d3a0e1",
+        primary_open_url: "/deliverables/c6b815ba-5109-4066-8a33-cc5560d3a0e1/open",
+        primary_artifact_title: "Final owner handoff page",
+        primary_artifact_render_mode: "html",
+        created_at: new Date("2026-05-17T02:00:00Z"),
+      }]);
+    }
     if (query.includes("SELECT cost_cents")) return Promise.resolve([]);
     if (query.includes("FROM hive_ideas")) {
       return Promise.resolve([{ open_ideas_count: 0, last_ideas_review_at: null }]);
@@ -119,6 +137,17 @@ describe("GET /api/brief", () => {
     expect(body.data.flags.pendingDecisions).toBe(1);
     expect(body.data.flags.totalPendingDecisions).toBe(1);
     expect(body.data.flags.pendingQualityFeedback).toBe(5);
+    expect(body.data.flags.unreadOutcomes).toBe(11);
+    expect(body.data.latestOutcomes).toEqual([
+      {
+        id: "completion-1",
+        goalId: "a6b815ba-5109-4066-8a33-cc5560d3a0e1",
+        goalTitle: "Final owner handoff",
+        summary: "Completed final result.",
+        createdAt: "2026-05-17T02:00:00.000Z",
+        status: "unread",
+      },
+    ]);
     expect(body.data.pendingDecisions).toHaveLength(1);
     expect(body.data.operationLock.resumeReadiness.status).toBe("blocked");
     expect(body.data.operationLock.resumeReadiness.blockers[0].code).toBe("no_enabled_models");

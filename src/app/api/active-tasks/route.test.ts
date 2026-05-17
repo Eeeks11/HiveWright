@@ -27,6 +27,10 @@ describe("operations-map live-critical filtering", () => {
     expect(isTaskLiveBlocking("blocked", null)).toBe(true);
     expect(isTaskLiveBlocking("unresolvable", null)).toBe(true);
   });
+  it("does NOT flag hive-supervisor watchdog tasks as relationship-map live blockers", () => {
+    expect(isTaskLiveBlocking("unresolvable", null, "hive-supervisor")).toBe(false);
+    expect(isTaskLiveBlocking("failed", "active", "hive-supervisor")).toBe(false);
+  });
   it("flags critical tasks under active goals as live-blocking", () => {
     expect(isTaskLiveBlocking("failed", "active")).toBe(true);
     expect(isTaskLiveBlocking("blocked", "active")).toBe(true);

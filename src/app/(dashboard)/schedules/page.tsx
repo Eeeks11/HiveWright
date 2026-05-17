@@ -19,13 +19,13 @@ export default function SchedulesPage() {
   }, [selected]);
 
   const toggle = async (id: string, enabled: boolean) => {
-    await fetch("/api/schedules", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, enabled }) });
+    await fetch("/api/schedules", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: selected?.id, id, enabled }) });
     setSchedules(prev => prev.map(s => s.id === id ? { ...s, enabled } : s));
   };
 
   const deleteSchedule = async (id: string) => {
     if (!confirm("Delete this schedule?")) return;
-    await fetch("/api/schedules", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    await fetch("/api/schedules", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: selected?.id, id }) });
     setSchedules(prev => prev.filter(s => s.id !== id));
   };
 

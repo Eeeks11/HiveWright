@@ -31,6 +31,15 @@ beforeEach(() => {
   fetchMock.mockImplementation((input: string | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url === "/api/hives/setup") return Promise.resolve(setupOk());
+    if (url === "/api/embedding-config/local-setup") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ data: {
+          defaultConfig: { modelName: "nomic-embed-text-v2-moe:latest" },
+          status: { ollamaReachable: true, modelInstalled: true, embeddingTest: "passed", modelName: "nomic-embed-text-v2-moe:latest", error: null },
+        } }),
+      });
+    }
     return Promise.resolve(emptyList());
   });
   vi.stubGlobal("fetch", fetchMock);

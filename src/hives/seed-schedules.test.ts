@@ -159,23 +159,89 @@ describe("seedDefaultSchedules", () => {
     expect(qualityFeedbackTemplate.brief).toBe("(populated at run time)");
   });
 
-  it("can create the default recurring work paused for owner setup", async () => {
+  it("can create proactive recurring work paused while keeping the supervisor heartbeat active", async () => {
     const res = await seedDefaultSchedules(sql, {
       id: HIVE,
       name: "Seed Co",
       description: "A test hive",
     }, {
-      enabled: false,
+      coreEnabled: true,
+      proactiveEnabled: false,
     });
 
     expect(res.created).toBe(7);
 
-    const rows = await sql`
-      SELECT enabled FROM schedules
+    const rows = await sql<{ enabled: boolean; origin_key: string }[]>`
+      SELECT enabled, origin_key FROM schedules
       WHERE hive_id = ${HIVE}::uuid
     `;
     expect(rows).toHaveLength(7);
-    expect(rows.every((row) => row.enabled === false)).toBe(true);
+    expect(rows.find((row) => row.origin_key === "hive-supervisor-heartbeat")?.enabled).toBe(true);
+    expect(rows.filter((row) => row.origin_key !== "hive-supervisor-heartbeat").every((row) => row.enabled === false)).toBe(true);
+  });
+
+  it("creates isolated system default instances for each hive without copying custom schedules", async () => {
+    const secondHive = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    await sql`
+      INSERT INTO hives (id, slug, name, type, description)
+      VALUES (${secondHive}, 'second-biz', 'Second Co', 'digital', null)
+    `;
+    await sql`
+      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, created_by)
+      VALUES (
+        ${HIVE}::uuid,
+        '5 5 * * *',
+        ${sql.json({ assignedTo: "custom-role", title: "Hive A custom schedule", brief: "Do not copy me" })},
+        true,
+        'owner'
+      )
+    `;
+
+    await seedDefaultSchedules(sql, { id: HIVE, name: "Seed Co", description: "A test hive" });
+    await seedDefaultSchedules(sql, { id: secondHive, name: "Second Co", description: null });
+
+    const rows = await sql<{ hive_id: string; origin_type: string; origin_key: string | null; task_template: { title?: string } }[]>`
+      SELECT hive_id, origin_type, origin_key, task_template FROM schedules
+      WHERE hive_id IN (${HIVE}::uuid, ${secondHive}::uuid)
+      ORDER BY hive_id, origin_key NULLS LAST
+    `;
+
+    expect(rows.filter((row) => row.hive_id === HIVE)).toHaveLength(8);
+    expect(rows.filter((row) => row.hive_id === secondHive)).toHaveLength(7);
+    expect(rows.filter((row) => row.hive_id === secondHive).some((row) => row.task_template.title === "Hive A custom schedule")).toBe(false);
+    expect(rows.filter((row) => row.origin_type === "system_default")).toHaveLength(14);
+    expect(rows.filter((row) => row.origin_type === "custom")).toHaveLength(1);
+  });
+
+  it("does not overwrite owner-edited default schedule cron or enabled state on rerun", async () => {
+    await seedDefaultSchedules(sql, {
+      id: HIVE,
+      name: "Seed Co",
+      description: null,
+    });
+    await sql`
+      UPDATE schedules
+      SET cron_expression = '45 6 * * *', enabled = false
+      WHERE hive_id = ${HIVE}::uuid
+        AND origin_type = 'system_default'
+        AND origin_key = 'daily-world-scan'
+    `;
+
+    const res = await seedDefaultSchedules(sql, {
+      id: HIVE,
+      name: "Seed Co",
+      description: null,
+    });
+
+    expect(res.created).toBe(0);
+    expect(res.skipped).toBe(7);
+    const [row] = await sql<{ cron_expression: string; enabled: boolean }[]>`
+      SELECT cron_expression, enabled FROM schedules
+      WHERE hive_id = ${HIVE}::uuid
+        AND origin_type = 'system_default'
+        AND origin_key = 'daily-world-scan'
+    `;
+    expect(row).toEqual({ cron_expression: "45 6 * * *", enabled: false });
   });
 
   it("is idempotent — second run does not create duplicates of either schedule", async () => {

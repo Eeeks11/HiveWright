@@ -87,11 +87,11 @@ export async function storeEmbedding(
   sql: Sql,
   input: StoreEmbeddingInput,
 ): Promise<string[]> {
-  const config = input.modelConfig ?? await getEmbeddingModelConfig(sql);
   const chunks = chunkText(input.text);
   const ids: string[] = [];
+  const config = input.pgvectorEnabled ? input.modelConfig ?? await getEmbeddingModelConfig(sql) : null;
   for (const chunk of chunks) {
-    if (input.pgvectorEnabled) {
+    if (input.pgvectorEnabled && config) {
       try {
         const embedding = await callEmbeddingModel(chunk, config);
         const vectorStr = `[${embedding.join(",")}]`;
@@ -144,7 +144,12 @@ export async function findSimilar(
   input: SimilaritySearchInput,
 ): Promise<SimilarityResult[]> {
   if (!input.pgvectorEnabled) return [];
-  const config = input.modelConfig ?? await getEmbeddingModelConfig(sql);
+  let config: ModelCallerConfig;
+  try {
+    config = input.modelConfig ?? await getEmbeddingModelConfig(sql);
+  } catch {
+    return [];
+  }
   let queryEmbedding: number[];
   try {
     queryEmbedding = await callEmbeddingModel(input.queryText, config);

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useHiveContext } from "@/components/hive-context";
 import { generateHiveAddress } from "@/hives/address";
 
 const HIVE_TYPES = ["physical", "digital", "greenfield"];
@@ -42,9 +43,21 @@ const WELCOME_CONCEPTS = [
   },
 ];
 
+const AUTO_MODEL_ROUTE = "auto";
+
 const ADAPTER_GROUPS = [
   {
-    label: "Recommended managed runtimes",
+    label: "HiveWright managed routing",
+    adapters: [
+      {
+        value: AUTO_MODEL_ROUTE,
+        label: "Auto Routing",
+        description: "HiveWright chooses the best enabled, healthy model for each task using the model routing policy.",
+      },
+    ],
+  },
+  {
+    label: "Owner-managed CLI runtimes",
     adapters: [
       {
         value: "codex",
@@ -81,14 +94,19 @@ const ADAPTER_LABELS = Object.fromEntries(
 
 const RUNTIME_PRESETS = [
   {
+    value: AUTO_MODEL_ROUTE,
+    label: "Auto Routing (recommended)",
+    description: "Use HiveWright's Auto routing system: pick the best enabled, healthy model per task based on capability, cost, and routing policy.",
+  },
+  {
     value: "codex",
-    label: "Recommended",
-    description: "Best starting point for most hives. HiveWright chooses capable defaults for each worker.",
+    label: "Codex CLI",
+    description: "Force every worker to use the local Codex session. Use this only when you specifically want Codex for all roles.",
   },
   {
     value: "claude-code",
     label: "Claude Code",
-    description: "Use this when your local Claude Code session is the preferred way to run workers.",
+    description: "Force every worker to use the local Claude Code session. Use this only when Claude Code is preferred for all roles.",
   },
   {
     value: "gemini",
@@ -131,10 +149,12 @@ const GENERAL_MODELS = [
 ];
 
 const EA_DISCORD_CONNECTOR_SLUG = "ea-discord";
+const DISCORD_BOT_INVITE_PERMISSIONS = "274877908992";
 const REVIEW_STEP = 7;
 const PROJECTS_STEP = 6;
 
 type RequestSortingPreset = "balanced" | "direct" | "goals";
+type SafetyPreset = "open" | "owner_review_first" | "locked_down" | "custom";
 
 interface ProjectEntry {
   name: string;
@@ -160,6 +180,7 @@ interface Connector {
   icon: string | null;
   authType: "api_key" | "oauth2" | "webhook" | "none";
   setupFields: SetupField[];
+  scopes?: { key: string; kind?: string; required?: boolean }[];
   operations: { slug: string; label: string }[];
   requiresDispatcherRestart?: boolean;
 }
@@ -190,10 +211,71 @@ interface WizardState {
     memorySearch: boolean;
     requestSorting: RequestSortingPreset;
   };
+  safetyPreset: SafetyPreset;
+}
+
+type RuntimeStatus = "ready" | "check_required" | "missing";
+
+interface RuntimeReadiness {
+  label: string;
+  installed: boolean;
+  status: RuntimeStatus;
+  detail: string;
+  nextStep: string;
+}
+
+interface SetupReadiness {
+  checkedAt: string;
+  runtimes: Record<string, RuntimeReadiness>;
+}
+
+interface LocalEmbeddingSetupStatus {
+  ollamaReachable: boolean;
+  modelInstalled: boolean;
+  embeddingTest: "not_run" | "passed" | "failed";
+  modelName: string;
+  error: string | null;
+}
+
+interface LocalEmbeddingSetup {
+  status: LocalEmbeddingSetupStatus;
+  defaultConfig: {
+    provider: string;
+    modelName: string;
+    dimension: number;
+    endpointOverride: string;
+  };
+}
+
+interface InstalledConnectorSetupResult {
+  id: string;
+  connectorSlug: string;
+  displayName: string;
+  requiresDispatcherRestart: boolean;
+  hasSafeTest: boolean;
+}
+
+function defaultGrantedScopesForSetup(connector: Connector) {
+  return (connector.scopes ?? [])
+    .filter((scope) => scope.required === true || scope.kind === "send")
+    .map((scope) => scope.key);
+}
+
+function discordBotInviteUrl(applicationId: string) {
+  const trimmed = applicationId.trim();
+  if (!trimmed) return null;
+  const params = new URLSearchParams({
+    client_id: trimmed,
+    permissions: DISCORD_BOT_INVITE_PERMISSIONS,
+    scope: "bot applications.commands",
+  });
+  return `https://discord.com/oauth2/authorize?${params.toString()}`;
 }
 
 export default function NewHiveWizard() {
   const router = useRouter();
+  const { refreshHives: contextRefreshHives } = useHiveContext();
+  const refreshHives = contextRefreshHives ?? (async () => {});
   const [showWelcome, setShowWelcome] = useState<boolean | null>(null);
   const [step, setStep] = useState(1);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -208,6 +290,13 @@ export default function NewHiveWizard() {
   const [customAddressEdited, setCustomAddressEdited] = useState(false);
   const [runtimeAdvancedOpen, setRuntimeAdvancedOpen] = useState(false);
   const [projectAdvancedOpen, setProjectAdvancedOpen] = useState<Record<number, boolean>>({});
+  const [setupReadiness, setSetupReadiness] = useState<SetupReadiness | null>(null);
+  const [setupReadinessLoading, setSetupReadinessLoading] = useState(false);
+  const [setupReadinessError, setSetupReadinessError] = useState<string | null>(null);
+  const [embeddingSetup, setEmbeddingSetup] = useState<LocalEmbeddingSetup | null>(null);
+  const [embeddingSetupLoading, setEmbeddingSetupLoading] = useState(false);
+  const [embeddingSetupError, setEmbeddingSetupError] = useState<string | null>(null);
+  const [embeddingSetupAction, setEmbeddingSetupAction] = useState<string | null>(null);
 
   const [state, setState] = useState<WizardState>({
     name: "",
@@ -227,6 +316,7 @@ export default function NewHiveWizard() {
       memorySearch: true,
       requestSorting: "balanced",
     },
+    safetyPreset: "owner_review_first",
   });
 
   const hasProjectsStep = state.type !== "physical";
@@ -288,6 +378,80 @@ export default function NewHiveWizard() {
       .finally(() => setConnectorsLoading(false));
   };
 
+  const loadSetupReadiness = () => {
+    setSetupReadinessLoading(true);
+    setSetupReadinessError(null);
+    fetch("/api/setup-readiness")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((body) => setSetupReadiness(body.data ?? null))
+      .catch((err) => {
+        setSetupReadiness(null);
+        setSetupReadinessError(`Runtime readiness could not be checked: ${(err as Error).message}`);
+      })
+      .finally(() => setSetupReadinessLoading(false));
+  };
+
+  const loadEmbeddingSetup = () => {
+    setEmbeddingSetupLoading(true);
+    setEmbeddingSetupError(null);
+    fetch("/api/embedding-config/local-setup")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((body) => setEmbeddingSetup(body.data ?? null))
+      .catch((err) => {
+        setEmbeddingSetup(null);
+        setEmbeddingSetupError(`Memory setup could not be checked: ${(err as Error).message}`);
+      })
+      .finally(() => setEmbeddingSetupLoading(false));
+  };
+
+  const runEmbeddingSetupAction = async (action: "install" | "pull" | "use") => {
+    const messages = {
+      install: "Installing Ollama...",
+      pull: "Pulling the local memory model...",
+      use: "Saving local memory engine...",
+    };
+    const successMessages = {
+      install: "Ollama install started. Refresh the check when it finishes.",
+      pull: "Local memory model is installed.",
+      use: "Local memory engine saved. HiveWright will re-index memory in the background.",
+    };
+    const endpoint = action === "install"
+      ? "/api/embedding-config/local-setup/install-ollama"
+      : action === "pull"
+        ? "/api/embedding-config/local-setup/pull-model"
+        : "/api/embedding-config/local-setup/use";
+
+    setEmbeddingSetupAction(messages[action]);
+    setEmbeddingSetupError(null);
+    try {
+      const init: RequestInit = { method: "POST" };
+      if (action === "install") {
+        init.headers = { "Content-Type": "application/json" };
+        init.body = JSON.stringify({ confirmed: true });
+      }
+      if (action === "pull") {
+        init.headers = { "Content-Type": "application/json" };
+        init.body = JSON.stringify({ modelName: embeddingSetup?.defaultConfig.modelName });
+      }
+      const res = await fetch(endpoint, init);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Local memory setup action failed.");
+      setEmbeddingSetupAction(successMessages[action]);
+      loadEmbeddingSetup();
+    } catch (err) {
+      setEmbeddingSetupAction(null);
+      setEmbeddingSetupError(err instanceof Error ? err.message : "Local memory setup action failed.");
+    }
+  };
+
+  const useLocalEmbeddingSetup = () => runEmbeddingSetupAction("use");
+
   useEffect(() => {
     fetch("/api/roles")
       .then((r) => {
@@ -298,6 +462,8 @@ export default function NewHiveWizard() {
       .catch((err) => setRolesError(`Role defaults could not be loaded: ${(err as Error).message}`));
 
     loadConnectors();
+    loadSetupReadiness();
+    loadEmbeddingSetup();
   }, []);
 
   const connectorsByCategory = useMemo(() => {
@@ -318,11 +484,59 @@ export default function NewHiveWizard() {
     return [...picked, ...serviceConnectors.filter((connector) => !seen.has(connector.slug)).slice(0, Math.max(0, 6 - picked.length))];
   }, [serviceConnectors]);
 
+  const runtimePresetIsAuto = Object.keys(state.roleOverrides).length === 0 || roles.every((role) => {
+    const override = state.roleOverrides[role.slug];
+    return override?.adapter === AUTO_MODEL_ROUTE && override?.model === AUTO_MODEL_ROUTE;
+  });
   const getSelectedAdapter = (role: Role) => state.roleOverrides[role.slug]?.adapter ?? normalizeAdapter(role.adapterType);
   const getSelectedModel = (role: Role) => state.roleOverrides[role.slug]?.model ?? role.recommendedModel;
+  const selectedRuntimeAdapters = useMemo(() => {
+    if (runtimePresetIsAuto) return [AUTO_MODEL_ROUTE];
+    if (roles.length === 0) return ["codex"];
+    return Array.from(
+      new Set(
+        roles.map((role) => state.roleOverrides[role.slug]?.adapter ?? normalizeAdapter(role.adapterType)),
+      ),
+    );
+  }, [roles, runtimePresetIsAuto, state.roleOverrides]);
+
+  const pendingOAuthConnectors = useMemo(
+    () => connectors.filter((connector) => connector.authType === "oauth2" && state.connectorSelections[connector.slug] === "configure-later"),
+    [connectors, state.connectorSelections],
+  );
+
+  const launchBlockingIssues = useMemo(() => {
+    const issues: string[] = [];
+    if (!state.name.trim()) issues.push("Hive name is required.");
+    if (!setupReadiness) {
+      issues.push("Runtime readiness has not been checked yet.");
+    } else {
+      for (const adapter of selectedRuntimeAdapters) {
+        if (adapter === AUTO_MODEL_ROUTE) continue;
+        const runtime = setupReadiness.runtimes[adapter];
+        if (!runtime || runtime.status === "missing") {
+          issues.push(`${ADAPTER_LABELS[adapter] ?? adapter} is not installed or reachable on this server.`);
+        } else if (runtime.status === "check_required") {
+          issues.push(`${runtime.label} is installed, but HiveWright has not proven the signed-in session can run workers yet.`);
+        }
+      }
+    }
+    if (state.operatingPreferences.memorySearch && (!embeddingSetup || embeddingSetup.status?.embeddingTest !== "passed")) {
+      issues.push("Memory search is enabled, but the local memory engine has not passed its embedding test.");
+    }
+    for (const connector of connectors) {
+      if (state.connectorSelections[connector.slug] !== "configured") continue;
+      const fields = state.connectorFields[connector.slug] ?? {};
+      const missingField = connector.setupFields.find((field) => field.required && !fields[field.key]);
+      if (missingField) issues.push(`${connector.name} is selected but ${missingField.label} is missing.`);
+    }
+    return issues;
+  }, [connectors, embeddingSetup, selectedRuntimeAdapters, setupReadiness, state.connectorFields, state.connectorSelections, state.name, state.operatingPreferences.memorySearch]);
 
   const modelsForAdapter = (adapter: string) => {
     switch (adapter) {
+      case AUTO_MODEL_ROUTE:
+        return [AUTO_MODEL_ROUTE];
       case "claude-code":
         return ANTHROPIC_MODELS;
       case "codex":
@@ -368,6 +582,10 @@ export default function NewHiveWizard() {
   };
 
   const selectRuntimePreset = (adapter: string) => {
+    if (adapter === AUTO_MODEL_ROUTE) {
+      setState((prev) => ({ ...prev, roleOverrides: {} }));
+      return;
+    }
     applyAdapterToAllRoles(adapter);
   };
 
@@ -440,17 +658,48 @@ export default function NewHiveWizard() {
     else setStep((s) => s - 1);
   };
 
+  const roleOverridesForSubmit = () => {
+    if (runtimePresetIsAuto) {
+      return Object.fromEntries(
+        roles.map((role) => [
+          role.slug,
+          {
+            adapterType: AUTO_MODEL_ROUTE,
+            recommendedModel: AUTO_MODEL_ROUTE,
+          },
+        ]),
+      );
+    }
+
+    return Object.fromEntries(
+      Object.entries(state.roleOverrides)
+        .filter(([, override]) => override.adapter || override.model)
+        .map(([slug, override]) => [
+          slug,
+          {
+            adapterType: override.adapter,
+            recommendedModel: override.model,
+          },
+        ]),
+    );
+  };
+
   const submit = async () => {
     setSubmitting(true);
     setError(null);
     setSetupStatus("Setting up your hive...");
     try {
+      if (launchBlockingIssues.length > 0) {
+        throw new Error(`Setup is not ready to launch: ${launchBlockingIssues.join(" ")}`);
+      }
+
       const configuredConnectors = connectors
-        .filter((connector) => state.connectorSelections[connector.slug] === "configured")
+        .filter((connector) => state.connectorSelections[connector.slug] === "configured" && connector.authType !== "oauth2")
         .map((connector) => ({
           connectorSlug: connector.slug,
           displayName: state.connectorDisplayNames[connector.slug] || connector.name,
           fields: state.connectorFields[connector.slug] ?? {},
+          grantedScopes: defaultGrantedScopesForSetup(connector),
         }));
 
       const setupRes = await fetch("/api/hives/setup", {
@@ -464,17 +713,7 @@ export default function NewHiveWizard() {
             description: state.description,
             mission: state.mission,
           },
-          roleOverrides: Object.fromEntries(
-            Object.entries(state.roleOverrides)
-              .filter(([, override]) => override.adapter || override.model)
-              .map(([slug, override]) => [
-                slug,
-                {
-                  adapterType: override.adapter,
-                  recommendedModel: override.model,
-                },
-              ]),
-          ),
+          roleOverrides: roleOverridesForSubmit(),
           connectors: configuredConnectors,
           projects: state.projects
             .filter((project) => project.name || project.slug || project.workspacePath)
@@ -486,13 +725,38 @@ export default function NewHiveWizard() {
             })),
           initialGoal: state.initialGoal || undefined,
           operatingPreferences: state.operatingPreferences,
+          safetyPreset: state.safetyPreset,
         }),
       });
       const setupBody = await setupRes.json();
       if (!setupRes.ok) throw new Error(setupBody.error || "Hive setup did not finish. Please try again.");
       const hiveId = setupBody.data.id;
+      const installedConnectors = (setupBody.data.installedConnectors ?? []) as InstalledConnectorSetupResult[];
 
       localStorage.setItem("selectedHiveId", hiveId);
+      await refreshHives(hiveId);
+
+      const testedConnectors = installedConnectors.filter((connector) => connector.hasSafeTest).length;
+      if (testedConnectors > 0) {
+        setSetupStatus(`${testedConnectors} connected service${testedConnectors === 1 ? "" : "s"} passed setup testing.`);
+      }
+
+      if (installedConnectors.some((connector) => connector.requiresDispatcherRestart)) {
+        setSetupStatus("Activating connector listeners...");
+        const restartRes = await fetch("/api/dispatcher/restart", { method: "POST" });
+        const restartBody = await restartRes.json().catch(() => ({}));
+        if (!restartRes.ok) {
+          throw new Error(restartBody.error || "HiveWright could not activate connector listeners.");
+        }
+      }
+
+      if (pendingOAuthConnectors.length > 0) {
+        const [firstOAuth, ...remainingOAuth] = pendingOAuthConnectors;
+        const redirectTo = `/settings/connectors?postSetup=1${remainingOAuth.length > 0 ? `&pendingOAuth=${encodeURIComponent(remainingOAuth.map((connector) => connector.slug).join(","))}` : ""}`;
+        window.location.href = `/api/oauth/${firstOAuth.slug}/start?hiveId=${encodeURIComponent(hiveId)}&displayName=${encodeURIComponent(state.connectorDisplayNames[firstOAuth.slug] || firstOAuth.name)}&redirectTo=${encodeURIComponent(redirectTo)}`;
+        return;
+      }
+
       router.push("/setup/health");
     } catch (err: unknown) {
       setSetupStatus(null);
@@ -645,8 +909,46 @@ export default function NewHiveWizard() {
         <section className="space-y-4 rounded-lg border p-6" aria-labelledby="runtime-step-title">
           <div>
             <h2 id="runtime-step-title" className="text-lg font-medium">Choose agent runtimes</h2>
-            <p className="text-sm text-zinc-500">Choose how HiveWright should run its workers. The recommended option is right for most owners.</p>
+            <p className="text-sm text-zinc-500">Use Auto Routing unless you have a specific runtime preference. HiveWright will route each task to the best enabled, healthy model using its built-in model routing policy.</p>
           </div>
+
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-100">
+            <p className="font-medium">Runtime readiness check</p>
+            <p className="mt-1">HiveWright checks this server now, not after you get stuck. CLI runtimes still need a signed-in session; setup health then runs the deeper worker probe after the hive exists.</p>
+            <button
+              type="button"
+              onClick={loadSetupReadiness}
+              disabled={setupReadinessLoading}
+              className="mt-3 rounded-md border border-amber-300 px-3 py-1.5 text-xs hover:bg-amber-100 disabled:opacity-60 dark:border-amber-700 dark:hover:bg-amber-900/30"
+            >
+              {setupReadinessLoading ? "Checking..." : "Refresh runtime check"}
+            </button>
+            {setupReadinessError && <p role="alert" className="mt-2 text-xs">{setupReadinessError}</p>}
+          </div>
+
+          {setupReadiness && (
+            <div className="grid gap-2 md:grid-cols-2">
+              {selectedRuntimeAdapters.map((adapter) => {
+                if (adapter === AUTO_MODEL_ROUTE) {
+                  return (
+                    <div key={adapter} className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-100">
+                      <p className="font-medium">Auto Routing: selected</p>
+                      <p className="mt-1 text-xs">HiveWright will use the model routing system instead of pinning every role to one CLI.</p>
+                      <p className="mt-1 text-xs font-medium">Next: make sure Model Setup has at least one enabled, healthy candidate.</p>
+                    </div>
+                  );
+                }
+                const runtime = setupReadiness.runtimes[adapter];
+                return (
+                  <div key={adapter} className={`rounded-md border p-3 text-sm ${runtime?.status === "ready" ? "border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950/30 dark:text-green-100" : runtime?.status === "check_required" ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100" : "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100"}`}>
+                    <p className="font-medium">{runtime?.label ?? ADAPTER_LABELS[adapter] ?? adapter}: {runtimeStatusLabel(runtime?.status ?? "missing")}</p>
+                    <p className="mt-1 text-xs">{runtime?.detail ?? "This runtime could not be checked."}</p>
+                    <p className="mt-1 text-xs font-medium">Next: {runtime?.nextStep ?? "Choose another runtime or check setup health after launch."}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <div className="grid gap-3 md:grid-cols-2">
             {RUNTIME_PRESETS.map((preset) => (
@@ -654,7 +956,8 @@ export default function NewHiveWizard() {
                 <input
                   type="radio"
                   name="runtime-preset"
-                  checked={roles.length === 0 ? preset.value === "codex" : roles.every((role) => getSelectedAdapter(role) === preset.value)}
+                  aria-label={`${preset.label} runtime preset`}
+                  checked={preset.value === AUTO_MODEL_ROUTE ? runtimePresetIsAuto : !runtimePresetIsAuto && roles.every((role) => getSelectedAdapter(role) === preset.value)}
                   onChange={() => selectRuntimePreset(preset.value)}
                   className="mt-1"
                 />
@@ -796,7 +1099,7 @@ export default function NewHiveWizard() {
                 checked={state.operatingPreferences.memorySearch}
                 onChange={() => updateOperatingPreferences({ memorySearch: true })}
                 title="Yes, help future work remember context"
-                description="HiveWright will mark this hive ready to use memory search as knowledge is added."
+                description="HiveWright will use memory search only after the memory engine below is ready."
               />
               <RadioChoice
                 name="memory-search"
@@ -804,6 +1107,93 @@ export default function NewHiveWizard() {
                 onChange={() => updateOperatingPreferences({ memorySearch: false })}
                 title="Not yet"
                 description="You can turn this on later after the hive is running."
+              />
+              {state.operatingPreferences.memorySearch && (
+                <div className="rounded-md border bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-medium">Memory engine</p>
+                      {embeddingSetupLoading && <p className="mt-1 text-xs text-zinc-500">Checking local memory setup...</p>}
+                      {embeddingSetup && (
+                        <>
+                          <p className="mt-1 text-xs text-zinc-500">Default: {embeddingSetup.defaultConfig?.modelName ?? "nomic-embed-text-v2-moe:latest"} via local Ollama.</p>
+                          <p className="mt-1 text-xs text-zinc-500">Status: {embeddingStatusLabel(embeddingSetup.status)}</p>
+                        </>
+                      )}
+                      {embeddingSetupError && <p role="alert" className="mt-1 text-xs text-red-600">{embeddingSetupError}</p>}
+                      {embeddingSetupAction && <p className="mt-1 text-xs text-green-700 dark:text-green-300">{embeddingSetupAction}</p>}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={loadEmbeddingSetup}
+                        disabled={embeddingSetupLoading}
+                        className="rounded-md border px-3 py-1.5 text-xs hover:bg-zinc-100 disabled:opacity-60 dark:hover:bg-zinc-800"
+                      >
+                        {embeddingSetupLoading ? "Checking..." : "Refresh"}
+                      </button>
+                      {embeddingSetup && !embeddingSetup.status?.ollamaReachable && (
+                        <button
+                          type="button"
+                          onClick={() => runEmbeddingSetupAction("install")}
+                          disabled={Boolean(embeddingSetupAction?.startsWith("Installing"))}
+                          className="rounded-md border px-3 py-1.5 text-xs hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
+                        >
+                          Install Ollama
+                        </button>
+                      )}
+                      {embeddingSetup && embeddingSetup.status?.ollamaReachable && !embeddingSetup.status?.modelInstalled && (
+                        <button
+                          type="button"
+                          onClick={() => runEmbeddingSetupAction("pull")}
+                          disabled={Boolean(embeddingSetupAction?.startsWith("Pulling"))}
+                          className="rounded-md border px-3 py-1.5 text-xs hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800"
+                        >
+                          Pull memory model
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={useLocalEmbeddingSetup}
+                        disabled={!embeddingSetup || embeddingSetup.status?.embeddingTest !== "passed" || Boolean(embeddingSetupAction?.startsWith("Saving"))}
+                        className="rounded-md bg-zinc-900 px-3 py-1.5 text-xs text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                      >
+                        Use local memory engine
+                      </button>
+                    </div>
+                  </div>
+                  {embeddingSetup && embeddingSetup.status?.embeddingTest !== "passed" && (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                      Memory search will stay off in practice until Ollama is reachable, {embeddingSetup.defaultConfig?.modelName ?? "nomic-embed-text-v2-moe:latest"} is installed, and the embedding test passes.
+                    </p>
+                  )}
+                </div>
+              )}
+            </fieldset>
+
+
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">How much freedom should this hive have on day one?</legend>
+              <RadioChoice
+                name="safety-preset"
+                checked={state.safetyPreset === "open"}
+                onChange={() => update({ safetyPreset: "open" })}
+                title="Green — maximum autonomy"
+                description="No approval gates for connected actions. HiveWright can read, send, change, spend, and delete using the connectors you add. Fastest, highest-trust mode."
+              />
+              <RadioChoice
+                name="safety-preset"
+                checked={state.safetyPreset === "owner_review_first"}
+                onChange={() => update({ safetyPreset: "owner_review_first" })}
+                title="Amber — supervised autonomy"
+                description="Routine read and prep work can proceed. Sending, changing, spending, and system changes ask first. Destructive actions stay blocked."
+              />
+              <RadioChoice
+                name="safety-preset"
+                checked={state.safetyPreset === "locked_down"}
+                onChange={() => update({ safetyPreset: "locked_down" })}
+                title="Red — locked down"
+                description="Inspect and draft only. External changes, spend, system changes, and destructive actions are blocked until you loosen the rules."
               />
             </fieldset>
 
@@ -1032,9 +1422,9 @@ export default function NewHiveWizard() {
               <p className="text-zinc-500">First goal: {state.initialGoal ? "provided" : "not provided"}</p>
             </div>
             <div className="rounded-md bg-zinc-50 p-3 dark:bg-zinc-900">
-              <p className="font-medium mb-1">Runtime changes</p>
-              {Object.entries(state.roleOverrides).length === 0 ? (
-                <p className="text-zinc-400">Using role defaults.</p>
+              <p className="font-medium mb-1">Runtime selection</p>
+              {runtimePresetIsAuto ? (
+                <p className="text-zinc-400">Auto Routing: HiveWright will set roles to `auto` and choose the best enabled, healthy model per task through the model routing system.</p>
               ) : (
                 Object.entries(state.roleOverrides).map(([slug, override]) => (
                   <p key={slug} className="text-zinc-500">
@@ -1047,8 +1437,31 @@ export default function NewHiveWizard() {
               <p className="font-medium mb-1">Working preferences</p>
               <p className="text-zinc-500">Agents at once: {state.operatingPreferences.maxConcurrentAgents}</p>
               <p className="text-zinc-500">Looks for useful work: {state.operatingPreferences.proactiveWork ? "yes" : "paused"}</p>
-              <p className="text-zinc-500">Memory search: {state.operatingPreferences.memorySearch ? "ready" : "not yet"}</p>
+              <p className="text-zinc-500">Memory search: {state.operatingPreferences.memorySearch ? "will be checked before use" : "off until you enable it"}</p>
               <p className="text-zinc-500">Request sorting: {requestSortingLabel(state.operatingPreferences.requestSorting)}</p>
+            </div>
+            <div className="rounded-md bg-zinc-50 p-3 dark:bg-zinc-900">
+              <p className="font-medium mb-1">Safety</p>
+              <p className="text-zinc-500">{safetyPresetLabel(state.safetyPreset)}</p>
+              <p className="text-zinc-500">Setup health will confirm these rules are active before the hive does real external work.</p>
+            </div>
+            <div className={`rounded-md p-3 ${launchBlockingIssues.length > 0 ? "border border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100" : "bg-green-50 text-green-900 dark:bg-green-950/30 dark:text-green-100"}`}>
+              <p className="font-medium mb-1">Launch readiness</p>
+              {launchBlockingIssues.length > 0 ? (
+                <>
+                  <p className="text-sm">HiveWright will not launch this hive as ready until these are fixed:</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+                    {launchBlockingIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>
+                </>
+              ) : (
+                <ul className="space-y-1 text-sm">
+                  <li>Runtime: selected worker route passed the available readiness check.</li>
+                  <li>Memory: configured state matches your memory choice.</li>
+                  <li>Services: configured services will be installed, tested, and activated during launch.</li>
+                  <li>Safety: conservative approval policies will be seeded before work starts.</li>
+                </ul>
+              )}
             </div>
             <div className="rounded-md bg-zinc-50 p-3 dark:bg-zinc-900">
               <p className="font-medium mb-1">Connected services</p>
@@ -1110,7 +1523,7 @@ export default function NewHiveWizard() {
         ) : (
           <button
             onClick={submit}
-            disabled={submitting}
+            disabled={submitting || launchBlockingIssues.length > 0}
             className="rounded-md bg-green-600 px-6 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-50"
           >
             {submitting ? "Setting up..." : error ? "Retry setup" : "Create Hive"}
@@ -1141,6 +1554,7 @@ function RadioChoice({
         name={name}
         checked={checked}
         onChange={onChange}
+        aria-label={title}
         className="mt-1"
       />
       <span>
@@ -1155,6 +1569,26 @@ function requestSortingLabel(preset: RequestSortingPreset): string {
   if (preset === "direct") return "prefer direct tasks";
   if (preset === "goals") return "prefer goals";
   return "balanced";
+}
+
+function runtimeStatusLabel(status: RuntimeStatus): string {
+  if (status === "ready") return "ready";
+  if (status === "check_required") return "installed, login/probe still required";
+  return "not ready";
+}
+
+function embeddingStatusLabel(status?: LocalEmbeddingSetupStatus): string {
+  if (!status) return "not ready — local memory setup has not been checked";
+  if (status.embeddingTest === "passed") return "ready — local embedding test passed";
+  if (!status.ollamaReachable) return "not ready — Ollama is not reachable";
+  if (!status.modelInstalled) return `not ready — ${status.modelName} is not installed`;
+  return status.error ? `not ready — ${status.error}` : "not ready — embedding test has not passed";
+}
+
+function safetyPresetLabel(preset: SafetyPreset): string {
+  if (preset === "open") return "Green — maximum autonomy: no approval gates for connected actions.";
+  if (preset === "locked_down") return "Red — locked down: inspect and draft only; external actions are blocked.";
+  return "Amber — supervised autonomy: routine prep can proceed; external changes ask first.";
 }
 
 function EaDiscordSetup({
@@ -1179,6 +1613,7 @@ function EaDiscordSetup({
   const channelField = connector.setupFields.find((field) => field.key === "channelId");
   const tokenField = connector.setupFields.find((field) => field.key === "botToken");
   const optionalFields = connector.setupFields.filter((field) => !["applicationId", "channelId", "botToken"].includes(field.key));
+  const inviteUrl = discordBotInviteUrl(fields.applicationId ?? "");
 
   return (
     <div className="space-y-4">
@@ -1194,6 +1629,28 @@ function EaDiscordSetup({
       </div>
 
       <div className="space-y-3">
+        <div className="rounded-md border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950 dark:border-indigo-800 dark:bg-indigo-950/30 dark:text-indigo-100">
+          <p className="font-medium">Add the bot to your Discord server</p>
+          <ol className="mt-2 list-decimal space-y-1 pl-5">
+            <li>Paste the Discord Application ID below.</li>
+            <li>Use the invite button to add the bot to your server.</li>
+            <li>In Discord, give the bot role access to the channel: View Channel, Send Messages, and Use Slash Commands.</li>
+            <li>Paste the allowed channel ID and bot token, then save this EA setup.</li>
+          </ol>
+          {inviteUrl ? (
+            <a
+              href={inviteUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex rounded-md bg-indigo-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+            >
+              Add bot to Discord server
+            </a>
+          ) : (
+            <p className="mt-3 text-xs text-indigo-800 dark:text-indigo-200">The invite button appears after you enter the Discord Application ID.</p>
+          )}
+        </div>
+
         <div>
           <label htmlFor="ea-display-name" className="text-sm font-medium">Name shown in HiveWright</label>
           <input

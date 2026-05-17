@@ -71,8 +71,20 @@ describe("NewHiveWizard", () => {
         });
       }
 
+      if (url.includes("/api/setup-readiness")) {
+        return readySetupReadinessResponse();
+      }
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return readyEmbeddingSetupResponse();
+      }
+
+      if (url.includes("/api/dispatcher/restart")) {
+        return jsonResponse({ data: { restarted: true } });
+      }
+
       if (url.includes("/api/hives")) {
-        return jsonResponse({ data: { id: "hive-123" } });
+        return jsonResponse({ data: { id: "hive-123", installedConnectors: [{ id: "install-123", connectorSlug: "ea-discord", displayName: "HiveWright EA (Discord)", requiresDispatcherRestart: true, hasSafeTest: true }] } });
       }
 
       if (url.includes("/api/connector-installs")) {
@@ -85,6 +97,18 @@ describe("NewHiveWizard", () => {
 
       if (url.includes("/api/goals")) {
         return jsonResponse({ data: { id: "goal-123" } });
+      }
+
+      if (url.includes("/api/setup-readiness")) {
+        return readySetupReadinessResponse();
+      }
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return readyEmbeddingSetupResponse();
+      }
+
+      if (url.includes("/api/dispatcher/restart")) {
+        return jsonResponse({ data: { restarted: true } });
       }
 
       return new Response("not found", { status: 404 });
@@ -124,7 +148,9 @@ describe("NewHiveWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
-    expect(screen.getByText("Recommended")).toBeTruthy();
+    expect(screen.getByText("Auto Routing (recommended)")).toBeTruthy();
+    expect(screen.getByText("Codex CLI")).toBeTruthy();
+    expect(screen.getByLabelText("Auto Routing (recommended) runtime preset")).toHaveProperty("checked", true);
     expect(screen.queryByLabelText("Adapter")).toBeNull();
     expect(screen.queryByLabelText("Model")).toBeNull();
     expect(document.body.textContent).not.toMatch(/Adapter|openai-codex\/gpt-5\.5|anthropic\/claude-sonnet-4-6|google\/gemini-2\.5-flash/);
@@ -167,6 +193,18 @@ describe("NewHiveWizard", () => {
 
       if (url.includes("/api/connectors")) {
         return jsonResponse({ data: [] });
+      }
+
+      if (url.includes("/api/setup-readiness")) {
+        return readySetupReadinessResponse();
+      }
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return readyEmbeddingSetupResponse();
+      }
+
+      if (url.includes("/api/dispatcher/restart")) {
+        return jsonResponse({ data: { restarted: true } });
       }
 
       return new Response("not found", { status: 404 });
@@ -212,6 +250,18 @@ describe("NewHiveWizard", () => {
         return jsonResponse({ data: [] });
       }
 
+      if (url.includes("/api/setup-readiness")) {
+        return readySetupReadinessResponse();
+      }
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return readyEmbeddingSetupResponse();
+      }
+
+      if (url.includes("/api/dispatcher/restart")) {
+        return jsonResponse({ data: { restarted: true } });
+      }
+
       return new Response("not found", { status: 404 });
     }) as unknown as typeof globalThis.fetch;
 
@@ -239,6 +289,14 @@ describe("NewHiveWizard", () => {
     await advanceFromRuntimeToEa();
     expect(screen.getByText("Your EA can answer you in Discord and help you start work without opening HiveWright.")).toBeTruthy();
     expect(screen.getByLabelText(/Discord Application ID/)).toBeTruthy();
+    expect(screen.getByText("Add the bot to your Discord server")).toBeTruthy();
+    expect(screen.getByText("The invite button appears after you enter the Discord Application ID.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Discord Application ID/), { target: { value: "123456789012345678" } });
+    const inviteLink = screen.getByRole("link", { name: "Add bot to Discord server" }) as HTMLAnchorElement;
+    expect(inviteLink.href).toContain("https://discord.com/oauth2/authorize?client_id=123456789012345678");
+    expect(inviteLink.href).toContain("permissions=274877908992");
+    expect(inviteLink.href).toContain("scope=bot+applications.commands");
+    expect(screen.getByText(/View Channel, Send Messages, and Use Slash Commands/)).toBeTruthy();
     expect(screen.getByLabelText(/Allowed Discord channel ID/)).toBeTruthy();
     expect(screen.getByLabelText(/Bot token/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "I'll do this later" })).toBeTruthy();
@@ -339,6 +397,12 @@ describe("NewHiveWizard", () => {
         name: "Test Hive",
         slug: "test-hive",
       },
+      roleOverrides: {
+        "dev-agent": {
+          adapterType: "auto",
+          recommendedModel: "auto",
+        },
+      },
       connectors: [{
         connectorSlug: "ea-discord",
         fields: {
@@ -372,8 +436,17 @@ describe("NewHiveWizard", () => {
     expect(screen.getByText("Should HiveWright look for useful work on its own?")).toBeTruthy();
     expect(screen.getByText("Should HiveWright prepare memory search for this hive?")).toBeTruthy();
     expect(screen.getByLabelText("How should new requests be sorted?")).toBeTruthy();
-    expect(screen.queryByText(/adapter_config|embeddings|classifier|cron|filesystem|model id/i)).toBeNull();
+    expect(screen.getByText("How much freedom should this hive have on day one?")).toBeTruthy();
+    expect(screen.getByText("Green — maximum autonomy")).toBeTruthy();
+    expect(screen.getByText(/No approval gates for connected actions/i)).toBeTruthy();
+    expect(screen.getByText("Amber — supervised autonomy")).toBeTruthy();
+    expect(screen.getByText(/Routine read and prep work can proceed/i)).toBeTruthy();
+    expect(screen.getByLabelText("Amber — supervised autonomy")).toHaveProperty("checked", true);
+    expect(screen.getByText("Red — locked down")).toBeTruthy();
+    expect(screen.getByText(/Inspect and draft only/i)).toBeTruthy();
+    expect(screen.queryByText(/adapter_config|embeddings|classifier|cron|filesystem|model id|action_policies|effect_type|jsonb/i)).toBeNull();
 
+    fireEvent.click(screen.getByText("Green — maximum autonomy"));
     fireEvent.change(screen.getByLabelText("How many agents may work at once?"), { target: { value: "5" } });
     fireEvent.click(screen.getByText("No, wait for me"));
     fireEvent.click(screen.getByText("Not yet"));
@@ -393,12 +466,14 @@ describe("NewHiveWizard", () => {
     await waitFor(() => {
       const setupCall = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input]) => input === "/api/hives/setup");
       expect(setupCall).toBeTruthy();
-      expect(JSON.parse(setupCall?.[1]?.body as string).operatingPreferences).toEqual({
+      const body = JSON.parse(setupCall?.[1]?.body as string);
+      expect(body.operatingPreferences).toEqual({
         maxConcurrentAgents: 5,
         proactiveWork: false,
         memorySearch: false,
         requestSorting: "goals",
       });
+      expect(body.safetyPreset).toBe("open");
     });
   });
 
@@ -460,6 +535,18 @@ describe("NewHiveWizard", () => {
 
       if (url.includes("/api/connectors")) {
         return jsonResponse({ data: [] });
+      }
+
+      if (url.includes("/api/setup-readiness")) {
+        return readySetupReadinessResponse();
+      }
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return readyEmbeddingSetupResponse();
+      }
+
+      if (url.includes("/api/dispatcher/restart")) {
+        return jsonResponse({ data: { restarted: true } });
       }
 
       return new Response("not found", { status: 404 });
@@ -540,6 +627,39 @@ async function advanceFromRuntimeToEa() {
   await waitFor(() => expect(screen.getByRole("heading", { name: "Set working preferences" })).toBeTruthy());
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(screen.getByRole("heading", { name: "Set up your Discord EA" })).toBeTruthy());
+}
+
+function readySetupReadinessResponse(): Response {
+  return jsonResponse({
+    data: {
+      checkedAt: "2026-05-16T00:00:00.000Z",
+      runtimes: {
+        codex: { label: "Codex", installed: true, status: "ready", detail: "Codex is ready.", nextStep: "Ready." },
+        "claude-code": { label: "Claude Code", installed: true, status: "ready", detail: "Claude Code is ready.", nextStep: "Ready." },
+        gemini: { label: "Gemini CLI", installed: true, status: "ready", detail: "Gemini is ready.", nextStep: "Ready." },
+        ollama: { label: "Ollama", installed: true, status: "ready", detail: "Ollama is ready.", nextStep: "Ready." },
+      },
+    },
+  });
+}
+
+function readyEmbeddingSetupResponse(): Response {
+  return jsonResponse({
+    data: {
+      defaultConfig: {
+        provider: "ollama",
+        modelName: "nomic-embed-text-v2-moe:latest",
+        dimension: 768,
+        endpointOverride: "http://localhost:11434",
+      },
+      status: {
+        ollamaReachable: true,
+        modelName: "nomic-embed-text-v2-moe:latest",
+        modelInstalled: true,
+        embeddingTest: "passed",
+      },
+    },
+  });
 }
 
 function jsonResponse(body: unknown): Response {

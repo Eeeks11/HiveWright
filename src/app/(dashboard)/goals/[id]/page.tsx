@@ -6,6 +6,8 @@ import { GoalPlanPanel } from "@/components/goal-plan-panel";
 import { AttachmentsPanel } from "@/components/attachments-panel";
 import { GoalCommentsPanel } from "@/components/goal-comments-panel";
 import { SupervisorActivityPanel } from "@/components/supervisor-activity-panel";
+import { GoalDeliverablesPanel } from "@/components/deliverables/goal-deliverables-panel";
+import { listDeliverables } from "@/deliverables/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -88,6 +90,7 @@ export default async function GoalDetailPage({
   }
 
   const goal = goalRows[0];
+  const deliverables = await listDeliverables(sql, { goalId: id, completedOnly: true });
 
   // Group tasks by sprint
   const sprintMap = new Map<string, TaskRow[]>();
@@ -171,6 +174,9 @@ export default async function GoalDetailPage({
         goalId={goal.id}
         taskTitles={Object.fromEntries(taskRows.map((t) => [t.id, t.title]))}
       />
+
+      {/* Deliverables from completed tasks */}
+      <GoalDeliverablesPanel deliverables={deliverables} />
 
       {/* Tasks grouped by sprint */}
       <div className="space-y-4">

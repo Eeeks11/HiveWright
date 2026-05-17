@@ -5,6 +5,7 @@ import { markCapsuleCompleted, markCapsuleQaFailed } from "./execution-capsules"
 import { findExistingQaReplanTask } from "./recovery-loop-guard";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import { advancePipelineRunFromTask } from "@/pipelines/service";
+import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 
 const QA_DELIVERABLE_INLINE_LIMIT = 4000;
 
@@ -400,8 +401,15 @@ export async function processQaResult(
     `;
     await markCapsuleCompleted(sql, taskId);
 
-    const [task] = await sql<{ result_summary: string | null; brief: string | null }[]>`
-      SELECT result_summary, brief FROM tasks WHERE id = ${taskId}
+    const [task] = await sql<{
+      id: string;
+      hive_id: string;
+      goal_id: string | null;
+      title: string;
+      result_summary: string | null;
+      brief: string | null;
+    }[]>`
+      SELECT id, hive_id, goal_id, title, result_summary, brief FROM tasks WHERE id = ${taskId}
     `;
     const [workProduct] = await sql<{ summary: string | null; content: string | null }[]>`
       SELECT summary, content
@@ -410,9 +418,19 @@ export async function processQaResult(
       ORDER BY created_at DESC
       LIMIT 1
     `;
+    const resultSummary = task?.result_summary ?? workProduct?.summary ?? workProduct?.content ?? task?.brief ?? "QA passed.";
+    if (task) {
+      await ensureOwnerHandoffDecision(sql, {
+        hiveId: task.hive_id,
+        goalId: task.goal_id,
+        taskId: task.id,
+        taskTitle: task.title,
+        deliverable: resultSummary,
+      });
+    }
     await advancePipelineRunFromTask(sql, {
       taskId,
-      resultSummary: task?.result_summary ?? workProduct?.summary ?? workProduct?.content ?? task?.brief ?? "QA passed.",
+      resultSummary,
     });
   } else {
     const [task] = await sql`SELECT brief, retry_count, goal_id FROM tasks WHERE id = ${taskId}`;

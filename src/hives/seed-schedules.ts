@@ -1,36 +1,47 @@
 import type { Sql } from "postgres";
 import { CronExpressionParser } from "cron-parser";
 
-/**
- * Seed a new hive with the built-in default schedules:
- *   1. "Daily world scan" — research-analyst task every morning at 07:00
- *      that surveys industry signals relevant to the hive and surfaces
- *      opportunities as Tier 2 decisions + hive_memory entries.
- *   2. "Hive supervisor heartbeat" — work-integrity watchdog that fires
- *      every 15 minutes. The schedule timer short-circuits this kind to
- *      runSupervisor(hiveId) instead of enqueuing a task (see
- *      src/dispatcher/schedule-timer.ts).
- *   3. "Ideas daily review" — once-daily ideas backlog review keyed on
- *      task_template.kind so schedule-timer can short-circuit to the
- *      runtime review seam instead of enqueuing a placeholder task.
- *   4. "Initiative evaluation" — hourly dormant-goal evaluation keyed on
- *      task_template.kind so schedule-timer can short-circuit to the
- *      initiative engine runtime instead of enqueuing a placeholder task.
- *   5. "Weekly LLM release scan" — weekly provider release/pricing scan keyed
- *      on task_template.kind so schedule-timer can short-circuit to the
- *      owner-gated proposal runtime instead of enqueuing a placeholder task.
- *   6. "Current tech research daily cycle" — daily kickoff for the recurring
- *      Current tech research goal. The runtime creates an idempotent dated
- *      goal-comment wake signal rather than a standalone task.
- *   7. "Task quality feedback sample" — daily random owner-feedback sampling
- *      keyed on task_template.kind so schedule-timer can run the sampler
- *      directly instead of enqueuing a placeholder task.
- *
- * Each schedule is seeded via a `WHERE NOT EXISTS` guard so re-running
- * the seeder is a no-op. This mirrors the backfill done in migration
- * 0031_hive_supervisor.sql for hives that predate the supervisor, so
- * the runtime and migration paths stay in sync.
- */
+const SYSTEM_DEFAULT_ORIGIN_TYPE = "system_default";
+const SYSTEM_DEFAULT_CREATED_BY = "system:seed-default-schedules";
+
+type DefaultScheduleTier = "core" | "proactive";
+
+type ScheduleTemplate = {
+  kind?: string;
+  goalId?: string | null;
+  assignedTo: string;
+  title: string;
+  brief: string;
+  qaRequired?: boolean;
+  priority?: number;
+};
+
+type HiveSeedContext = { id: string; name: string; description: string | null };
+
+type InitialNextRunAt = "now-plus-1-minute" | "cron-next";
+
+type DefaultScheduleDefinition = {
+  key: string;
+  title: string;
+  kind?: string;
+  cronExpression: string;
+  tier: DefaultScheduleTier;
+  createdBy: typeof SYSTEM_DEFAULT_CREATED_BY;
+  initialNextRunAt?: InitialNextRunAt;
+  buildTemplate(hive: HiveSeedContext): ScheduleTemplate;
+};
+
+export interface SeedResult {
+  created: number;
+  skipped: number;
+}
+
+export type SeedDefaultSchedulesOptions = {
+  coreEnabled?: boolean;
+  proactiveEnabled?: boolean;
+  /** @deprecated Use coreEnabled/proactiveEnabled. Kept for older callers. */
+  enabled?: boolean;
+};
 
 const WORLD_SCAN_CRON = "0 7 * * *"; // every day at 07:00 local
 const WORLD_SCAN_TITLE = "Daily world scan";
@@ -70,281 +81,233 @@ items that need action; hive_memory has at least one new entry if
 anything durable was learned.
 `.trim();
 
-const SUPERVISOR_HEARTBEAT_CRON = "*/15 * * * *";
-const SUPERVISOR_HEARTBEAT_KIND = "hive-supervisor-heartbeat";
-const SUPERVISOR_HEARTBEAT_TITLE = "Hive supervisor heartbeat";
+const DEFAULT_SCHEDULE_DEFINITIONS: DefaultScheduleDefinition[] = [
+  {
+    key: "daily-world-scan",
+    title: WORLD_SCAN_TITLE,
+    cronExpression: WORLD_SCAN_CRON,
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: (hive) => ({
+      assignedTo: "research-analyst",
+      title: WORLD_SCAN_TITLE,
+      brief: WORLD_SCAN_BRIEF(hive.name, hive.description),
+      qaRequired: false,
+      priority: 4,
+    }),
+  },
+  {
+    key: "hive-supervisor-heartbeat",
+    title: "Hive supervisor heartbeat",
+    kind: "hive-supervisor-heartbeat",
+    cronExpression: "*/15 * * * *",
+    tier: "core",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    initialNextRunAt: "now-plus-1-minute",
+    buildTemplate: () => ({
+      kind: "hive-supervisor-heartbeat",
+      assignedTo: "hive-supervisor",
+      title: "Hive supervisor heartbeat",
+      brief: "(populated at run time)",
+    }),
+  },
+  {
+    key: "ideas-daily-review",
+    title: "Ideas daily review",
+    kind: "ideas-daily-review",
+    cronExpression: "0 9 * * *",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "ideas-daily-review",
+      assignedTo: "ideas-curator",
+      title: "Ideas daily review",
+      brief: "(populated at run time)",
+    }),
+  },
+  {
+    key: "initiative-evaluation",
+    title: "Initiative evaluation",
+    kind: "initiative-evaluation",
+    cronExpression: "0 * * * *",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "initiative-evaluation",
+      assignedTo: "initiative-engine",
+      title: "Initiative evaluation",
+      brief: "(populated at run time)",
+    }),
+  },
+  {
+    key: "llm-release-scan",
+    title: "Weekly LLM release scan",
+    kind: "llm-release-scan",
+    cronExpression: "0 8 * * 1",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "llm-release-scan",
+      assignedTo: "initiative-engine",
+      title: "Weekly LLM release scan",
+      brief: "(populated at run time)",
+    }),
+  },
+  {
+    key: "current-tech-research-daily",
+    title: "Current tech research daily cycle",
+    kind: "current-tech-research-daily",
+    cronExpression: "30 8 * * *",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "current-tech-research-daily",
+      assignedTo: "goal-supervisor",
+      title: "Current tech research daily cycle",
+      brief: "(populated at run time)",
+    }),
+  },
+  {
+    key: "task-quality-feedback-sample",
+    title: "Task quality feedback sample",
+    kind: "task-quality-feedback-sample",
+    cronExpression: "0 10 * * *",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "task-quality-feedback-sample",
+      assignedTo: "initiative-engine",
+      title: "Task quality feedback sample",
+      brief: "(populated at run time)",
+    }),
+  },
+];
 
-const SUPERVISOR_HEARTBEAT_TEMPLATE = {
-  kind: SUPERVISOR_HEARTBEAT_KIND,
-  assignedTo: "hive-supervisor",
-  title: SUPERVISOR_HEARTBEAT_TITLE,
-  brief: "(populated at run time)",
-};
-
-const IDEAS_DAILY_REVIEW_CRON = "0 9 * * *";
-const IDEAS_DAILY_REVIEW_KIND = "ideas-daily-review";
-const IDEAS_DAILY_REVIEW_TITLE = "Ideas daily review";
-
-const IDEAS_DAILY_REVIEW_TEMPLATE = {
-  kind: IDEAS_DAILY_REVIEW_KIND,
-  assignedTo: "ideas-curator",
-  title: IDEAS_DAILY_REVIEW_TITLE,
-  brief: "(populated at run time)",
-};
-
-const INITIATIVE_EVALUATION_CRON = "0 * * * *";
-const INITIATIVE_EVALUATION_KIND = "initiative-evaluation";
-const INITIATIVE_EVALUATION_TITLE = "Initiative evaluation";
-
-const INITIATIVE_EVALUATION_TEMPLATE = {
-  kind: INITIATIVE_EVALUATION_KIND,
-  assignedTo: "initiative-engine",
-  title: INITIATIVE_EVALUATION_TITLE,
-  brief: "(populated at run time)",
-};
-
-const LLM_RELEASE_SCAN_CRON = "0 8 * * 1";
-const LLM_RELEASE_SCAN_KIND = "llm-release-scan";
-const LLM_RELEASE_SCAN_TITLE = "Weekly LLM release scan";
-
-const LLM_RELEASE_SCAN_TEMPLATE = {
-  kind: LLM_RELEASE_SCAN_KIND,
-  assignedTo: "initiative-engine",
-  title: LLM_RELEASE_SCAN_TITLE,
-  brief: "(populated at run time)",
-};
-
-const CURRENT_TECH_RESEARCH_CRON = "30 8 * * *";
-const CURRENT_TECH_RESEARCH_KIND = "current-tech-research-daily";
-const CURRENT_TECH_RESEARCH_TITLE = "Current tech research daily cycle";
-
-const CURRENT_TECH_RESEARCH_TEMPLATE = {
-  kind: CURRENT_TECH_RESEARCH_KIND,
-  assignedTo: "goal-supervisor",
-  title: CURRENT_TECH_RESEARCH_TITLE,
-  brief: "(populated at run time)",
-};
-
-const TASK_QUALITY_FEEDBACK_CRON = "0 10 * * *";
-const TASK_QUALITY_FEEDBACK_KIND = "task-quality-feedback-sample";
-const TASK_QUALITY_FEEDBACK_TITLE = "Task quality feedback sample";
-
-const TASK_QUALITY_FEEDBACK_TEMPLATE = {
-  kind: TASK_QUALITY_FEEDBACK_KIND,
-  assignedTo: "initiative-engine",
-  title: TASK_QUALITY_FEEDBACK_TITLE,
-  brief: "(populated at run time)",
-};
-
-export interface SeedResult {
-  created: number;
-  skipped: number;
-}
+export const DEFAULT_SCHEDULE_REGISTRY = DEFAULT_SCHEDULE_DEFINITIONS.map((definition) => ({
+  key: definition.key,
+  title: definition.title,
+  kind: definition.kind,
+  cronExpression: definition.cronExpression,
+  tier: definition.tier,
+}));
 
 function legacyJsonFieldPattern(field: "kind" | "title", value: string): string {
   const escaped = value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
   return `"${field}"[[:space:]]*:[[:space:]]*"${escaped}"`;
 }
 
-async function hasScheduleWithTemplateKind(
-  sql: Sql,
-  hiveId: string,
-  kind: string,
-): Promise<boolean> {
+async function hasScheduleWithOrigin(sql: Sql, hiveId: string, originKey: string): Promise<boolean> {
   const rows = await sql`
     SELECT id FROM schedules
     WHERE hive_id = ${hiveId}::uuid
-      AND (
-        task_template ->> 'kind' = ${kind}
-        OR (
-          jsonb_typeof(task_template) = 'string'
-          AND task_template #>> '{}' ~ ${legacyJsonFieldPattern("kind", kind)}
-        )
-      )
+      AND origin_type = ${SYSTEM_DEFAULT_ORIGIN_TYPE}
+      AND origin_key = ${originKey}
     LIMIT 1
   `;
   return rows.length > 0;
 }
 
-async function hasScheduleWithTemplateTitle(
+async function markLegacyDefaultIfPresent(
   sql: Sql,
   hiveId: string,
-  title: string,
+  definition: DefaultScheduleDefinition,
 ): Promise<boolean> {
-  const rows = await sql`
-    SELECT id FROM schedules
-    WHERE hive_id = ${hiveId}::uuid
-      AND (
-        task_template ->> 'title' = ${title}
-        OR (
-          jsonb_typeof(task_template) = 'string'
-          AND task_template #>> '{}' ~ ${legacyJsonFieldPattern("title", title)}
+  const rows = definition.kind
+    ? await sql`
+        UPDATE schedules
+        SET origin_type = ${SYSTEM_DEFAULT_ORIGIN_TYPE},
+            origin_key = ${definition.key}
+        WHERE id = (
+          SELECT id FROM schedules
+          WHERE hive_id = ${hiveId}::uuid
+            AND COALESCE(origin_type, 'custom') = 'custom'
+            AND (
+              task_template ->> 'kind' = ${definition.kind}
+              OR (
+                jsonb_typeof(task_template) = 'string'
+                AND task_template #>> '{}' ~ ${legacyJsonFieldPattern("kind", definition.kind)}
+              )
+            )
+          ORDER BY created_at ASC
+          LIMIT 1
         )
-      )
-    LIMIT 1
-  `;
+        RETURNING id
+      `
+    : await sql`
+        UPDATE schedules
+        SET origin_type = ${SYSTEM_DEFAULT_ORIGIN_TYPE},
+            origin_key = ${definition.key}
+        WHERE id = (
+          SELECT id FROM schedules
+          WHERE hive_id = ${hiveId}::uuid
+            AND COALESCE(origin_type, 'custom') = 'custom'
+            AND (
+              task_template ->> 'title' = ${definition.title}
+              OR (
+                jsonb_typeof(task_template) = 'string'
+                AND task_template #>> '{}' ~ ${legacyJsonFieldPattern("title", definition.title)}
+              )
+            )
+          ORDER BY created_at ASC
+          LIMIT 1
+        )
+        RETURNING id
+      `;
   return rows.length > 0;
+}
+
+function nextRunFor(definition: DefaultScheduleDefinition): Date {
+  if (definition.initialNextRunAt === "now-plus-1-minute") {
+    return new Date(Date.now() + 60_000);
+  }
+  return CronExpressionParser.parse(definition.cronExpression).next().toDate();
+}
+
+function enabledFor(definition: DefaultScheduleDefinition, options: SeedDefaultSchedulesOptions): boolean {
+  if (definition.tier === "core") {
+    return options.coreEnabled ?? options.enabled ?? true;
+  }
+  return options.proactiveEnabled ?? options.enabled ?? true;
 }
 
 export async function seedDefaultSchedules(
   sql: Sql,
-  hive: { id: string; name: string; description: string | null },
-  options: { enabled?: boolean } = {},
+  hive: HiveSeedContext,
+  options: SeedDefaultSchedulesOptions = {},
 ): Promise<SeedResult> {
-  const enabled = options.enabled ?? true;
   const result: SeedResult = { created: 0, skipped: 0 };
 
-  // 1. Daily world scan — keyed on task_template.title so a hive that
-  // already has this schedule is left untouched.
-  if (await hasScheduleWithTemplateTitle(sql, hive.id, WORLD_SCAN_TITLE)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(WORLD_SCAN_CRON).next().toDate();
-    const template = {
-      assignedTo: "research-analyst",
-      title: WORLD_SCAN_TITLE,
-      brief: WORLD_SCAN_BRIEF(hive.name, hive.description),
-      qaRequired: false,
-      priority: 4,
-    };
+  for (const definition of DEFAULT_SCHEDULE_DEFINITIONS) {
+    if (await hasScheduleWithOrigin(sql, hive.id, definition.key)) {
+      result.skipped++;
+      continue;
+    }
+
+    if (await markLegacyDefaultIfPresent(sql, hive.id, definition)) {
+      result.skipped++;
+      continue;
+    }
 
     await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${WORLD_SCAN_CRON},
-        ${sql.json(template)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
+      INSERT INTO schedules (
+        hive_id,
+        cron_expression,
+        task_template,
+        enabled,
+        next_run_at,
+        created_by,
+        origin_type,
+        origin_key
       )
-    `;
-    result.created++;
-  }
-
-  // 2. Hive supervisor heartbeat — keyed on task_template.kind so this
-  // stays aligned with the migration 0031 backfill guard.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, SUPERVISOR_HEARTBEAT_KIND)) {
-    result.skipped++;
-  } else {
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
       VALUES (
         ${hive.id}::uuid,
-        ${SUPERVISOR_HEARTBEAT_CRON},
-        ${sql.json(SUPERVISOR_HEARTBEAT_TEMPLATE)},
-        ${enabled},
-        NOW() + interval '1 minute',
-        'system:seed-default-schedules'
-      )
-    `;
-    result.created++;
-  }
-
-  // 3. Ideas daily review — keyed on task_template.kind so the runtime
-  // dispatch branch and migration backfill guard share the same invariant:
-  // exactly one ideas-daily-review schedule per hive.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, IDEAS_DAILY_REVIEW_KIND)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(IDEAS_DAILY_REVIEW_CRON).next().toDate();
-
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${IDEAS_DAILY_REVIEW_CRON},
-        ${sql.json(IDEAS_DAILY_REVIEW_TEMPLATE)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
-      )
-    `;
-    result.created++;
-  }
-
-  // 4. Initiative evaluation — keyed on task_template.kind so both the
-  // runtime dispatcher branch and the rollout migration share the same
-  // invariant: exactly one initiative-evaluation schedule per hive.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, INITIATIVE_EVALUATION_KIND)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(INITIATIVE_EVALUATION_CRON).next().toDate();
-
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${INITIATIVE_EVALUATION_CRON},
-        ${sql.json(INITIATIVE_EVALUATION_TEMPLATE)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
-      )
-    `;
-    result.created++;
-  }
-
-  // 5. Weekly LLM release scan — keyed on task_template.kind so the
-  // runtime branch and backfill seeding path keep exactly one scan per hive.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, LLM_RELEASE_SCAN_KIND)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(LLM_RELEASE_SCAN_CRON).next().toDate();
-
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${LLM_RELEASE_SCAN_CRON},
-        ${sql.json(LLM_RELEASE_SCAN_TEMPLATE)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
-      )
-    `;
-    result.created++;
-  }
-
-  // 6. Current tech research daily cycle — keyed on task_template.kind so the
-  // runtime branch and backfill seeding path keep exactly one kickoff schedule
-  // per hive.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, CURRENT_TECH_RESEARCH_KIND)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(CURRENT_TECH_RESEARCH_CRON).next().toDate();
-
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${CURRENT_TECH_RESEARCH_CRON},
-        ${sql.json(CURRENT_TECH_RESEARCH_TEMPLATE)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
-      )
-    `;
-    result.created++;
-  }
-
-  // 7. Task quality feedback sample — keyed on task_template.kind so the
-  // runtime branch and backfill seeding path keep exactly one daily sampler
-  // per hive.
-  if (await hasScheduleWithTemplateKind(sql, hive.id, TASK_QUALITY_FEEDBACK_KIND)) {
-    result.skipped++;
-  } else {
-    const nextRunAt = CronExpressionParser.parse(TASK_QUALITY_FEEDBACK_CRON).next().toDate();
-
-    await sql`
-      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
-      VALUES (
-        ${hive.id}::uuid,
-        ${TASK_QUALITY_FEEDBACK_CRON},
-        ${sql.json(TASK_QUALITY_FEEDBACK_TEMPLATE)},
-        ${enabled},
-        ${nextRunAt},
-        'system:seed-default-schedules'
+        ${definition.cronExpression},
+        ${sql.json(definition.buildTemplate(hive))},
+        ${enabledFor(definition, options)},
+        ${nextRunFor(definition)},
+        ${definition.createdBy},
+        ${SYSTEM_DEFAULT_ORIGIN_TYPE},
+        ${definition.key}
       )
     `;
     result.created++;

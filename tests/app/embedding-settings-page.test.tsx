@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import EmbeddingsSettingsPage from "../../src/app/(dashboard)/settings/embeddings/page";
 
@@ -23,6 +23,9 @@ describe("EmbeddingsSettingsPage", () => {
   it("keeps the selected target visible and disables save while re-embedding is active", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return jsonResponse({ data: localSetupResponse({ reachable: false, modelInstalled: false, embeddingTestOk: false }) });
+      }
       if (url.includes("/api/embedding-config") && (!init?.method || init.method === "GET")) {
         return jsonResponse({
           data: {
@@ -79,6 +82,9 @@ describe("EmbeddingsSettingsPage", () => {
   it("renders terminal error state details after a run finishes with failures", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return jsonResponse({ data: localSetupResponse({ reachable: true, modelInstalled: true, embeddingTestOk: true }) });
+      }
       if (url.includes("/api/embedding-config") && (!init?.method || init.method === "GET")) {
         return jsonResponse({
           data: {
@@ -138,7 +144,124 @@ describe("EmbeddingsSettingsPage", () => {
     expect(screen.getByText(/note \/ note-51/i)).toBeTruthy();
     expect((screen.getByRole("button", { name: /Save & re-embed/i }) as HTMLButtonElement).disabled).toBe(false);
   });
+  it("renders local setup doctor and performs safe owner-confirmed actions", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push({ url, init });
+
+      if (url.includes("/api/embedding-config/local-setup/install-ollama")) {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBe(JSON.stringify({ confirmed: true }));
+        return jsonResponse({ data: { result: { installed: true, status: localSetupResponse({ reachable: true, modelInstalled: false, embeddingTestOk: false }).status } } });
+      }
+      if (url.includes("/api/embedding-config/local-setup/pull-model")) {
+        expect(init?.method).toBe("POST");
+        expect(init?.body).toBe(JSON.stringify({ modelName: "nomic-embed-text-v2-moe:latest" }));
+        return jsonResponse({ data: { result: { ok: true }, status: localSetupResponse({ reachable: true, modelInstalled: true, embeddingTestOk: true }).status } });
+      }
+      if (url.includes("/api/embedding-config/local-setup/use")) {
+        expect(init?.method).toBe("POST");
+        return jsonResponse({
+          data: {
+            config: {
+              id: "local-cfg",
+              provider: "ollama",
+              modelName: "nomic-embed-text-v2-moe:latest",
+              dimension: 768,
+              apiCredentialKey: null,
+              endpointOverride: "http://localhost:11434",
+              status: "reembedding",
+              lastReembeddedId: null,
+              reembedTotal: 4,
+              reembedProcessed: 0,
+              reembedStartedAt: "2026-05-16T00:00:00.000Z",
+              reembedFinishedAt: null,
+              lastError: null,
+              updatedAt: "2026-05-16T00:00:00.000Z",
+              updatedBy: "owner@local",
+            },
+            errorSummary: null,
+            recentErrors: [],
+          },
+        });
+      }
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return jsonResponse({ data: localSetupResponse({ reachable: false, modelInstalled: false, embeddingTestOk: false }) });
+      }
+      if (url.includes("/api/embedding-config") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          data: {
+            config: null,
+            catalog: embeddingCatalog(),
+            errorSummary: null,
+            recentErrors: [],
+          },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<EmbeddingsSettingsPage />);
+
+    await screen.findByText(/Local-first memory setup/i);
+    expect(screen.getByText(/Ollama is not reachable/i)).toBeTruthy();
+    expect(screen.getByText(/Detected HiveWright server OS: Linux/i)).toBeTruthy();
+    expect(screen.getByText(/Copy\/paste these Linux steps/i)).toBeTruthy();
+    expect(screen.getAllByText(/nomic-embed-text-v2-moe:latest/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/curl -fsSL https:\/\/ollama.com\/install.sh \| sh/i).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /Install Ollama/i }));
+    expect(await screen.findByText(/Confirm Ollama installation/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Yes, install Ollama/i }));
+
+    await waitFor(() => expect(calls.some((call) => call.url.includes("install-ollama"))).toBe(true));
+    fireEvent.click(await screen.findByRole("button", { name: /Pull default model/i }));
+    await waitFor(() => expect(calls.some((call) => call.url.includes("pull-model"))).toBe(true));
+    fireEvent.click(await screen.findByRole("button", { name: /Use local embeddings/i }));
+    await waitFor(() => expect(calls.some((call) => call.url.includes("/use"))).toBe(true));
+    expect(screen.queryByText(/rm -rf|powershell -enc/i)).toBeNull();
+  });
 });
+
+function localSetupResponse({ reachable, modelInstalled, embeddingTestOk }: { reachable: boolean; modelInstalled: boolean; embeddingTestOk: boolean }) {
+  return {
+    status: {
+      platform: "linux",
+      endpoint: "http://localhost:11434",
+      reachable,
+      modelInstalled,
+      embeddingTestOk,
+      defaultModel: "nomic-embed-text-v2-moe:latest",
+      dimension: 768,
+      error: reachable ? null : "Ollama is not reachable",
+    },
+    plan: {
+      platform: "linux",
+      recommended: {
+        title: "Recommended: let HiveWright install Ollama",
+        description: "HiveWright can run the allowlisted Ollama installer after you confirm.",
+        warnings: ["Installer actions require owner confirmation."],
+        actions: ["curl -fsSL https://ollama.com/install.sh | sh"],
+      },
+      manual: {
+        title: "Manual Linux setup",
+        steps: [
+          "Install Ollama from https://ollama.com/download",
+          "curl -fsSL https://ollama.com/install.sh | sh",
+          "ollama pull nomic-embed-text-v2-moe:latest",
+        ],
+      },
+    },
+    defaultConfig: {
+      provider: "ollama",
+      modelName: "nomic-embed-text-v2-moe:latest",
+      dimension: 768,
+      endpointOverride: "http://localhost:11434",
+      apiCredentialKey: null,
+    },
+  };
+}
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {

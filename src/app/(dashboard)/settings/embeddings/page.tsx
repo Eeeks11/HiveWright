@@ -72,6 +72,58 @@ interface Credential {
   name: string;
 }
 
+interface LocalSetupStatus {
+  platform: string;
+  endpoint: string;
+  ollamaReachable?: boolean;
+  reachable?: boolean;
+  installedModels?: string[];
+  modelName?: string;
+  modelInstalled: boolean;
+  embeddingTest?: "not_run" | "passed" | "failed";
+  embeddingTestOk?: boolean;
+  defaultModel?: string;
+  dimension?: number;
+  error: string | null;
+}
+
+interface LocalSetupStep {
+  label?: string;
+  command?: string;
+  url?: string;
+  requiresConfirmation?: boolean;
+}
+
+interface LocalSetupResponse {
+  status: LocalSetupStatus;
+  plan: {
+    platform: string;
+    recommendedMode?: "auto" | "manual";
+    autoAvailable?: boolean;
+    autoRequiresAdmin?: boolean;
+    autoSteps?: Array<LocalSetupStep & { requiresConfirmation?: boolean }>;
+    manualSteps?: LocalSetupStep[];
+    warnings?: string[];
+    recommended?: {
+      title: string;
+      description: string;
+      warnings: string[];
+      actions: string[];
+    };
+    manual?: {
+      title: string;
+      steps: string[];
+    };
+  };
+  defaultConfig: {
+    provider: EmbeddingProvider;
+    modelName: string;
+    dimension: number;
+    endpointOverride: string;
+    apiCredentialKey: null;
+  };
+}
+
 const LOCAL_PROVIDER: EmbeddingProvider = "ollama";
 
 export default function EmbeddingsSettingsPage() {
@@ -94,6 +146,10 @@ export default function EmbeddingsSettingsPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [localSetup, setLocalSetup] = useState<LocalSetupResponse | null>(null);
+  const [localSetupLoading, setLocalSetupLoading] = useState(true);
+  const [localAction, setLocalAction] = useState<string | null>(null);
+  const [showInstallConfirm, setShowInstallConfirm] = useState(false);
 
   const selectedProvider = useMemo(
     () => catalog.find((entry) => entry.provider === provider) ?? null,
@@ -112,6 +168,16 @@ export default function EmbeddingsSettingsPage() {
     !selectedModel ||
     reembedRunning ||
     (requiresCredential && (!hasCredentials || !apiCredentialKey));
+  const localReachable = Boolean(localSetup?.status.ollamaReachable ?? localSetup?.status.reachable ?? false);
+  const localEmbeddingTestPassed = Boolean(
+    localSetup?.status.embeddingTest === "passed" || localSetup?.status.embeddingTestOk === true,
+  );
+  const localDefaultModel = localSetup?.defaultConfig.modelName ?? localSetup?.status.modelName ?? localSetup?.status.defaultModel ?? "nomic-embed-text-v2-moe:latest";
+  const localDimension = localSetup?.defaultConfig.dimension ?? localSetup?.status.dimension ?? 768;
+  const localReady = Boolean(localReachable && localSetup?.status.modelInstalled && localEmbeddingTestPassed);
+  const localBusy = Boolean(localAction);
+  const localDetectedPlatform = localSetup?.plan.platform ?? localSetup?.status.platform ?? "unknown";
+  const localDetectedOsLabel = formatPlatformLabel(localDetectedPlatform);
 
   function toObservedProgress(
     config: EmbeddingConfigResponse["config"],
@@ -271,6 +337,119 @@ export default function EmbeddingsSettingsPage() {
     setModelName(selectedProvider.models[0]?.modelName ?? "");
   }, [modelName, selectedProvider]);
 
+  async function refreshLocalSetup(background = false) {
+    if (!background) setLocalSetupLoading(true);
+    try {
+      const res = await fetch("/api/embedding-config/local-setup");
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || `Failed to load local embedding setup (${res.status})`);
+      }
+      setLocalSetup((body.data ?? null) as LocalSetupResponse | null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load local embedding setup");
+    } finally {
+      if (!background) setLocalSetupLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setLocalSetupLoading(true);
+    void (async () => {
+      try {
+        const res = await fetch("/api/embedding-config/local-setup");
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body.error || `Failed to load local embedding setup (${res.status})`);
+        }
+        if (!cancelled) setLocalSetup((body.data ?? null) as LocalSetupResponse | null);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load local embedding setup");
+      } finally {
+        if (!cancelled) setLocalSetupLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function runLocalSetupAction(action: "install" | "pull" | "use") {
+    if (!localSetup) return;
+    setLocalAction(action);
+    setError(null);
+    setSuccess(null);
+    try {
+      const endpoint =
+        action === "install"
+          ? "/api/embedding-config/local-setup/install-ollama"
+          : action === "pull"
+            ? "/api/embedding-config/local-setup/pull-model"
+            : "/api/embedding-config/local-setup/use";
+      const body =
+        action === "install"
+          ? { confirmed: true }
+          : action === "pull"
+            ? { modelName: localSetup.defaultConfig.modelName }
+            : undefined;
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload.error || `Local setup action failed (${res.status})`);
+      }
+
+      if (action === "use") {
+        const nextConfig = payload.data?.config;
+        setProvider(nextConfig?.provider ?? localSetup.defaultConfig.provider);
+        setModelName(nextConfig?.modelName ?? localSetup.defaultConfig.modelName);
+        setEndpointOverride(nextConfig?.endpointOverride ?? localSetup.defaultConfig.endpointOverride);
+        setApiCredentialKey("");
+        setStatus(nextConfig?.status ?? "ready");
+        const nextErrorSummary = payload.data?.errorSummary ?? null;
+        const nextProgress = toObservedProgress(nextConfig ?? null, nextErrorSummary);
+        setPreviousProgress(null);
+        setProgress(nextProgress);
+        setErrorSummary(nextErrorSummary);
+        setRecentErrors(payload.data?.recentErrors ?? []);
+        setUpdatedAt(nextConfig?.updatedAt ?? null);
+        setUpdatedBy(nextConfig?.updatedBy ?? null);
+        setSuccess("Local embedding config saved. Re-embedding has started.");
+      } else {
+        const nextStatus = payload.data?.status ?? payload.data?.result?.status ?? null;
+        if (nextStatus) {
+          setLocalSetup({ ...localSetup, status: nextStatus });
+        } else {
+          await refreshLocalSetup(true);
+        }
+        setSuccess(action === "install" ? "Ollama install check completed." : "Default local embedding model pull requested.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local setup action failed");
+    } finally {
+      setLocalAction(null);
+      setShowInstallConfirm(false);
+    }
+  }
+
+  const localAutoSteps = localSetup
+    ? localSetup.plan.autoSteps?.map((step) => step.command ?? step.url ?? step.label ?? "").filter(Boolean)
+      ?? localSetup.plan.recommended?.actions
+      ?? []
+    : [];
+  const localManualSteps = localSetup
+    ? localSetup.plan.manualSteps?.map((step) => step.command ?? step.url ?? step.label ?? "").filter(Boolean)
+      ?? localSetup.plan.manual?.steps
+      ?? []
+    : [];
+  const localWarnings = localSetup
+    ? localSetup.plan.warnings ?? localSetup.plan.recommended?.warnings ?? []
+    : [];
+
   async function handleSave() {
     if (!selectedModel) return;
 
@@ -326,6 +505,144 @@ export default function EmbeddingsSettingsPage() {
           Dimension is fixed by the selected model so the saved payload stays valid.
         </p>
       </div>
+
+      <section className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-5 text-sm text-emerald-950 dark:border-emerald-400/20 dark:bg-emerald-400/[0.06] dark:text-emerald-100">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h2 className="text-lg font-medium">Local-first memory setup</h2>
+            <p className="max-w-3xl text-sm">
+              Set up HiveWright&apos;s recommended local memory engine without needing to know endpoint URLs.
+              Advanced remote endpoints stay available below.
+            </p>
+          </div>
+          {localReady ? (
+            <span className="rounded-full border border-emerald-500/40 px-3 py-1 text-xs font-medium uppercase tracking-wide">
+              Local memory engine active
+            </span>
+          ) : null}
+        </div>
+
+        {localSetupLoading ? (
+          <p className="mt-4">Checking local setup…</p>
+        ) : localSetup ? (
+          <div className="mt-4 space-y-4">
+            <div className="rounded-md border border-emerald-300/60 bg-white/70 px-4 py-3 dark:border-emerald-400/20 dark:bg-zinc-950/60">
+              <p className="font-medium">
+                {localReachable
+                  ? localSetup.status.modelInstalled
+                    ? localEmbeddingTestPassed
+                      ? "Local memory engine ready"
+                      : "Local memory engine found, but embedding test failed"
+                    : "Local memory engine running; model missing"
+                  : "Local memory engine not running"}
+              </p>
+              <p className="mt-1 text-xs opacity-80">
+                Local Ollama status: {localReachable ? "reachable" : "unreachable"} at {localSetup.status.endpoint}. Model: {localDefaultModel} ({localDimension} dimensions).
+              </p>
+              <p className="mt-1 text-xs opacity-80">
+                Detected HiveWright server OS: {localDetectedOsLabel}. The instructions below are generated for this OS because Ollama must run on the machine serving HiveWright, not necessarily the browser device.
+              </p>
+              {localSetup.status.error ? <p className="mt-2 text-xs text-red-700 dark:text-red-300">{localSetup.status.error}</p> : null}
+            </div>
+
+            {!localReachable ? (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-md border border-emerald-300/60 bg-white/70 p-4 dark:border-emerald-400/20 dark:bg-zinc-950/60">
+                  <h3 className="font-medium">Recommended: Let HiveWright install and configure it</h3>
+                  <p className="mt-1 text-xs opacity-80">
+                    HiveWright will only run/download fixed allowlisted Ollama installer steps after explicit confirmation. OS/admin prompts may appear.
+                  </p>
+                  {localWarnings.length > 0 ? (
+                    <ul className="mt-3 list-disc space-y-1 pl-5 text-xs">
+                      {localWarnings.map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  ) : null}
+                  {localAutoSteps.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      {localAutoSteps.map((step) => <code key={step} className="block rounded bg-zinc-950 px-3 py-2 text-xs text-zinc-50">{step}</code>)}
+                    </div>
+                  ) : null}
+                  {showInstallConfirm ? (
+                    <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/[0.08] dark:text-amber-100">
+                      <p className="font-medium">Confirm Ollama installation</p>
+                      <p className="mt-1 text-xs">This runs only the allowlisted installer/download step shown above. No browser-supplied command will be accepted.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void runLocalSetupAction("install")}
+                          disabled={localBusy}
+                          className="rounded-md bg-zinc-900 px-3 py-2 text-xs text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                        >
+                          {localAction === "install" ? "Installing…" : "Yes, install Ollama"}
+                        </button>
+                        <button type="button" onClick={() => setShowInstallConfirm(false)} className="rounded-md border px-3 py-2 text-xs">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setShowInstallConfirm(true)}
+                      disabled={localBusy}
+                      className="mt-4 rounded-md bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+                    >
+                      Install Ollama
+                    </button>
+                  )}
+                </div>
+
+                <div className="rounded-md border border-emerald-300/60 bg-white/70 p-4 dark:border-emerald-400/20 dark:bg-zinc-950/60">
+                  <h3 className="font-medium">Manual: I&apos;ll install it myself</h3>
+                  <p className="mt-1 text-xs opacity-80">Copy/paste these {localDetectedOsLabel} steps, then re-check local setup.</p>
+                  <div className="mt-3 space-y-2">
+                    {localManualSteps.map((step) => <code key={step} className="block rounded bg-zinc-950 px-3 py-2 text-xs text-zinc-50">{step}</code>)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void refreshLocalSetup()}
+                    disabled={localBusy || localSetupLoading}
+                    className="mt-4 rounded-md border px-4 py-2 text-sm disabled:opacity-50"
+                  >
+                    Re-check local setup
+                  </button>
+                </div>
+              </div>
+            ) : !localSetup.status.modelInstalled ? (
+              <button
+                type="button"
+                onClick={() => void runLocalSetupAction("pull")}
+                disabled={localBusy}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                {localAction === "pull" ? "Pulling model…" : "Pull default model"}
+              </button>
+            ) : !localEmbeddingTestPassed ? (
+              <button
+                type="button"
+                onClick={() => void refreshLocalSetup()}
+                disabled={localBusy || localSetupLoading}
+                className="rounded-md border px-4 py-2 text-sm disabled:opacity-50"
+              >
+                Retry test
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void runLocalSetupAction("use")}
+                disabled={localBusy || reembedRunning}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
+              >
+                {localAction === "use" ? "Saving local config…" : "Use local embeddings"}
+              </button>
+            )}
+          </div>
+        ) : (
+          <button type="button" onClick={() => void refreshLocalSetup()} className="mt-4 rounded-md border px-4 py-2 text-sm">
+            Set up local memory search
+          </button>
+        )}
+      </section>
 
       <div className="rounded-lg border p-5 space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -542,4 +859,17 @@ export default function EmbeddingsSettingsPage() {
       </div>
     </div>
   );
+}
+
+function formatPlatformLabel(platform: string): string {
+  switch (platform) {
+    case "linux":
+      return "Linux";
+    case "darwin":
+      return "macOS";
+    case "win32":
+      return "Windows";
+    default:
+      return platform || "unknown";
+  }
 }

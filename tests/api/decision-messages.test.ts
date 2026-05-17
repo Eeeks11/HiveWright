@@ -222,6 +222,35 @@ describe("Decision Messages API", () => {
     expect(goalComments).toHaveLength(0);
   });
 
+  it("mirrors owner decision messages into achieved goal comments without pretending a supervisor exists", async () => {
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${hiveId}, 'Achieved decision comment goal', 'achieved', NULL)
+      RETURNING id
+    `;
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status)
+      VALUES (${hiveId}, ${goal.id}, 'Achieved goal decision', 'Need owner input after closeout', 'normal', 'pending')
+      RETURNING id
+    `;
+    const [message] = await sql<{ id: string }[]>`
+      INSERT INTO decision_messages (decision_id, sender, content)
+      VALUES (${decision.id}, 'owner', 'This should still be visible on the goal')
+      RETURNING id
+    `;
+
+    const mirrored = await mirrorOwnerDecisionCommentToGoalComment(sql, message.id);
+    expect(mirrored).toMatchObject({ status: "mirrored", goalId: goal.id });
+
+    const goalComments = await sql<{ body: string; created_by: string }[]>`
+      SELECT body, created_by FROM goal_comments WHERE goal_id = ${goal.id}
+    `;
+    expect(goalComments).toHaveLength(1);
+    expect(goalComments[0].created_by).toBe("owner");
+    expect(goalComments[0].body).toContain("Achieved goal decision");
+    expect(goalComments[0].body).toContain("This should still be visible on the goal");
+  });
+
   it("fallback polling finds missed owner comments attached to parked supervised goals", async () => {
     const [goal] = await sql<{ id: string }[]>`
       INSERT INTO goals (hive_id, title, status, session_id)

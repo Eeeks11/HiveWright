@@ -2,6 +2,7 @@ import { HIVES_WORKSPACE_ROOT_ENV, resolveHiveWorkspaceRoot } from "@/hives/work
 import { defaultEnvFilePath, upsertEnvFileValue } from "@/lib/env-file";
 import { canAccessHive } from "@/auth/users";
 import { buildSetupHealthRows, type SetupHealthSnapshot } from "@/setup-health/status";
+import { getHiveOperatorVerdict } from "@/operations/operator-verdict";
 import { sql } from "../_lib/db";
 import { requireApiAuth, requireApiUser, requireSystemOwner } from "../_lib/auth";
 import { jsonError, jsonOk } from "../_lib/responses";
@@ -20,15 +21,20 @@ export async function GET(request: Request) {
     }
 
     try {
-      const snapshot = await loadSetupHealthSnapshot(hiveId);
+      const [snapshot, operatorVerdict] = await Promise.all([
+        loadSetupHealthSnapshot(hiveId),
+        getHiveOperatorVerdict(sql, { hiveId }),
+      ]);
       return jsonOk({
         hiveId,
         rows: buildSetupHealthRows(snapshot),
+        operatorVerdict,
         sources: {
           models: "model_catalog, hive_models, model_health, and role_templates",
           ea: "connector_installs for the EA connector",
           dispatcher: "dispatcher settings plus current task counts",
           connectors: "connector_installs and connector test fields",
+          safety: "action_policies safety presets and approval rules",
           schedules: "schedules",
           memory: "memory-search setting plus embedding_config",
         },
@@ -82,6 +88,7 @@ async function loadSetupHealthSnapshot(hiveId: string): Promise<SetupHealthSnaps
     [dispatcherConfig],
     [tasks],
     [connectors],
+    [actionPolicies],
     [schedules],
     [memoryConfig],
     [embeddingConfig],
@@ -133,6 +140,23 @@ async function loadSetupHealthSnapshot(hiveId: string): Promise<SetupHealthSnaps
     sql`
       SELECT
         COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE enabled = true)::int AS enabled,
+        COUNT(*) FILTER (
+          WHERE enabled = true
+            AND effect_type = 'destructive'
+            AND effect = 'block'
+        )::int AS blocks_destructive,
+        COUNT(*) FILTER (
+          WHERE enabled = true
+            AND effect_type IN ('notify', 'write', 'financial', 'system')
+            AND effect IN ('require_approval', 'block')
+        )::int AS approval_external
+      FROM action_policies
+      WHERE hive_id = ${hiveId}::uuid
+    `,
+    sql`
+      SELECT
+        COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE enabled = true)::int AS enabled
       FROM schedules
       WHERE hive_id = ${hiveId}::uuid
@@ -180,6 +204,12 @@ async function loadSetupHealthSnapshot(hiveId: string): Promise<SetupHealthSnaps
       active: Number(connectors?.active ?? 0),
       tested: Number(connectors?.tested ?? 0),
       withErrors: Number(connectors?.errors ?? 0),
+    },
+    actionPolicies: {
+      total: Number(actionPolicies?.total ?? 0),
+      enabled: Number(actionPolicies?.enabled ?? 0),
+      blocksDestructive: Number(actionPolicies?.blocks_destructive ?? 0) > 0,
+      requiresApprovalForExternalWrites: Number(actionPolicies?.approval_external ?? 0) >= 3,
     },
     schedules: {
       total: Number(schedules?.total ?? 0),

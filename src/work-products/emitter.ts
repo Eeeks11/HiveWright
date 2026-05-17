@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import * as fs from "node:fs";
 import type { Sql } from "postgres";
 import { assertPathInTaskImageDirectory } from "./image-storage";
 import { classifySensitivity } from "./sensitivity";
@@ -10,20 +12,25 @@ export interface WorkProductInput {
   department: string | null;
   content: string;
   summary: string | null;
-  artifactKind?: "design-spec" | "image" | "text" | null;
+  title?: string | null;
+  filename?: string | null;
+  artifactKind?: string | null;
   mimeType?: string | null;
+  renderMode?: string | null;
+  reviewStatus?: "ready" | "needs_review" | "approved" | "rejected" | "archived" | null;
+  publicUrl?: string | null;
+  sourceUrl?: string | null;
   metadata?: Record<string, unknown> | null;
   usageDetails?: UsageDetails | null;
 }
 
 export interface BinaryWorkProductInput extends WorkProductInput {
-  artifactKind: "image";
   filePath: string;
-  mimeType: "image/png" | "image/jpeg";
-  width: number;
-  height: number;
-  modelName: string;
-  modelSnapshot: string;
+  mimeType: string;
+  width?: number | null;
+  height?: number | null;
+  modelName?: string | null;
+  modelSnapshot?: string | null;
   promptTokens?: number | null;
   outputTokens?: number | null;
   costCents?: number | null;
@@ -38,6 +45,24 @@ export function shouldEmitWorkProduct(taskTitle: string): boolean {
   return true;
 }
 
+function isPathInside(child: string, parent: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function assertPathInHiveWorkspace(filePath: string, hiveWorkspacePath: string): string {
+  const workspace = path.resolve(hiveWorkspacePath);
+  const resolved = path.resolve(filePath);
+  if (!isPathInside(resolved, workspace)) {
+    throw new Error("Work product file path escaped hive workspace");
+  }
+  const stat = fs.statSync(resolved);
+  if (!stat.isFile()) {
+    throw new Error("Work product file path is not a file");
+  }
+  return resolved;
+}
+
 export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
   const sensitivity = classifySensitivity(input.content);
   const metadata = input.metadata ? sql.json(input.metadata as Parameters<typeof sql.json>[0]) : null;
@@ -46,7 +71,8 @@ export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
   const [wp] = await sql`
     INSERT INTO work_products (
       task_id, hive_id, role_slug, department, content, summary,
-      artifact_kind, mime_type, metadata, sensitivity, usage_details
+      title, filename, artifact_kind, mime_type, render_mode, review_status,
+      public_url, source_url, metadata, sensitivity, usage_details
     )
     VALUES (
       ${input.taskId},
@@ -55,8 +81,14 @@ export async function emitWorkProduct(sql: Sql, input: WorkProductInput) {
       ${input.department},
       ${input.content},
       ${input.summary},
+      ${input.title ?? null},
+      ${input.filename ?? null},
       ${input.artifactKind ?? null},
       ${input.mimeType ?? null},
+      ${input.renderMode ?? null},
+      ${input.reviewStatus ?? "ready"},
+      ${input.publicUrl ?? null},
+      ${input.sourceUrl ?? null},
       ${metadata},
       ${sensitivity},
       ${usageDetails}
@@ -71,9 +103,6 @@ export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductIn
   const sensitivity = classifySensitivity(input.content);
   const metadata = input.metadata ? sql.json(input.metadata as Parameters<typeof sql.json>[0]) : null;
   const usageDetails = input.usageDetails ? sql.json(input.usageDetails as unknown as Parameters<typeof sql.json>[0]) : null;
-  if (input.mimeType !== "image/png" && input.mimeType !== "image/jpeg") {
-    throw new Error("Binary image work products must be PNG or JPEG artifacts");
-  }
 
   const [scope] = await sql`
     SELECT h.workspace_path
@@ -85,18 +114,21 @@ export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductIn
   `;
   const hiveWorkspacePath = scope?.workspace_path as string | null | undefined;
   if (!hiveWorkspacePath) {
-    throw new Error("Cannot emit binary image work product without a hive workspace path");
+    throw new Error("Cannot emit file-backed work product without a hive workspace path");
   }
-  const filePath = assertPathInTaskImageDirectory({
-    filePath: input.filePath,
-    hiveWorkspacePath,
-    taskId: input.taskId,
-  });
+  const filePath = input.artifactKind === "image"
+    ? assertPathInTaskImageDirectory({
+        filePath: input.filePath,
+        hiveWorkspacePath,
+        taskId: input.taskId,
+      })
+    : assertPathInHiveWorkspace(input.filePath, hiveWorkspacePath);
 
   const [wp] = await sql`
     INSERT INTO work_products (
       task_id, hive_id, role_slug, department, content, summary,
-      artifact_kind, file_path, mime_type, width, height, model_name, model_snapshot,
+      title, filename, artifact_kind, file_path, mime_type, render_mode, review_status,
+      public_url, source_url, width, height, model_name, model_snapshot,
       prompt_tokens, output_tokens, cost_cents, metadata, sensitivity, usage_details
     )
     VALUES (
@@ -106,13 +138,19 @@ export async function emitBinaryWorkProduct(sql: Sql, input: BinaryWorkProductIn
       ${input.department},
       ${input.content},
       ${input.summary},
-      ${input.artifactKind},
+      ${input.title ?? null},
+      ${input.filename ?? path.basename(filePath)},
+      ${input.artifactKind ?? "file"},
       ${filePath},
       ${input.mimeType},
-      ${input.width},
-      ${input.height},
-      ${input.modelName},
-      ${input.modelSnapshot},
+      ${input.renderMode ?? null},
+      ${input.reviewStatus ?? "ready"},
+      ${input.publicUrl ?? null},
+      ${input.sourceUrl ?? null},
+      ${input.width ?? null},
+      ${input.height ?? null},
+      ${input.modelName ?? null},
+      ${input.modelSnapshot ?? null},
       ${input.promptTokens ?? null},
       ${input.outputTokens ?? null},
       ${input.costCents ?? null},

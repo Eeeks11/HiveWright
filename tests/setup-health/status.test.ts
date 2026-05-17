@@ -6,6 +6,12 @@ const baseSnapshot: SetupHealthSnapshot = {
   ea: { installed: true, disabled: false, lastTested: true, hasError: false },
   dispatcher: { configured: true, maxConcurrentAgents: 3, openTasks: 0 },
   connectors: { installed: 1, active: 1, tested: 1, withErrors: 0 },
+  actionPolicies: {
+    total: 4,
+    enabled: 4,
+    blocksDestructive: true,
+    requiresApprovalForExternalWrites: true,
+  },
   schedules: { total: 2, enabled: 2 },
   memory: {
     requested: true,
@@ -25,6 +31,7 @@ describe("buildSetupHealthRows", () => {
       ["ea", "ready"],
       ["dispatcher", "ready"],
       ["connectors", "ready"],
+      ["safety", "ready"],
       ["schedules", "ready"],
       ["memory", "ready"],
     ]);
@@ -34,6 +41,7 @@ describe("buildSetupHealthRows", () => {
       "/setup/connectors",
       "/tasks",
       "/setup/connectors",
+      "/setup/action-policies",
       "/schedules",
       "/memory/health",
     ]);
@@ -73,5 +81,44 @@ describe("buildSetupHealthRows", () => {
 
     expect(rows.find((row) => row.key === "connectors")?.statusLabel).toBe("Pending/not checked");
     expect(rows.find((row) => row.key === "memory")?.statusLabel).toBe("Pending/not checked");
+  });
+
+  it("flags missing safety policies before real work starts", () => {
+    const rows = buildSetupHealthRows({
+      ...baseSnapshot,
+      actionPolicies: {
+        total: 0,
+        enabled: 0,
+        blocksDestructive: false,
+        requiresApprovalForExternalWrites: false,
+      },
+    });
+
+    const safety = rows.find((row) => row.key === "safety");
+    expect(safety).toMatchObject({
+      title: "Safety rules",
+      status: "needs_attention",
+      statusLabel: "Needs attention",
+      href: "/setup/action-policies",
+      hrefLabel: "Review safety rules",
+    });
+    expect(safety?.summary).toMatch(/approval|block|safe/i);
+  });
+
+  it("requires destructive actions to be blocked and external writes to require approval", () => {
+    const rows = buildSetupHealthRows({
+      ...baseSnapshot,
+      actionPolicies: {
+        total: 3,
+        enabled: 3,
+        blocksDestructive: false,
+        requiresApprovalForExternalWrites: true,
+      },
+    });
+
+    expect(rows.find((row) => row.key === "safety")).toMatchObject({
+      status: "needs_attention",
+      href: "/setup/action-policies",
+    });
   });
 });

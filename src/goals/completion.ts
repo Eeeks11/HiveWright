@@ -12,6 +12,10 @@ import {
   type LearningGateResult,
 } from "./outcome-records";
 import { createLearningGateFollowup } from "./learning-gate-followup";
+import {
+  assertRequiredFinalArtifactsAvailable,
+  normalizeFinalArtifactsFromEvidenceBundle,
+} from "./final-artifacts";
 
 export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
 
@@ -178,6 +182,20 @@ export async function completeGoal(
       throw new Error(`Goal cannot be completed: current status is '${goal.status}'`);
     }
 
+    const [pendingDecisionCount] = await tx<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM decisions
+      WHERE goal_id = ${goalId}
+        AND status = 'pending'
+        AND kind = 'decision'
+        AND is_qa_fixture = false
+    `;
+    if ((pendingDecisionCount?.count ?? 0) > 0) {
+      throw new Error(
+        `Goal completion blocked: ${pendingDecisionCount.count} pending owner decision(s) must be resolved before this goal can be completed`,
+      );
+    }
+
     // 1. Mark final/next-action state and clear session. "execution_ready" and
     // "blocked_on_owner_channel" are intentional non-achieved end states: the
     // agents produced the package, but a human/channel action still gates the
@@ -250,6 +268,21 @@ export async function completeGoal(
         completionStatus: requestedStatus,
       },
     });
+
+    await normalizeFinalArtifactsFromEvidenceBundle(tx as unknown as Sql, {
+      goalId,
+      hiveId: goal.hive_id,
+      goalTitle: goal.title,
+      evidence,
+    });
+    if (requestedStatus === "achieved") {
+      await assertRequiredFinalArtifactsAvailable(tx as unknown as Sql, {
+        goalId,
+        hiveId: goal.hive_id,
+        goalTitle: goal.title,
+        evidence,
+      });
+    }
 
     // 3. Write audit row to goal_completions
     await tx`

@@ -397,12 +397,7 @@ export default function DecisionsPage() {
               </p>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {structuredOptions.map((option) => {
-                  const canAct =
-                    statusFilter === "pending" &&
-                    (DIRECT_TASK_QA_CAP_ACTIONS.has(option.response) ||
-                      option.response === "approved" ||
-                      option.response === "rejected" ||
-                      option.response === "discussed");
+                  const canAct = statusFilter === "pending";
                   if (canAct) {
                     const isRejecting =
                       option.response === "rejected" || option.response === "abandon";
