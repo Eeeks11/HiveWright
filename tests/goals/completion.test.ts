@@ -280,6 +280,76 @@ describe("completeGoal", () => {
     expect(htmlWp.content).toContain("main { color: honeydew; }");
   });
 
+  it("normalizes verified image artifacts from task workspaces into owner-openable final outputs", async () => {
+    const workspace = path.join(tmp, "hive-workspace", "projects");
+    const runtimeRoot = path.join(tmp, "runtime-root");
+    await sql`UPDATE hives SET workspace_path = ${workspace} WHERE id = ${bizId}`;
+    fs.mkdirSync(workspace, { recursive: true });
+    process.env.HIVEWRIGHT_RUNTIME_ROOT = runtimeRoot;
+
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'goalcomp-role', 'system', 'Create YouTube thumbnail', 'make a real image', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+    const taskArtifactDir = path.join(runtimeRoot, "task-workspaces", taskId, "artifacts", "youtube-thumbnail");
+    fs.mkdirSync(taskArtifactDir, { recursive: true });
+    const thumbnailPath = path.join(taskArtifactDir, "thumbnail.png");
+    const pngBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    ]);
+    fs.writeFileSync(thumbnailPath, pngBytes);
+    const notesId = (await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, department, content, summary, title, filename, artifact_kind, mime_type, render_mode, review_status)
+      VALUES (${taskId}, ${bizId}, 'qa', null, '# Thumbnail QA notes', 'QA review', 'YouTube thumbnail QA notes', 'thumbnail-notes.md', 'document', 'text/markdown', 'markdown', 'ready')
+      RETURNING id
+    `)[0].id;
+
+    await completeGoal(sql, goalId, "goalcomp: YouTube thumbnail package shipped", {
+      evidenceWorkProductIds: [notesId],
+      evidenceTaskIds: [taskId],
+      evidenceBundle: [
+        {
+          type: "artifact",
+          description: "Final HiveWright YouTube thumbnail PNG verified as publish-ready.",
+          reference: thumbnailPath,
+          verified: true,
+        },
+      ],
+    });
+
+    const [completion] = await sql<{ evidence: { workProductIds?: string[] } }[]>`
+      SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    expect(completion.evidence.workProductIds).toHaveLength(2);
+    expect(completion.evidence.workProductIds?.[1]).toBe(notesId);
+    const imageWorkProductId = completion.evidence.workProductIds?.[0];
+    expect(imageWorkProductId).toBeDefined();
+
+    const [imageWp] = await sql<{
+      title: string;
+      content: string;
+      file_path: string | null;
+      mime_type: string;
+      render_mode: string;
+      artifact_kind: string;
+      filename: string;
+    }[]>`
+      SELECT title, content, file_path, mime_type, render_mode, artifact_kind, filename
+      FROM work_products
+      WHERE id = ${imageWorkProductId as string}
+    `;
+    expect(imageWp.title).toBe("HiveWright YouTube Thumbnail");
+    expect(imageWp.filename).toBe("thumbnail.png");
+    expect(imageWp.mime_type).toBe("image/png");
+    expect(imageWp.render_mode).toBe("image");
+    expect(imageWp.artifact_kind).toBe("final_artifact");
+    expect(imageWp.content).toBe("");
+    expect(imageWp.file_path).toMatch(/^hivewright_work-products\/final-artifacts\//);
+    expect(fs.readFileSync(path.join(workspace, imageWp.file_path as string))).toEqual(pngBytes);
+  });
+
   it("blocks achieved landing-page completion when only support docs are registered", async () => {
     await sql`UPDATE goals SET title = 'Build HiveWright landing page' WHERE id = ${goalId}`;
     const taskId = (await sql`

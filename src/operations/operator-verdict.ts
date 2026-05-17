@@ -50,8 +50,16 @@ export interface HiveOperatorVerdict {
     };
     recovery: {
       interruptedActiveRecovered: number;
+      executionRunsInterruptedRecovered: number;
       lastRecoveryAt: string | null;
       hasRecoveryEvidence: boolean;
+    };
+    executionRuns: {
+      running: number;
+      recentFailed: number;
+      latestStatus: string | null;
+      latestLivenessState: string | null;
+      latestLivenessReason: string | null;
     };
     resumeReadiness: Pick<HiveResumeReadiness, "status" | "canResumeSafely" | "counts" | "sessions">;
   };
@@ -67,6 +75,12 @@ interface OpsSignalsRow {
   last_goal_completed_at: Date | string | null;
   last_completion_evidence_references_deliverable: boolean | null;
   interrupted_active_recovered: string | number;
+  execution_runs_running: string | number;
+  execution_runs_interrupted_recovered: string | number;
+  execution_runs_recent_failed: string | number;
+  latest_execution_run_status: string | null;
+  latest_execution_run_liveness_state: string | null;
+  latest_execution_run_liveness_reason: string | null;
   last_recovery_at: Date | string | null;
 }
 
@@ -103,20 +117,31 @@ export async function getHiveOperatorVerdict(
       ORDER BY gc.created_at DESC NULLS LAST
       LIMIT 1
     ), owner_openable_deliverables AS (
-      SELECT wp.published_at, wp.public_url AS open_url
+      SELECT
+        wp.published_at,
+        CASE
+          WHEN wp.public_url IS NOT NULL
+            AND wp.public_url <> ''
+            AND (
+              wp.public_url LIKE 'http://%'
+              OR wp.public_url LIKE 'https://%'
+              OR wp.public_url LIKE '/api/work-products/%'
+              OR wp.public_url LIKE '/deliverables/%'
+            )
+            THEN wp.public_url
+          WHEN wp.file_path IS NOT NULL
+            AND wp.file_path <> ''
+            AND COALESCE(wp.artifact_kind, '') IN ('final_artifact', 'html', 'image', 'external_url')
+            AND COALESCE(wp.render_mode, '') IN ('html', 'image', 'markdown', 'pdf', 'text')
+            THEN '/deliverables/' || wp.id::text || '/open'
+          ELSE NULL
+        END AS open_url
       FROM work_products wp
       WHERE wp.hive_id = ${input.hiveId}::uuid
-        AND wp.public_url IS NOT NULL
-        AND wp.public_url <> ''
-        AND (
-          wp.public_url LIKE 'http://%'
-          OR wp.public_url LIKE 'https://%'
-          OR wp.public_url LIKE '/api/work-products/%'
-          OR wp.public_url LIKE '/deliverables/%'
-        )
     ), latest_deliverable AS (
       SELECT published_at, open_url
       FROM owner_openable_deliverables
+      WHERE open_url IS NOT NULL
       ORDER BY published_at DESC NULLS LAST
       LIMIT 1
     )
@@ -132,17 +157,32 @@ export async function getHiveOperatorVerdict(
             OR (last_heartbeat IS NULL AND started_at < ${now} - INTERVAL '15 minutes')
           ))::int AS stuck_active_tasks,
       (SELECT COUNT(*) FROM work_products WHERE hive_id = ${input.hiveId}::uuid)::int AS deliverables_total,
-      (SELECT COUNT(*) FROM owner_openable_deliverables)::int AS owner_accessible_deliverables,
-      (SELECT published_at FROM latest_deliverable) AS last_deliverable_completed_at,
-      (SELECT open_url FROM latest_deliverable) AS last_open_url,
+      (SELECT COUNT(*) FROM owner_openable_deliverables WHERE open_url IS NOT NULL)::int AS owner_accessible_deliverables,
+      (SELECT published_at FROM latest_deliverable WHERE open_url IS NOT NULL) AS last_deliverable_completed_at,
+      (SELECT open_url FROM latest_deliverable WHERE open_url IS NOT NULL) AS last_open_url,
       (SELECT created_at FROM latest_completion) AS last_goal_completed_at,
       (SELECT evidence_references_deliverable FROM latest_completion) AS last_completion_evidence_references_deliverable,
       (SELECT COUNT(*) FROM tasks
         WHERE hive_id = ${input.hiveId}::uuid
           AND failure_reason ILIKE 'Interrupted by dispatcher lifecycle recovery:%')::int AS interrupted_active_recovered,
-      (SELECT MAX(updated_at) FROM tasks
+      (SELECT COUNT(*) FROM execution_runs WHERE hive_id = ${input.hiveId}::uuid AND status = 'running')::int AS execution_runs_running,
+      (SELECT COUNT(*) FROM execution_runs WHERE hive_id = ${input.hiveId}::uuid AND status = 'interrupted' AND liveness_state = 'recovered')::int AS execution_runs_interrupted_recovered,
+      (SELECT COUNT(*) FROM execution_runs
         WHERE hive_id = ${input.hiveId}::uuid
-          AND failure_reason ILIKE 'Interrupted by dispatcher lifecycle recovery:%') AS last_recovery_at
+          AND status = 'failed'
+          AND finished_at >= ${now} - INTERVAL '24 hours')::int AS execution_runs_recent_failed,
+      (SELECT status FROM execution_runs WHERE hive_id = ${input.hiveId}::uuid ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT 1) AS latest_execution_run_status,
+      (SELECT liveness_state FROM execution_runs WHERE hive_id = ${input.hiveId}::uuid ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT 1) AS latest_execution_run_liveness_state,
+      (SELECT liveness_reason FROM execution_runs WHERE hive_id = ${input.hiveId}::uuid ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT 1) AS latest_execution_run_liveness_reason,
+      GREATEST(
+        (SELECT MAX(updated_at) FROM tasks
+          WHERE hive_id = ${input.hiveId}::uuid
+            AND failure_reason ILIKE 'Interrupted by dispatcher lifecycle recovery:%'),
+        (SELECT MAX(updated_at) FROM execution_runs
+          WHERE hive_id = ${input.hiveId}::uuid
+            AND status = 'interrupted'
+            AND liveness_state = 'recovered')
+      ) AS last_recovery_at
   `;
 
   const signals = {
@@ -173,8 +213,17 @@ export async function getHiveOperatorVerdict(
     },
     recovery: {
       interruptedActiveRecovered: toCount(opsRow?.interrupted_active_recovered),
+      executionRunsInterruptedRecovered: toCount(opsRow?.execution_runs_interrupted_recovered),
       lastRecoveryAt: toIsoOrNull(opsRow?.last_recovery_at),
-      hasRecoveryEvidence: toCount(opsRow?.interrupted_active_recovered) > 0,
+      hasRecoveryEvidence: toCount(opsRow?.interrupted_active_recovered) > 0
+        || toCount(opsRow?.execution_runs_interrupted_recovered) > 0,
+    },
+    executionRuns: {
+      running: toCount(opsRow?.execution_runs_running),
+      recentFailed: toCount(opsRow?.execution_runs_recent_failed),
+      latestStatus: opsRow?.latest_execution_run_status ?? null,
+      latestLivenessState: opsRow?.latest_execution_run_liveness_state ?? null,
+      latestLivenessReason: opsRow?.latest_execution_run_liveness_reason ?? null,
     },
     resumeReadiness: {
       status: readiness.status,
@@ -227,6 +276,15 @@ function buildOperatorBlockers(
       label: "Active tasks appear stuck",
       detail: "One or more active tasks have stale or missing heartbeats beyond the restart/watchdog threshold.",
       count: signals.stuckActiveTasks,
+    });
+  }
+  if (signals.executionRuns.recentFailed > 0) {
+    blockers.push({
+      code: "recent_execution_run_failures",
+      severity: "warning",
+      label: "Recent execution runs failed",
+      detail: "One or more adapter execution runs failed in the last 24 hours. Review execution run events before relying on unattended operation.",
+      count: signals.executionRuns.recentFailed,
     });
   }
   if (readiness.models.enabled === 0 || readiness.models.ready === 0) {

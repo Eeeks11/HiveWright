@@ -59,6 +59,12 @@ describe("getHiveOperatorVerdict", () => {
       last_goal_completed_at: new Date("2026-05-17T18:05:00Z"),
       last_completion_evidence_references_deliverable: true,
       interrupted_active_recovered: 1,
+      execution_runs_running: 1,
+      execution_runs_interrupted_recovered: 1,
+      execution_runs_recent_failed: 0,
+      latest_execution_run_status: "running",
+      latest_execution_run_liveness_state: "live",
+      latest_execution_run_liveness_reason: "last stdout output",
       last_recovery_at: new Date("2026-05-17T17:00:00Z"),
     });
 
@@ -75,6 +81,9 @@ describe("getHiveOperatorVerdict", () => {
     expect(verdict.signals.deliverables.ownerAccessible).toBe(1);
     expect(verdict.signals.lastSuccessfulGoalCompletion.evidenceReferencesDeliverable).toBe(true);
     expect(verdict.signals.recovery.hasRecoveryEvidence).toBe(true);
+    expect(verdict.signals.recovery.executionRunsInterruptedRecovered).toBe(1);
+    expect(verdict.signals.executionRuns.running).toBe(1);
+    expect(verdict.signals.executionRuns.latestLivenessState).toBe("live");
     expect(verdict.blockers).toEqual([]);
   });
 
@@ -107,6 +116,12 @@ describe("getHiveOperatorVerdict", () => {
       last_goal_completed_at: null,
       last_completion_evidence_references_deliverable: false,
       interrupted_active_recovered: 0,
+      execution_runs_running: 0,
+      execution_runs_interrupted_recovered: 0,
+      execution_runs_recent_failed: 1,
+      latest_execution_run_status: "failed",
+      latest_execution_run_liveness_state: "terminal",
+      latest_execution_run_liveness_reason: "adapter_reported_failure",
       last_recovery_at: null,
     });
 
@@ -120,8 +135,41 @@ describe("getHiveOperatorVerdict", () => {
       "stuck_active_tasks",
       "no_ready_model_route",
       "deliverables_not_owner_accessible",
+      "recent_execution_run_failures",
     ]));
     expect(verdict.summary).toMatch(/cannot run safely/i);
     expect(verdict.signals.deliverables.lastOpenUrl).toBeNull();
   });
+
+  it("counts file-backed final artifacts as owner-openable deliverables", async () => {
+    mocks.getHiveResumeReadiness.mockResolvedValue(readiness());
+    const sql = createSql({
+      budget_blocks: 0,
+      stuck_active_tasks: 0,
+      deliverables_total: 1,
+      owner_accessible_deliverables: 1,
+      last_deliverable_completed_at: new Date("2026-05-17T18:00:00Z"),
+      last_open_url: `/deliverables/55f4bfcb-b4a7-444f-934b-3cb712046b63/open`,
+      last_goal_completed_at: new Date("2026-05-17T18:05:00Z"),
+      last_completion_evidence_references_deliverable: true,
+      interrupted_active_recovered: 0,
+      execution_runs_running: 0,
+      execution_runs_interrupted_recovered: 0,
+      execution_runs_recent_failed: 0,
+      latest_execution_run_status: "succeeded",
+      latest_execution_run_liveness_state: "terminal",
+      latest_execution_run_liveness_reason: "adapter_succeeded",
+      last_recovery_at: null,
+    });
+
+    const verdict = await getHiveOperatorVerdict(sql as never, { hiveId: HIVE_ID });
+
+    const queryText = String((sql as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(queryText).toContain("'/deliverables/' || wp.id::text || '/open'");
+    expect(queryText).toContain("wp.file_path IS NOT NULL");
+    expect(verdict.signals.deliverables.ownerAccessible).toBe(1);
+    expect(verdict.signals.deliverables.lastOpenUrl).toBe("/deliverables/55f4bfcb-b4a7-444f-934b-3cb712046b63/open");
+    expect(verdict.blockers.find((b) => b.code === "deliverables_not_owner_accessible")).toBeUndefined();
+  });
+
 });

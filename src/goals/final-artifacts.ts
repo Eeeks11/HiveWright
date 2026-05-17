@@ -40,7 +40,25 @@ type Candidate = {
   extension: string;
 };
 
-const FINAL_ARTIFACT_EXTENSIONS = new Set([".html", ".htm"]);
+const FINAL_ARTIFACT_EXTENSIONS = new Set([
+  ".html",
+  ".htm",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+  ".gif",
+  ".svg",
+]);
+const HTML_EXTENSIONS = new Set([".html", ".htm"]);
+const IMAGE_MIME_BY_EXTENSION = new Map<string, string>([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
+  [".gif", "image/gif"],
+  [".svg", "image/svg+xml"],
+]);
 const REVIEW_PROVENANCE_WORDS = /\b(qa|review|compliance|signoff|audit|rework|notes?|checklist|report)\b/i;
 const WEB_PAGE_GOAL_WORDS = /\b(landing\s+page|website|web\s?page|homepage|microsite)\b/i;
 
@@ -58,10 +76,12 @@ function isVerifiedArtifact(item: CompletionEvidenceItem): boolean {
 function candidateScore(candidate: Candidate): number {
   const haystack = `${candidate.filename} ${candidate.absolutePath} ${candidate.item.description}`;
   let score = 0;
-  if (candidate.extension === ".html" || candidate.extension === ".htm") score += 100;
+  if (HTML_EXTENSIONS.has(candidate.extension)) score += 100;
+  if (IMAGE_MIME_BY_EXTENSION.has(candidate.extension)) score += 90;
   if (/index\.html?$/i.test(candidate.filename)) score += 30;
+  if (/thumbnail|youtube|hero|cover|banner/i.test(haystack)) score += 25;
   if (/landing[-_ ]?page/i.test(haystack)) score += 20;
-  if (/final|shipped|output|deliverable|page|package/i.test(haystack)) score += 15;
+  if (/final|shipped|output|deliverable|page|package|publish[-_ ]?ready/i.test(haystack)) score += 15;
   if (REVIEW_PROVENANCE_WORDS.test(haystack)) score -= 50;
   return score;
 }
@@ -79,11 +99,14 @@ export function titleForFinalArtifact(goalTitle: string, candidate: Pick<Candida
   const source = `${goalTitle} ${candidate.item.description} ${candidate.absolutePath}`;
   const brandMatch = source.match(/\bhivewright\b/i);
   const brand = brandMatch ? "HiveWright" : null;
+  if (/\byoutube\b/i.test(source) && /\bthumbnail\b/i.test(source)) {
+    return brand ? `${brand} YouTube Thumbnail` : "YouTube Thumbnail";
+  }
   const pathParts = candidate.absolutePath.split(path.sep).filter(Boolean);
   const meaningfulPart = pathParts
     .slice()
     .reverse()
-    .find((part) => /landing[-_ ]?page|website|homepage|page/i.test(part));
+    .find((part) => /landing[-_ ]?page|website|homepage|page|thumbnail|banner|cover/i.test(part));
   const artifactName = meaningfulPart ? humanizePathPart(meaningfulPart) : humanizePathPart(candidate.filename);
   if (brand && !new RegExp(`^${brand}\\b`, "i").test(artifactName)) return `${brand} ${artifactName}`;
   return artifactName || (brand ? `${brand} Final Output` : "Final Output");
@@ -151,6 +174,30 @@ function resolveHiveRuntimeProjectsPath(slug: string): string {
   const runtimeRoot = process.env.HIVEWRIGHT_RUNTIME_ROOT || path.join(os.homedir(), ".hivewright");
   const hivesRoot = process.env.HIVES_WORKSPACE_ROOT || path.join(runtimeRoot, "hives");
   return path.join(hivesRoot, slug, "projects");
+}
+
+function resolveHiveRuntimeTaskWorkspacesPath(): string {
+  const runtimeRoot = process.env.HIVEWRIGHT_RUNTIME_ROOT || path.join(os.homedir(), ".hivewright");
+  return path.join(runtimeRoot, "task-workspaces");
+}
+
+function relativeFilePathInsideWorkspace(candidate: Candidate): string {
+  return path.relative(path.resolve(candidate.workspaceRoot), candidate.realPath);
+}
+
+async function copyFinalFileIntoWorkspace(candidate: Candidate, destinationWorkspaceRoot: string, goalId: string): Promise<string> {
+  const workspaceRoot = path.resolve(destinationWorkspaceRoot);
+  const finalDir = path.join(workspaceRoot, "hivewright_work-products", "final-artifacts", goalId);
+  await fs.mkdir(finalDir, { recursive: true });
+  const safeBase = path.basename(candidate.filename).replace(/[^a-zA-Z0-9._-]+/g, "-") || "final-artifact";
+  const destination = path.join(finalDir, safeBase);
+  await fs.copyFile(candidate.realPath, destination);
+  const realWorkspace = await fs.realpath(workspaceRoot);
+  const realDestination = await fs.realpath(destination);
+  if (!isPathInside(realDestination, realWorkspace)) {
+    throw new Error("Copied final artifact escaped hive workspace");
+  }
+  return path.relative(workspaceRoot, destination);
 }
 
 async function findBestBundleArtifact(workspaceRoots: string[], bundle: CompletionEvidenceItem[]): Promise<Candidate | null> {
@@ -282,6 +329,7 @@ export async function normalizeFinalArtifactsFromEvidenceBundle(sql: Sql, contex
   const workspaceRoots = [
     ...(workspaceRow.workspace_path ? [workspaceRow.workspace_path] : []),
     ...(workspaceRow.slug ? [resolveHiveRuntimeProjectsPath(workspaceRow.slug)] : []),
+    resolveHiveRuntimeTaskWorkspacesPath(),
   ];
 
   const candidate = await findBestBundleArtifact(workspaceRoots, bundle);
@@ -290,12 +338,23 @@ export async function normalizeFinalArtifactsFromEvidenceBundle(sql: Sql, contex
   const task = await chooseTask(sql, context);
   if (!task) return [];
 
-  const html = await fs.readFile(candidate.realPath, "utf8");
-  const content = await buildHtmlContentWithInlineCss(candidate.realPath, candidate.workspaceRoot, html, bundle);
+  const isHtml = HTML_EXTENSIONS.has(candidate.extension);
+  const destinationWorkspaceRoot = workspaceRow.workspace_path || (workspaceRow.slug ? resolveHiveRuntimeProjectsPath(workspaceRow.slug) : candidate.workspaceRoot);
+  const content = isHtml
+    ? await buildHtmlContentWithInlineCss(candidate.realPath, candidate.workspaceRoot, await fs.readFile(candidate.realPath, "utf8"), bundle)
+    : "";
+  const filePath = isHtml
+    ? null
+    : candidate.workspaceRoot === path.resolve(destinationWorkspaceRoot)
+      ? relativeFilePathInsideWorkspace(candidate)
+      : await copyFinalFileIntoWorkspace(candidate, destinationWorkspaceRoot, context.goalId);
+  const mimeType = isHtml ? "text/html; charset=utf-8" : IMAGE_MIME_BY_EXTENSION.get(candidate.extension) ?? "application/octet-stream";
+  const renderMode = isHtml ? "html" : IMAGE_MIME_BY_EXTENSION.has(candidate.extension) ? "image" : "file";
   const metadata = {
     source: "goal_completion_evidence_bundle",
     sourceReference: candidate.item.reference,
     sourcePath: path.relative(path.resolve(candidate.workspaceRoot), candidate.realPath),
+    importedFilePath: filePath,
     normalizedAt: new Date().toISOString(),
   };
   const title = titleForFinalArtifact(context.goalTitle, candidate);
@@ -316,9 +375,9 @@ export async function normalizeFinalArtifactsFromEvidenceBundle(sql: Sql, contex
       ${title},
       ${candidate.filename},
       'final_artifact',
-      NULL,
-      'text/html; charset=utf-8',
-      'html',
+      ${filePath},
+      ${mimeType},
+      ${renderMode},
       'ready',
       ${sql.json(metadata as Parameters<typeof sql.json>[0])},
       'internal'

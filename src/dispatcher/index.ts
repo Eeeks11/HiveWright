@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import "dotenv/config";
 import postgres, { type Sql } from "postgres";
 import path from "path";
@@ -92,6 +93,15 @@ import {
   type DashboardHealerState,
 } from "./dashboard-healer";
 import { OutboundNotifier } from "./notifier";
+import {
+  finishExecutionRun,
+  markExecutionRunBlocked,
+  markInterruptedRunningExecutionRuns,
+  recordExecutionRunOutput,
+  startExecutionRun,
+  type ExecutionRunRecord,
+} from "../execution-runs/ledger";
+import type { AdapterResult } from "../adapters/types";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 const CODEX_RUNTIME_CONTEXT_BYTE_CAP = 16_384;
@@ -396,9 +406,14 @@ export class Dispatcher {
     // charge the agent and route avoidable work to doctor.
     try {
       const recovered = await recoverInterruptedActiveTasks(this.sql, process.pid);
-      if (recovered.length > 0) {
+      const recoveredRuns = await markInterruptedRunningExecutionRuns(this.sql, {
+        dispatcherPid: process.pid,
+        hostId: hostname(),
+        reason: "Interrupted by dispatcher lifecycle recovery: dispatcher startup reconciled stale running execution run.",
+      });
+      if (recovered.length > 0 || recoveredRuns.length > 0) {
         console.log(
-          `[dispatcher] Startup recovery: requeued ${recovered.length} active task(s) from dead dispatcher PID(s).`,
+          `[dispatcher] Startup recovery: requeued ${recovered.length} active task(s) and marked ${recoveredRuns.length} execution run(s) interrupted.`,
         );
         for (const task of recovered) {
           console.log(
@@ -406,7 +421,7 @@ export class Dispatcher {
           );
         }
       } else {
-        console.log("[dispatcher] Startup recovery: no interrupted active tasks found.");
+        console.log("[dispatcher] Startup recovery: no interrupted active tasks or execution runs found.");
       }
     } catch (err) {
       console.error("[dispatcher] Startup active-task recovery error:", err);
@@ -715,6 +730,20 @@ export class Dispatcher {
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         console.warn(`[dispatcher] Unsupported runtime adapter for task ${task.id}: ${reason}`);
+        const run = await startExecutionRun(this.sql, {
+          hiveId: task.hiveId,
+          taskId: task.id,
+          goalId: task.goalId,
+          adapterType,
+          model: ctx.model,
+          dispatcherPid: process.pid,
+          metadata: { routeStage: "unsupported_adapter" },
+        });
+        await markExecutionRunBlocked(this.sql, {
+          runId: run.id,
+          hiveId: run.hiveId,
+          reason: `Unsupported runtime adapter: ${reason}`,
+        });
         await handleTaskFailureAndDoctor(
           this.sql,
           task.id,
@@ -762,6 +791,16 @@ export class Dispatcher {
           `Reason: ${route.reason}.`,
         ].join(" ");
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
+        const run = await startExecutionRun(this.sql, {
+          hiveId: task.hiveId,
+          taskId: task.id,
+          goalId: task.goalId,
+          adapterType: route.adapterType,
+          model: route.model,
+          dispatcherPid: process.pid,
+          metadata: { routeStage: "runtime_health_gate", primaryAdapterType, primaryHealthy, fallbackHealthy },
+        });
+        await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
         await writeTaskLog(this.sql, {
           taskId: task.id,
           goalId: task.goalId ?? undefined,
@@ -817,11 +856,21 @@ export class Dispatcher {
       let lastHeartbeatBumpAt = 0;
       let streamedStdout = "";
       let streamedStderr = "";
+      let executionRun: ExecutionRunRecord | null = null;
       const onChunk = async (c: { text: string; type: "stdout" | "stderr" | "status" | "diagnostic" | "done" }) => {
         try {
           if (c.type === "stdout") streamedStdout = appendBoundedRuntimeContext(streamedStdout, c.text);
           if (c.type === "stderr") streamedStderr = appendBoundedRuntimeContext(streamedStderr, c.text);
           await writeTaskLog(this.sql, { taskId: task.id, goalId, chunk: c.text, type: c.type });
+          if (executionRun) {
+            await recordExecutionRunOutput(this.sql, {
+              runId: executionRun.id,
+              hiveId: task.hiveId,
+              taskId: task.id,
+              type: c.type,
+              text: c.text,
+            });
+          }
           // Throttle to once per 10s — chunks can arrive at hundreds-per-second
           // and we don't need a heartbeat update on every byte.
           const now = Date.now();
@@ -840,8 +889,25 @@ export class Dispatcher {
         ? await findReusableExecutionCapsule(this.sql, { taskId: task.id, adapterType })
         : null;
 
-      let result;
+      let result: AdapterResult;
       try {
+        executionRun = await startExecutionRun(this.sql, {
+          hiveId: task.hiveId,
+          taskId: task.id,
+          goalId: task.goalId,
+          adapterType,
+          model: ctx.model,
+          sessionId: reusableCapsule?.sessionId ?? null,
+          dispatcherPid: process.pid,
+          continuationAttempt: reusableCapsule?.status === "qa_failed" ? reusableCapsule.reworkCount + 1 : 0,
+          metadata: {
+            primaryAdapterType,
+            usedFallback: route.usedFallback,
+            fallbackReason: route.reason,
+            reusableCapsuleId: reusableCapsule?.id ?? null,
+            reusableCapsuleStatus: reusableCapsule?.status ?? null,
+          },
+        });
         if (reusableCapsule?.status === "qa_failed" && sendPersistentMessage) {
           const reworkPrompt = buildQaReworkPrompt({
             title: task.title,
@@ -853,6 +919,25 @@ export class Dispatcher {
         } else {
           result = await adapter.execute(ctx, onChunk);
         }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (executionRun) {
+          await finishExecutionRun(this.sql, {
+            runId: executionRun.id,
+            hiveId: executionRun.hiveId,
+            status: "failed",
+            finalizationResult: "adapter_threw",
+            errorMessage: reason,
+          });
+        }
+        await handleTaskFailureAndDoctor(
+          this.sql,
+          task.id,
+          FailureCategory.SpawnFailure,
+          `Adapter execution threw: ${reason}`,
+          this.config,
+        );
+        return;
       } finally {
         clearInterval(heartbeatTimer);
       }
@@ -974,6 +1059,25 @@ export class Dispatcher {
         if (aiBudget.state === "breached" && aiBudget.enforcement.blocksNewWork) {
           console.log(`[dispatcher] Hive ${task.hiveId} AI spend budget breached: ${aiBudget.consumedCents}/${aiBudget.capCents} cents`);
         }
+      }
+
+      if (executionRun) {
+        await finishExecutionRun(this.sql, {
+          runId: executionRun.id,
+          hiveId: executionRun.hiveId,
+          status: result.success ? "succeeded" : "failed",
+          finalizationResult: result.success ? "adapter_succeeded" : (result.failureKind ?? "adapter_reported_failure"),
+          errorMessage: result.success ? null : (result.failureReason || "Unknown failure"),
+          exitCode: parseExitCode(result.failureReason),
+          sessionId: result.sessionId ?? reusableCapsule?.sessionId ?? null,
+          model: result.modelUsed || ctx.model,
+          freshInputTokens: result.freshInputTokens ?? null,
+          cachedInputTokens: result.cachedInputTokens ?? null,
+          tokensInput: result.tokensInput ?? null,
+          tokensOutput: result.tokensOutput ?? null,
+          estimatedBillableCostCents: result.estimatedBillableCostCents ?? result.costCents ?? null,
+          usageDetails: result.usageDetails ?? null,
+        });
       }
 
       // 7. Handle failure
