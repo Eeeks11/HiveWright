@@ -25,6 +25,7 @@ import path from "node:path";
 import postgres from "postgres";
 import { invalidateAll as invalidateProvisionCache } from "../../src/provisioning/status-cache";
 import { syncRoleLibrary } from "../../src/roles/sync";
+import { createRuntimeCredentialFingerprint } from "../../src/model-health/probe-runner";
 
 const TEST_DB_NAME_PREFIX = "hivewrightv2_test";
 const SOURCE_VAR = process.env.TEST_DATABASE_URL
@@ -226,14 +227,11 @@ export async function seedTestModelRoutingForHive(
   const provider = options.provider ?? "anthropic";
   const adapterType = options.adapterType ?? "claude-code";
   const modelId = options.modelId ?? "anthropic/claude-sonnet-4-6";
-  const fingerprint = createHash("sha256")
-    .update(JSON.stringify([
-      "runtime",
-      provider.trim().toLowerCase(),
-      adapterType.trim().toLowerCase(),
-      "",
-    ]))
-    .digest("hex");
+  const fingerprint = createRuntimeCredentialFingerprint({
+    provider,
+    adapterType,
+    baseUrl: null,
+  });
 
   await sql`
     INSERT INTO hive_models (
@@ -290,6 +288,8 @@ export async function seedTestModelRoutingForHive(
       last_probed_at = EXCLUDED.last_probed_at,
       next_probe_at = EXCLUDED.next_probe_at,
       latency_ms = EXCLUDED.latency_ms,
+      last_failed_at = NULL,
+      last_failure_reason = NULL,
       updated_at = NOW()
   `;
 

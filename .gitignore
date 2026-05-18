@@ -41,6 +41,8 @@
 !/docs/STREAMING.md
 !/docs/installation.md
 !/docs/public-repository-boundary.md
+!/docs/promptfoo-evals.md
+/evals/promptfoo/results/
 /.audit-evidence/
 /docs/audit/
 /docs/connectors/

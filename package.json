@@ -47,7 +47,10 @@
     "readiness:backup": "tsx scripts/readiness/backup-postgres.ts",
     "readiness:restore-smoke": "tsx scripts/readiness/restore-smoke.ts",
     "readiness:business-restart-survival": "tsx scripts/readiness/business-restart-survival-proof.ts",
-    "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync"
+    "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync",
+    "evals:promptfoo:validate": "promptfoo validate config --config evals/promptfoo/promptfooconfig.yaml",
+    "evals:promptfoo": "promptfoo eval --config evals/promptfoo/promptfooconfig.yaml --no-cache --no-share --output evals/promptfoo/results/latest.json",
+    "evals:promptfoo:models": "bash scripts/run-promptfoo-model-evals.sh"
   },
   "dependencies": {
     "@auth/core": "^0.41.2",
@@ -89,6 +92,7 @@
     "eslint": "^9",
     "eslint-config-next": "^16.2.6",
     "jsdom": "^29.0.2",
+    "promptfoo": "^0.121.11",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
