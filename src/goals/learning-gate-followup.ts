@@ -161,6 +161,7 @@ async function createSkillFollowup(sql: Sql, input: LearningGateFollowupInput): 
       content,
       scope: "hive",
       sourceType: "internal",
+      createdBy: "agent",
       internalSourceRef: `goal:${input.goalId}`,
       evidence: [{
         type: "manual",

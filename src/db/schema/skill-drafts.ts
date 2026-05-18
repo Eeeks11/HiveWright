@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 import { tasks } from "./tasks";
 
@@ -16,6 +16,15 @@ export const skillDrafts = pgTable("skill_drafts", {
   sourceType: varchar("source_type", { length: 20 }).default("internal").notNull(),
   provenanceUrl: text("provenance_url"),
   internalSourceRef: text("internal_source_ref"),
+  createdBy: varchar("created_by", { length: 30 }).default("user").notNull(),
+  curatorState: varchar("curator_state", { length: 20 }).default("active").notNull(),
+  curatorPinned: boolean("curator_pinned").default(false).notNull(),
+  useCount: integer("use_count").default(0).notNull(),
+  viewCount: integer("view_count").default(0).notNull(),
+  patchCount: integer("patch_count").default(0).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  lastViewedAt: timestamp("last_viewed_at"),
+  lastPatchedAt: timestamp("last_patched_at"),
   licenseNotes: text("license_notes"),
   securityReviewStatus: varchar("security_review_status", { length: 20 }).default("not_required").notNull(),
   qaReviewStatus: varchar("qa_review_status", { length: 20 }).default("pending").notNull(),

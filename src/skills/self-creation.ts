@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { getCurrentSkillWriteOrigin } from "./provenance";
 
 export type SkillCandidateStatus =
   | "pending"
@@ -9,6 +10,8 @@ export type SkillCandidateStatus =
   | "archived";
 
 export type SkillCandidateSourceType = "internal" | "external";
+export type SkillProvenanceCreatedBy = "user" | "agent" | "background_review" | "system";
+export type SkillCuratorState = "active" | "stale" | "archived";
 export type ReviewStatus = "pending" | "approved" | "rejected" | "not_required";
 
 export interface SkillCandidateEvidence {
@@ -42,6 +45,15 @@ export interface SkillDraft {
   sourceType: SkillCandidateSourceType;
   provenanceUrl: string | null;
   internalSourceRef: string | null;
+  createdBy: SkillProvenanceCreatedBy;
+  curatorState: SkillCuratorState;
+  curatorPinned: boolean;
+  useCount: number;
+  viewCount: number;
+  patchCount: number;
+  lastUsedAt: Date | null;
+  lastViewedAt: Date | null;
+  lastPatchedAt: Date | null;
   licenseNotes: string | null;
   securityReviewStatus: ReviewStatus;
   qaReviewStatus: ReviewStatus;
@@ -73,6 +85,7 @@ export interface ProposeSkillInput {
   sourceType?: SkillCandidateSourceType;
   provenanceUrl?: string;
   internalSourceRef?: string;
+  createdBy?: SkillProvenanceCreatedBy;
   licenseNotes?: string;
   securityReviewStatus?: ReviewStatus;
   qaReviewStatus?: ReviewStatus;
@@ -128,6 +141,15 @@ function mapDraft(row: SkillDraftRow): SkillDraft {
     sourceType: (row.source_type as SkillCandidateSourceType | null) ?? "internal",
     provenanceUrl: (row.provenance_url as string | null) ?? null,
     internalSourceRef: (row.internal_source_ref as string | null) ?? null,
+    createdBy: (row.created_by as SkillProvenanceCreatedBy | null) ?? "user",
+    curatorState: (row.curator_state as SkillCuratorState | null) ?? "active",
+    curatorPinned: Boolean(row.curator_pinned),
+    useCount: Number(row.use_count ?? 0),
+    viewCount: Number(row.view_count ?? 0),
+    patchCount: Number(row.patch_count ?? 0),
+    lastUsedAt: asDate(row.last_used_at),
+    lastViewedAt: asDate(row.last_viewed_at),
+    lastPatchedAt: asDate(row.last_patched_at),
     licenseNotes: (row.license_notes as string | null) ?? null,
     securityReviewStatus: (row.security_review_status as ReviewStatus | null) ?? "not_required",
     qaReviewStatus: (row.qa_review_status as ReviewStatus | null) ?? "pending",
@@ -149,7 +171,7 @@ function mapDraft(row: SkillDraftRow): SkillDraft {
 
 function normalizeTargetRoles(input: ProposeSkillInput): string[] {
   const roles = input.targetRoleSlugs?.length ? input.targetRoleSlugs : [input.roleSlug];
-  return [...new Set(roles.map((role) => role.trim()).filter(Boolean))];
+  return Array.from(new Set(roles.map((role) => role.trim()).filter(Boolean)));
 }
 
 function normalizeEvidence(evidence: SkillCandidateEvidence[] = []): SkillCandidateEvidence[] {
@@ -247,6 +269,7 @@ export async function proposeSkill(sql: Sql, input: ProposeSkillInput): Promise<
       source_type,
       provenance_url,
       internal_source_ref,
+      created_by,
       license_notes,
       security_review_status,
       qa_review_status,
@@ -265,6 +288,7 @@ export async function proposeSkill(sql: Sql, input: ProposeSkillInput): Promise<
       ${sourceType},
       ${input.provenanceUrl ?? null},
       ${input.internalSourceRef ?? null},
+      ${input.createdBy ?? getCurrentSkillWriteOrigin()},
       ${input.licenseNotes ?? null},
       ${securityReviewStatus},
       ${qaReviewStatus},
@@ -471,6 +495,8 @@ export async function recordSkillAdoption(
   const [row] = await sql`
     UPDATE skill_drafts
     SET adoption_evidence = adoption_evidence || ${sql.json([normalized])}::jsonb,
+        use_count = use_count + 1,
+        last_used_at = NOW(),
         updated_at = NOW()
     WHERE id = ${draftId}
     RETURNING *
@@ -481,6 +507,38 @@ export async function recordSkillAdoption(
   }
 
   return mapDraft(row);
+}
+
+export async function recordSkillPatch(sql: Sql, draftId: string): Promise<void> {
+  const rows = await sql`
+    UPDATE skill_drafts
+    SET patch_count = patch_count + 1,
+        last_patched_at = NOW(),
+        curator_state = 'active',
+        updated_at = NOW()
+    WHERE id = ${draftId}
+    RETURNING id
+  `;
+  if (rows.length === 0) {
+    throw new Error(`Skill draft not found: ${draftId}`);
+  }
+}
+
+export async function markSkillCreatedBy(
+  sql: Sql,
+  draftId: string,
+  createdBy: SkillProvenanceCreatedBy,
+): Promise<void> {
+  const rows = await sql`
+    UPDATE skill_drafts
+    SET created_by = ${createdBy},
+        updated_at = NOW()
+    WHERE id = ${draftId}
+    RETURNING id
+  `;
+  if (rows.length === 0) {
+    throw new Error(`Skill draft not found: ${draftId}`);
+  }
 }
 
 export async function createOrUpdateSkillCandidateFromSignal(
@@ -540,6 +598,7 @@ Develop an internal skill update that addresses the repeated quality or failure 
 `,
     scope: "hive",
     sourceType: "internal",
+    createdBy: "agent",
     internalSourceRef: input.taskId ? `task:${input.taskId}` : input.feedbackId ? `feedback:${input.feedbackId}` : "quality-signal",
     evidence,
   });
@@ -563,6 +622,16 @@ export async function loadApprovedSkillCandidates(
       )
     ORDER BY published_at DESC NULLS LAST, approved_at DESC NULLS LAST, created_at DESC
   `;
+
+  const ids = rows.map((row) => row.id as string);
+  if (ids.length > 0) {
+    await sql`
+      UPDATE skill_drafts
+      SET view_count = view_count + 1,
+          last_viewed_at = NOW()
+      WHERE id = ANY(${ids})
+    `;
+  }
 
   return rows.map((row) => mapDraft(row));
 }
