@@ -1,0 +1,86 @@
+name: Promptfoo nightly evals
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 16 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  promptfoo-local:
+    name: Promptfoo local no-secrets policy evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate promptfoo config
+        run: npm run evals:promptfoo:validate
+
+      - name: Run promptfoo local evals
+        run: npm run evals:promptfoo
+
+      - name: Upload promptfoo results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-local-results
+          path: evals/promptfoo/results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  promptfoo-models:
+    name: Promptfoo model-backed policy evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      PROMPTFOO_MODEL_PROVIDERS: ${{ vars.PROMPTFOO_MODEL_PROVIDERS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate promptfoo config
+        run: npm run evals:promptfoo:validate
+
+      - name: Run model-backed promptfoo evals when configured
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY secret is not configured; skipping model-backed promptfoo evals."
+            exit 0
+          fi
+
+          export PROMPTFOO_MODEL_PROVIDERS="${PROMPTFOO_MODEL_PROVIDERS:-openai:gpt-4o-mini}"
+          npm run evals:promptfoo:models
+
+      - name: Upload promptfoo model results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-model-results
+          path: evals/promptfoo/results/model-backed.json
+          if-no-files-found: warn
+          retention-days: 14
