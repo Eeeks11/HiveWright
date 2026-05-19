@@ -813,6 +813,13 @@
       "when": 1778985000000,
       "tag": "0118_hive_connector_plugins",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1779165799000,
+      "tag": "0119_schedule_revision_snapshots",
+      "breakpoints": true
     }
   ]
 }

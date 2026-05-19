@@ -1,5 +1,7 @@
-import { pgTable, uuid, varchar, boolean, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
+import { tasks } from "./tasks";
+import type { ScheduleRevisionSnapshotV1 } from "@/schedules/revision-snapshot";
 
 export const schedules = pgTable("schedules", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -22,3 +24,17 @@ export const schedules = pgTable("schedules", {
   createdBy: varchar("created_by", { length: 255 }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const scheduleFireSnapshots = pgTable("schedule_fire_snapshots", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  scheduleId: uuid("schedule_id").references(() => schedules.id, { onDelete: "cascade" }).notNull(),
+  hiveId: uuid("hive_id").references(() => hives.id, { onDelete: "cascade" }).notNull(),
+  taskId: uuid("task_id").references(() => tasks.id, { onDelete: "set null" }),
+  snapshotHash: varchar("snapshot_hash", { length: 71 }).notNull(),
+  snapshot: jsonb("snapshot").$type<ScheduleRevisionSnapshotV1>().notNull(),
+  firedAt: timestamp("fired_at").defaultNow().notNull(),
+}, (table) => [
+  index("schedule_fire_snapshots_schedule_id_idx").on(table.scheduleId),
+  index("schedule_fire_snapshots_task_id_idx").on(table.taskId),
+  index("schedule_fire_snapshots_snapshot_hash_idx").on(table.snapshotHash),
+]);

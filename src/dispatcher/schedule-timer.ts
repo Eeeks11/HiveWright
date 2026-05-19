@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { CronExpressionParser } from "cron-parser";
+import { createScheduleRevisionSnapshot, type ScheduleRevisionSnapshotV1 } from "@/schedules/revision-snapshot";
 
 /**
  * Shape of the task_template JSON on every schedules row. `kind` is
@@ -40,6 +41,23 @@ async function resolveScheduledTaskProjectId(
   return projects.length === 1 ? projects[0].id : null;
 }
 
+async function persistScheduleFireSnapshot(
+  sql: Sql,
+  snapshot: ScheduleRevisionSnapshotV1,
+  taskId: string | null,
+): Promise<void> {
+  await sql`
+    INSERT INTO schedule_fire_snapshots (schedule_id, hive_id, task_id, snapshot_hash, snapshot)
+    VALUES (
+      ${snapshot.scheduleId},
+      ${snapshot.hiveId},
+      ${taskId},
+      ${snapshot.hash},
+      ${sql.json(snapshot as never)}
+    )
+  `;
+}
+
 export async function checkAndFireSchedules(sql: Sql): Promise<number> {
   const dueSchedules = await sql`
     SELECT * FROM schedules
@@ -54,6 +72,20 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
     const template = (typeof rawTemplate === "string"
       ? JSON.parse(rawTemplate)
       : rawTemplate) as ScheduleTaskTemplate;
+    const revisionSnapshot = createScheduleRevisionSnapshot({
+      id: schedule.id,
+      hive_id: schedule.hive_id,
+      cron_expression: schedule.cron_expression,
+      task_template: template,
+      enabled: schedule.enabled,
+      origin_type: schedule.origin_type ?? null,
+      origin_key: schedule.origin_key ?? null,
+      last_run_at: schedule.last_run_at ?? null,
+      next_run_at: schedule.next_run_at ?? null,
+      created_by: schedule.created_by,
+      created_at: schedule.created_at ?? null,
+    });
+    let enqueuedTaskId: string | null = null;
 
     if (template.kind === "hive-supervisor-heartbeat") {
       // Short-circuit to the supervisor runtime instead of enqueuing a
@@ -148,8 +180,18 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
         template.projectId ?? template.project_id ?? null,
       );
 
-      await sql`
-        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, qa_required, priority, project_id)
+      const [task] = await sql<Array<{ id: string }>>`
+        INSERT INTO tasks (
+          hive_id,
+          assigned_to,
+          created_by,
+          title,
+          brief,
+          qa_required,
+          priority,
+          project_id,
+          schedule_revision_snapshot
+        )
         VALUES (
           ${schedule.hive_id},
           ${template.assignedTo ?? null},
@@ -158,10 +200,15 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
           ${template.brief ?? null},
           ${template.qaRequired ?? false},
           ${template.priority ?? 5},
-          ${projectId}
+          ${projectId},
+          ${sql.json(revisionSnapshot as never)}
         )
+        RETURNING id
       `;
+      enqueuedTaskId = task.id;
     }
+
+    await persistScheduleFireSnapshot(sql, revisionSnapshot, enqueuedTaskId);
 
     const interval = CronExpressionParser.parse(schedule.cron_expression);
     const nextRun = interval.next().toDate();

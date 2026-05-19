@@ -4,6 +4,7 @@ import { roleTemplates } from "./role-templates";
 import { goals } from "./goals";
 import { projects } from "./projects";
 import type { UsageDetails } from "@/usage/billable-usage";
+import type { ScheduleRevisionSnapshotV1 } from "@/schedules/revision-snapshot";
 
 export const tasks = pgTable("tasks", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -30,6 +31,7 @@ export const tasks = pgTable("tasks", {
   doctorAttempts: integer("doctor_attempts").default(0).notNull(),
   failureReason: text("failure_reason"),
   routeSelectionEvidence: jsonb("route_selection_evidence").$type<Record<string, unknown>>(),
+  scheduleRevisionSnapshot: jsonb("schedule_revision_snapshot").$type<ScheduleRevisionSnapshotV1>(),
   adapterOverride: varchar("adapter_override", { length: 100 }),
   modelOverride: varchar("model_override", { length: 255 }),
   freshInputTokens: integer("fresh_input_tokens"),
