@@ -10,9 +10,11 @@
  * captured into `texts` only when they carry visible agent_message content;
  * everything else is ignored to keep the live-stream readable.
  */
+import type { AdapterRuntimeEvent } from "../execution-guards";
 
 export type ParsedCodexLine =
   | { kind: "text"; text: string }
+  | { kind: "runtime_event"; event: AdapterRuntimeEvent }
   | {
       kind: "result";
       threadId: string | null;
@@ -30,7 +32,15 @@ export type ParsedCodexLine =
 interface RawCodexEvent {
   type?: string;
   thread_id?: string;
-  item?: { id?: string; type?: string; text?: string };
+  item?: {
+    id?: string;
+    type?: string;
+    text?: string;
+    name?: string;
+    arguments?: unknown;
+    args?: unknown;
+    input?: unknown;
+  };
   usage?: { input_tokens?: number; output_tokens?: number; cached_input_tokens?: number };
   model?: string;
   error?: string | { message?: string };
@@ -49,6 +59,11 @@ export function parseCodexLine(line: string): ParsedCodexLine {
 
   if (parsed.type === "item.completed" && parsed.item?.type === "agent_message" && typeof parsed.item.text === "string") {
     return { kind: "text", text: parsed.item.text };
+  }
+
+  const toolEvent = parseCodexToolCall(parsed);
+  if (toolEvent) {
+    return { kind: "runtime_event", event: toolEvent };
   }
 
   if (parsed.type === "turn.completed") {
@@ -87,11 +102,40 @@ export function parseCodexLine(line: string): ParsedCodexLine {
   return { kind: "ignore" };
 }
 
+function parseCodexToolCall(parsed: RawCodexEvent): AdapterRuntimeEvent | null {
+  if (parsed.type !== "item.completed") return null;
+  const item = parsed.item;
+  if (!item || typeof item !== "object") return null;
+  if (item.type !== "function_call" && item.type !== "tool_call") return null;
+  if (typeof item.name !== "string" || item.name.trim() === "") return null;
+
+  return {
+    type: "tool_call",
+    adapter: "codex",
+    toolName: item.name,
+    args: normalizeToolArgs(item.arguments ?? item.args ?? item.input ?? null),
+    callId: typeof item.id === "string" ? item.id : null,
+    source: "structured_stream",
+    timestamp: new Date(),
+  };
+}
+
+function normalizeToolArgs(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 type CodexResultEvent = Extract<ParsedCodexLine, { kind: "result" }>;
 
 export interface CodexChunkerOutput {
   /** Accumulated assistant text deltas pulled from item.completed events. */
   texts: string[];
+  /** Structured runtime events derived only from explicit CLI JSON tool-use events. */
+  runtimeEvents: AdapterRuntimeEvent[];
   /** Set on the first parsed terminal event (turn.completed or error). */
   result: CodexResultEvent | null;
   /** Captured from thread.started — used for --resume on subsequent turns. */
@@ -114,6 +158,7 @@ export class CodexJsonChunker {
     this.buffer = lines.pop() ?? "";
 
     const texts: string[] = [];
+    const runtimeEvents: AdapterRuntimeEvent[] = [];
     for (const line of lines) {
       // Capture thread_id from thread.started without producing visible text.
       if (line.includes('"thread.started"')) {
@@ -128,12 +173,14 @@ export class CodexJsonChunker {
       const parsed = parseCodexLine(line);
       if (parsed.kind === "text") {
         texts.push(parsed.text);
+      } else if (parsed.kind === "runtime_event") {
+        runtimeEvents.push(parsed.event);
       } else if (parsed.kind === "result" && this.resultCaptured === null) {
         this.resultCaptured = parsed;
       }
     }
 
-    return { texts, result: this.resultCaptured, threadId: this.threadId };
+    return { texts, runtimeEvents, result: this.resultCaptured, threadId: this.threadId };
   }
 
   flush(): CodexChunkerOutput {
@@ -141,14 +188,17 @@ export class CodexJsonChunker {
     this.buffer = "";
 
     const texts: string[] = [];
+    const runtimeEvents: AdapterRuntimeEvent[] = [];
     if (tailText) {
       const parsed = parseCodexLine(tailText);
       if (parsed.kind === "text") {
         texts.push(parsed.text);
+      } else if (parsed.kind === "runtime_event") {
+        runtimeEvents.push(parsed.event);
       } else if (parsed.kind === "result" && this.resultCaptured === null) {
         this.resultCaptured = parsed;
       }
     }
-    return { texts, result: this.resultCaptured, threadId: this.threadId };
+    return { texts, runtimeEvents, result: this.resultCaptured, threadId: this.threadId };
   }
 }

@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { getCurrentSkillWriteOrigin } from "./provenance";
+import { scanSkillContent } from "./security-scanner";
 
 export type SkillCandidateStatus =
   | "pending"
@@ -184,8 +185,6 @@ function normalizeEvidence(evidence: SkillCandidateEvidence[] = []): SkillCandid
 
 function ensureExternalGovernance(row: SkillDraft | SkillDraftRow, action: "approve" | "publish") {
   const sourceType = "sourceType" in row ? row.sourceType : row.source_type;
-  if (sourceType !== "external") return;
-
   const provenanceUrl = "provenanceUrl" in row ? row.provenanceUrl : row.provenance_url;
   const licenseNotes = "licenseNotes" in row ? row.licenseNotes : row.license_notes;
   const securityStatus = "securityReviewStatus" in row
@@ -195,10 +194,17 @@ function ensureExternalGovernance(row: SkillDraft | SkillDraftRow, action: "appr
     ? row.qaReviewStatus
     : row.qa_review_status;
 
-  if (!provenanceUrl || !licenseNotes || securityStatus !== "approved" || qaStatus !== "approved") {
-    throw new Error(
-      `Cannot ${action} external-source skill candidate without provenance URL, license notes, approved security review, and approved QA review.`,
-    );
+  if (sourceType === "external") {
+    if (!provenanceUrl || !licenseNotes || securityStatus !== "approved" || qaStatus !== "approved") {
+      throw new Error(
+        `Cannot ${action} external-source skill candidate without provenance URL, license notes, approved security review, and approved QA review.`,
+      );
+    }
+    return;
+  }
+
+  if (securityStatus === "pending" || securityStatus === "rejected") {
+    throw new Error(`Cannot ${action} skill candidate without approved or not-required security review.`);
   }
 }
 
@@ -247,11 +253,22 @@ export async function proposeSkill(sql: Sql, input: ProposeSkillInput): Promise<
   }
 
   const sourceType = input.sourceType ?? "internal";
-  const securityReviewStatus = sourceType === "external"
+  const securityScan = scanSkillContent(input.content);
+  if (securityScan.verdict === "block") {
+    throw new Error(`Cannot propose skill: security scanner blocked candidate (${securityScan.findings.map((finding) => finding.rule).join(", ")}).`);
+  }
+  const securityReviewStatus = sourceType === "external" || securityScan.verdict === "warn"
     ? "pending"
     : input.securityReviewStatus ?? "not_required";
   const qaReviewStatus = sourceType === "external" ? "pending" : input.qaReviewStatus ?? "pending";
-  const evidence = normalizeEvidence(input.evidence);
+  const evidence = normalizeEvidence([
+    ...(input.evidence ?? []),
+    ...securityScan.findings.map((finding) => ({
+      type: "manual" as const,
+      summary: `Skill security scanner ${finding.verdict}: ${finding.rule} — ${finding.message}`,
+      source: "skill-security-scanner",
+    })),
+  ]);
   const evidenceJson = JSON.stringify(evidence);
   const targetRoleSlugs = normalizeTargetRoles(input);
 

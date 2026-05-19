@@ -263,6 +263,12 @@ export async function findStuckBlockedTasks(
         WHERE child.parent_task_id = t.id
           AND child.status IN ('pending', 'active')
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM decisions d
+        WHERE d.task_id = t.id
+          AND d.kind = 'runtime_guard'
+          AND d.status IN ('ea_review', 'pending')
+      )
   `;
 
   return (rows as unknown as Record<string, unknown>[]).map((row) => ({

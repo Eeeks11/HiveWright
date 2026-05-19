@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 import path from "path";
-import { loadSystemSkills, loadHiveSkills, resolveSkillsForTask } from "@/skills/loader";
+import {
+  effectiveToolsForLoadedSkills,
+  loadHiveSkills,
+  loadSystemSkills,
+  parseSkillFrontmatter,
+  resolveSkillsForTask,
+  resolveSkillSetForTask,
+} from "@/skills/loader";
 
 const SYSTEM_SKILLS_PATH = path.resolve(__dirname, "../../skills-library");
 
@@ -58,5 +65,41 @@ describe("resolveSkillsForTask", () => {
       "blog-writing", "xero-reconciliation", "blog-writing", "xero-reconciliation", "blog-writing",
     ]);
     expect(resolved.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("skill frontmatter metadata", () => {
+  it("parses allowed_tools from YAML-like frontmatter", () => {
+    const parsed = parseSkillFrontmatter(`---\nallowed_tools:\n  - read_file\n  - web_search\n---\nBody`);
+    expect(parsed.body).toBe("Body");
+    expect(parsed.metadata.allowedTools).toEqual(["read_file", "web_search"]);
+  });
+
+  it("parses allowed_tools from CRLF frontmatter", () => {
+    const parsed = parseSkillFrontmatter("---\r\nallowed_tools: [Read, Bash]\r\n---\r\nBody");
+    expect(parsed.body).toBe("Body");
+    expect(parsed.metadata.allowedTools).toEqual(["Read", "Bash"]);
+  });
+
+  it("narrows role allowed tools by loaded skill declarations without granting new tools", () => {
+    const allSkills = [{
+      slug: "safe-skill",
+      tier: "system" as const,
+      content: "Body",
+      metadata: { allowedTools: ["read_file", "terminal"] },
+    }];
+    const resolved = resolveSkillSetForTask(allSkills, ["safe-skill"]);
+    const narrowed = effectiveToolsForLoadedSkills({ allowedTools: ["read_file", "write_file"], mcps: ["github"] }, resolved);
+    expect(narrowed).toEqual({ allowedTools: ["read_file"], mcps: ["github"] });
+  });
+
+  it("fails closed when a skill declaration has no overlap with the role baseline", () => {
+    expect(() => effectiveToolsForLoadedSkills(null, [{
+      slug: "network-skill",
+      tier: "system",
+      content: "Body",
+      metadata: { allowedTools: ["web_search"] },
+      rendered: "## Skill: network-skill\n\nBody",
+    }])).toThrow(/no permitted built-in tools/i);
   });
 });

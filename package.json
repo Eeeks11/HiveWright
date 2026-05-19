@@ -50,7 +50,9 @@
     "build:dispatcher": "esbuild src/dispatcher/index.ts --bundle --platform=node --format=cjs --outfile=dispatcher-bundle.js --external:postgres --external:chokidar --external:discord.js --external:@discordjs/* --external:zlib-sync",
     "evals:promptfoo:validate": "promptfoo validate config --config evals/promptfoo/promptfooconfig.yaml",
     "evals:promptfoo": "promptfoo eval --config evals/promptfoo/promptfooconfig.yaml --no-cache --no-share --output evals/promptfoo/results/latest.json",
-    "evals:promptfoo:models": "bash scripts/run-promptfoo-model-evals.sh"
+    "evals:promptfoo:models": "bash scripts/run-promptfoo-model-evals.sh",
+    "doctor": "tsx scripts/doctor.ts",
+    "setup": "tsx scripts/setup.ts"
   },
   "dependencies": {
     "@auth/core": "^0.41.2",

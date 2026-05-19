@@ -1,5 +1,8 @@
 import type { ClaimedTask } from "../dispatcher/types";
+import type { AdapterRuntimeHooks } from "../execution-guards";
 import type { UsageDetails } from "../usage/billable-usage";
+
+export type { AdapterRuntimeEvent, AdapterRuntimeHooks } from "../execution-guards";
 
 export interface RoleContext {
   roleMd: string | null;
@@ -7,6 +10,9 @@ export interface RoleContext {
   toolsMd: string | null;
   slug: string;
   department: string | null;
+  source?:
+    | { type: "system-library" }
+    | { type: "hive-custom"; hiveId: string; baseRoleSlug: string };
 }
 
 export type ContextSourceClass =
@@ -98,7 +104,7 @@ export interface SessionContext {
    * adapters pass the strict per-spawn flags so the role only sees these
    * MCPs and (optionally) only this set of built-in tools.
    */
-  toolsConfig?: { mcps?: string[]; allowedTools?: string[] } | null;
+  toolsConfig?: { mcps?: string[]; allowedTools?: string[]; customRole?: unknown } | null;
   /**
    * Shared prompt assembly policy. Executor roles default to lean startup
    * context so adapters render task essentials eagerly and reference bulky
@@ -162,7 +168,7 @@ export interface AdapterResult {
   runtimeDiagnostics?: {
     codexEmptyOutput?: CodexEmptyOutputDiagnostic;
   };
-  failureKind?: "execution_slice_exceeded" | "spawn_error" | "unsafe_runtime_failure" | "unknown";
+  failureKind?: "execution_slice_exceeded" | "spawn_error" | "unsafe_runtime_failure" | "guard_interrupted" | "unknown";
   tokensInput?: number;
   freshInputTokens?: number;
   cachedInputTokens?: number;
@@ -284,11 +290,11 @@ export interface Adapter extends AdapterProbe {
    * stdout/stderr as it arrives rather than only on process close.
    * All onChunk calls must be awaited before execute() resolves.
    */
-  execute(ctx: SessionContext, onChunk?: ChunkCallback): Promise<AdapterResult>;
+  execute(ctx: SessionContext, onChunk?: ChunkCallback, hooks?: AdapterRuntimeHooks): Promise<AdapterResult>;
   /** Start a persistent session. Only available if supportsPersistence is true. */
   startSession?(ctx: SessionContext): Promise<{ sessionId: string }>;
   /** Send a message to an existing persistent session. */
-  sendMessage?(sessionId: string, message: string, ctx: SessionContext, onChunk?: ChunkCallback): Promise<AdapterResult>;
+  sendMessage?(sessionId: string, message: string, ctx: SessionContext, onChunk?: ChunkCallback, hooks?: AdapterRuntimeHooks): Promise<AdapterResult>;
   /** Terminate a persistent session. */
   terminateSession?(sessionId: string): Promise<void>;
 }

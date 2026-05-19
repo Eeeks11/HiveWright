@@ -18,6 +18,7 @@ describe("dashboard navigation model", () => {
 
     expect(groups.map((group) => group.id)).toEqual([
       "dashboard",
+      "supervision",
       "work",
       "inbox",
       "schedules",
@@ -43,6 +44,7 @@ describe("dashboard navigation model", () => {
     ]);
     expect(globalLinks.map((link) => link.id)).toEqual([
       "hives",
+      "hive-template-import",
       "global-settings",
       "adapter-settings",
       "embedding-settings",
@@ -64,6 +66,10 @@ describe("dashboard navigation model", () => {
       label: "Final outputs",
       badgeCount: 2,
       groupId: "work",
+    });
+    expect(groups.find((group) => group.id === "supervision")).toMatchObject({
+      href: "/supervision",
+      label: "Supervision",
     });
     expect(setupLinks.map((link) => link.href).filter((href) => href.startsWith("/settings"))).toEqual([]);
   });

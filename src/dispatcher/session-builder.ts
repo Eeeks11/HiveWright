@@ -6,7 +6,7 @@ import { loadModelRoutingView } from "../model-routing/registry";
 import { resolveConfiguredModelRoute } from "../model-routing/selector";
 import { queryRelevantMemory } from "../memory/injection";
 import { checkPgvectorAvailable } from "../memory/embeddings";
-import { loadSystemSkills, loadHiveSkills, resolveSkillsForTask } from "../skills/loader";
+import { loadSystemSkills, loadHiveSkills, resolveSkillSetForTask, effectiveToolsForLoadedSkills } from "../skills/loader";
 import { loadCredentials } from "../credentials/manager";
 import {
   AGENT_AUDIT_EVENTS,
@@ -15,9 +15,10 @@ import {
 import { MCP_CATALOG } from "../tools/mcp-catalog";
 import { loadStandingInstructions } from "../standing-instructions/manager";
 import { buildHiveContextBlock } from "../hives/context";
+import { parseCustomRoleMetadata } from "../roles/custom-roles";
 import path from "path";
 
-type ToolsConfig = { mcps?: string[]; allowedTools?: string[] };
+type ToolsConfig = { mcps?: string[]; allowedTools?: string[]; customRole?: unknown };
 
 type ToolGrantDecisionAudit = {
   source: "role_tools_config" | "task_classifier";
@@ -40,12 +41,20 @@ export async function buildSessionContext(
   `;
   if (!role) throw new Error(`Role template not found: ${task.assignedTo}`);
 
+  const customRoleMetadata = parseCustomRoleMetadata(role.tools_config);
+  if (customRoleMetadata && customRoleMetadata.hiveId !== task.hiveId) {
+    throw new Error(`Hive custom role ${role.slug} is scoped to a different hive.`);
+  }
+
   const roleTemplate: RoleContext = {
     slug: role.slug,
     department: role.department,
     roleMd: role.role_md,
     soulMd: role.soul_md,
     toolsMd: role.tools_md,
+    source: customRoleMetadata
+      ? { type: "hive-custom", hiveId: customRoleMetadata.hiveId, baseRoleSlug: customRoleMetadata.baseRoleSlug }
+      : { type: "system-library" },
   };
 
   // 2. Query memory (semantic search + recency ranking)
@@ -89,7 +98,8 @@ export async function buildSessionContext(
     : null;
   const hiveSkills = hiveSkillsPath ? loadHiveSkills(hiveSkillsPath) : [];
   const allSkills = [...systemSkills, ...hiveSkills];
-  const skills = resolveSkillsForTask(allSkills, skillSlugs);
+  const resolvedSkills = resolveSkillSetForTask(allSkills, skillSlugs);
+  const skills = resolvedSkills.map((skill) => skill.rendered);
 
   // 2c. Load credentials
   const requiredKeys = parseRequiredCredentials(role.tools_md as string | null);
@@ -259,6 +269,16 @@ export async function buildSessionContext(
   }
 
   const roleType = role.type as string | null;
+  const narrowedToolsConfig = effectiveToolsForLoadedSkills(toolsConfig, resolvedSkills);
+  if (narrowedToolsConfig !== toolsConfig) {
+    toolsConfig = narrowedToolsConfig;
+    toolGrantDecision.toolsConfig = toolsConfig;
+    toolGrantDecision.reasons = [
+      ...toolGrantDecision.reasons,
+      "loaded skill allowed_tools narrowed allowed built-in tools by intersection",
+    ];
+  }
+
   const isLeanSystemReviewTask =
     roleType === "qa" ||
     task.title.startsWith("[QA]") ||

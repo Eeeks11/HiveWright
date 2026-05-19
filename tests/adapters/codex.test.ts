@@ -74,10 +74,49 @@ describe("parseCodexLine", () => {
     }
   });
 
+  it("returns runtime event for structured function_call items", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: {
+        id: "call-1",
+        type: "function_call",
+        name: "shell",
+        arguments: JSON.stringify({ command: "npm test" }),
+      },
+    });
+
+    const parsed = parseCodexLine(line);
+
+    expect(parsed).toMatchObject({
+      kind: "runtime_event",
+      event: {
+        type: "tool_call",
+        adapter: "codex",
+        toolName: "shell",
+        args: { command: "npm test" },
+        callId: "call-1",
+        source: "structured_stream",
+      },
+    });
+  });
+
+  it("does not emit runtime events for prose mentioning tool calls", () => {
+    const line = JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: "I will call shell with npm test." },
+    });
+
+    expect(parseCodexLine(line)).toEqual({ kind: "text", text: "I will call shell with npm test." });
+  });
+
   it("ignores thread.started, turn.started, and other lifecycle events", () => {
     expect(parseCodexLine(JSON.stringify({ type: "thread.started", thread_id: "abc" })).kind).toBe("ignore");
     expect(parseCodexLine(JSON.stringify({ type: "turn.started" })).kind).toBe("ignore");
     expect(parseCodexLine(JSON.stringify({ type: "item.started", item: { type: "reasoning" } })).kind).toBe("ignore");
+    expect(parseCodexLine(JSON.stringify({
+      type: "item.started",
+      item: { id: "call-1", type: "function_call", name: "shell", arguments: { command: "npm test" } },
+    })).kind).toBe("ignore");
   });
 
   it("ignores non-JSON garbage on stdout", () => {
@@ -99,10 +138,34 @@ describe("CodexJsonChunker", () => {
       JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "Part 2." }}) + "\n",
     );
     expect(b.texts).toEqual(["Part 1.", "Part 2."]);
+    expect(b.runtimeEvents).toEqual([]);
     expect(b.result).toBeNull();
 
     const c = chunker.feed(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 5 }}) + "\n");
     expect(c.result?.tokensInput).toBe(10);
+  });
+
+  it("surfaces structured tool calls as runtime events", () => {
+    const chunker = new CodexJsonChunker();
+    const out = chunker.feed(JSON.stringify({
+      type: "item.completed",
+      item: {
+        id: "call-2",
+        type: "function_call",
+        name: "read_file",
+        arguments: { path: "src/app.ts" },
+      },
+    }) + "\n");
+
+    expect(out.texts).toEqual([]);
+    expect(out.runtimeEvents).toHaveLength(1);
+    expect(out.runtimeEvents[0]).toMatchObject({
+      type: "tool_call",
+      adapter: "codex",
+      toolName: "read_file",
+      args: { path: "src/app.ts" },
+      callId: "call-2",
+    });
   });
 
   it("handles a JSON object split across two chunks (partial line buffering)", () => {
@@ -276,6 +339,77 @@ describe("CodexAdapter.translate + buildCommand", () => {
     const result = await new CodexAdapter().execute(makeCtx());
 
     expect(result.sessionId).toBe("thread-1");
+  });
+
+  it("returns guard_interrupted when runtime hooks request interruption", async () => {
+    const kill = vi.fn();
+    mockSpawn.mockImplementation(() => {
+      const proc = new EventEmitter() as EventEmitter & {
+        stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      proc.stdin = { write: vi.fn(), end: vi.fn() };
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = kill;
+      queueMicrotask(() => {
+        proc.stdout.emit("data", Buffer.from(JSON.stringify({
+          type: "item.completed",
+          item: {
+            id: "call-guard",
+            type: "function_call",
+            name: "read_file",
+            arguments: { path: "src/app.ts" },
+          },
+        }) + "\n"));
+        proc.emit("close", 143);
+      });
+      return proc;
+    });
+
+    let interrupted = false;
+    const result = await new CodexAdapter().execute(makeCtx(), undefined, {
+      onRuntimeEvent: () => {
+        interrupted = true;
+      },
+      shouldInterrupt: () => interrupted,
+      interruptReason: () => "loop guard interrupted repeated read_file calls",
+    });
+
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "guard_interrupted",
+      failureReason: "loop guard interrupted repeated read_file calls",
+    });
+  });
+
+  it("runs the normal path without runtime hooks", async () => {
+    mockSpawn.mockImplementation(() => {
+      const proc = new EventEmitter() as EventEmitter & {
+        stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      proc.stdin = { write: vi.fn(), end: vi.fn() };
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        proc.stdout.emit("data", Buffer.from([
+          JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "normal" } }),
+          JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1, output_tokens: 2 } }),
+        ].join("\n")));
+        proc.emit("close", 0);
+      });
+      return proc;
+    });
+
+    const result = await new CodexAdapter().execute(makeCtx());
+
+    expect(result.success).toBe(true);
+    expect(result.output).toBe("normal");
   });
 
   it("uses codex exec resume when sending a rework message to an existing thread", async () => {

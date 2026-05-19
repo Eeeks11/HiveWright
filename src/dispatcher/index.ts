@@ -52,6 +52,7 @@ import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
 import type { Adapter } from "../adapters/types";
+import { createDefaultRuntimeGuardPipeline, type RuntimeGuardDecision } from "../execution-guards";
 import {
   buildCodexEmptyOutputDiagnostic,
   collectCodexAgentTexts,
@@ -79,6 +80,8 @@ import { buildSessionContextProvenance, writeTaskContextProvenanceLog } from "..
 import { runInsightCurator } from "../insights/curator";
 import { emitTaskEvent } from "./event-emitter";
 import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
+import { ensureRuntimeGuardDecision } from "../decisions/runtime-guard";
+import { failTaskWithRuntimeReplan } from "./runtime-replan";
 import { sendNotification } from "../notifications/sender";
 import { pruneStaleGoalSupervisors } from "../openclaw/goal-supervisor-cleanup";
 import { buildGoalCreatedNotificationMessage } from "./goal-notification";
@@ -880,6 +883,47 @@ export class Dispatcher {
           }
         } catch { /* ignore — streaming is best-effort */ }
       };
+      const recordRuntimeGuardDecision = async (decision: RuntimeGuardDecision) => {
+        if (decision.action === "none") return;
+        const diagnostic = {
+          kind: "runtime_loop_guard",
+          action: decision.action,
+          reason: decision.reason,
+          guard: decision.guard,
+          metadata: decision.metadata ?? {},
+          event: decision.event?.type === "tool_call"
+            ? {
+                type: decision.event.type,
+                adapter: decision.event.adapter,
+                toolName: decision.event.toolName,
+                callId: decision.event.callId ?? null,
+                source: decision.event.source,
+              }
+            : decision.event,
+        };
+        const chunk = JSON.stringify(diagnostic);
+        try {
+          await writeTaskLog(this.sql, {
+            taskId: task.id,
+            goalId,
+            chunk,
+            type: "diagnostic",
+          });
+          if (executionRun) {
+            await recordExecutionRunOutput(this.sql, {
+              runId: executionRun.id,
+              hiveId: task.hiveId,
+              taskId: task.id,
+              type: "diagnostic",
+              text: chunk,
+              payload: diagnostic,
+            });
+          }
+        } catch { /* ignore — diagnostics are best-effort */ }
+      };
+      const runtimeGuardPipeline = createDefaultRuntimeGuardPipeline({
+        onDecision: recordRuntimeGuardDecision,
+      });
 
       const supportsPersistentSessions = adapterSupports(adapterType, "persistentSessions");
       const sendPersistentMessage = supportsPersistentSessions && adapter.sendMessage
@@ -915,9 +959,9 @@ export class Dispatcher {
             acceptanceCriteria: task.acceptanceCriteria,
             feedback: reusableCapsule.lastQaFeedback,
           });
-          result = await sendPersistentMessage(reusableCapsule.sessionId, reworkPrompt, ctx, onChunk);
+          result = await sendPersistentMessage(reusableCapsule.sessionId, reworkPrompt, ctx, onChunk, runtimeGuardPipeline.hooks());
         } else {
-          result = await adapter.execute(ctx, onChunk);
+          result = await adapter.execute(ctx, onChunk, runtimeGuardPipeline.hooks());
         }
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
@@ -1062,10 +1106,15 @@ export class Dispatcher {
       }
 
       if (executionRun) {
+        const executionRunStatus = result.success
+          ? "succeeded"
+          : result.failureKind === "guard_interrupted"
+            ? "interrupted"
+            : "failed";
         await finishExecutionRun(this.sql, {
           runId: executionRun.id,
           hiveId: executionRun.hiveId,
-          status: result.success ? "succeeded" : "failed",
+          status: executionRunStatus,
           finalizationResult: result.success ? "adapter_succeeded" : (result.failureKind ?? "adapter_reported_failure"),
           errorMessage: result.success ? null : (result.failureReason || "Unknown failure"),
           exitCode: parseExitCode(result.failureReason),
@@ -1082,6 +1131,19 @@ export class Dispatcher {
 
       // 7. Handle failure
       if (!result.success) {
+        if (result.failureKind === "guard_interrupted") {
+          const reason = result.failureReason || "Runtime guard interrupted task.";
+          console.log(`[dispatcher] Task ${task.id} interrupted by runtime guard: ${reason}`);
+          if (task.goalId) {
+            await failTaskWithRuntimeReplan(this.sql, task.id, reason);
+          } else {
+            await ensureRuntimeGuardDecision(this.sql, task.id, reason);
+          }
+          try {
+            await emitTaskEvent(this.sql, { type: "task_failed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId });
+          } catch { /* ignore event emission errors */ }
+          return;
+        }
         console.log(`[dispatcher] Task ${task.id} failed: ${result.failureReason}`);
         const failureCategory = result.failureKind === "execution_slice_exceeded"
           ? FailureCategory.ExecutionSliceExceeded

@@ -49,10 +49,14 @@ function makeSqlMock(queueRows: Record<string, unknown>[]) {
       if (head.includes("select") && head.includes("from schedules")) {
         return Promise.resolve(queueRows);
       }
+      if (head.includes("insert into tasks")) {
+        return Promise.resolve([{ id: "task-id-1" }]);
+      }
       return Promise.resolve([]);
     }
     return Promise.resolve([]);
   });
+  (fn as typeof fn & { json: (value: unknown) => unknown }).json = (value: unknown) => value;
 
   return { sql: fn as unknown as Sql, calls, fn };
 }

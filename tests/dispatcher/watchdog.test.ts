@@ -280,6 +280,23 @@ describe("findStuckBlockedTasks", () => {
     expect(found.some((t) => t.title === "wd-blocked-with-repair")).toBe(false);
   });
 
+  it("does not flag blocked tasks with an open runtime_guard decision", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at)
+      VALUES (${bizId}, 'dev-agent', 'owner', 'wd-runtime-guard-decision', 'Brief', 'blocked',
+              'Runtime guard interrupted repeated read_file calls',
+              NOW() - INTERVAL '6 hours')
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO decisions (hive_id, task_id, title, context, recommendation, priority, status, kind)
+      VALUES (${bizId}, ${task.id}, 'Runtime guard review', 'context', 'review', 'urgent', 'ea_review', 'runtime_guard')
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-runtime-guard-decision")).toBe(false);
+  });
+
   it("does not flag a recently-blocked task", async () => {
     await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, updated_at)

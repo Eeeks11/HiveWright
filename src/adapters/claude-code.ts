@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import type { Adapter, AdapterProbeCredential, AdapterResult, ChunkCallback, ProbeResult, SessionContext } from "./types";
+import type { Adapter, AdapterProbeCredential, AdapterResult, AdapterRuntimeHooks, ChunkCallback, ProbeResult, SessionContext } from "./types";
 import { StreamJsonChunker } from "./claude-stream-parser";
 import { resolveMcps, buildClaudeMcpConfig } from "../tools/mcp-catalog";
 import { healthyProbeResult, probeResultFromBoundaryError } from "./probe-classifier";
@@ -105,7 +105,12 @@ export class ClaudeCodeAdapter implements Adapter {
         args.push("--mcp-config", JSON.stringify({ mcpServers: {} }));
         args.push("--strict-mcp-config");
       }
-      if (ctx.toolsConfig.allowedTools && ctx.toolsConfig.allowedTools.length > 0) {
+      if (ctx.toolsConfig.allowedTools) {
+        if (ctx.toolsConfig.allowedTools.length === 0) {
+          throw new Error(
+            "Claude Code allowedTools was explicitly narrowed to zero tools; refusing to fail open to default built-in permissions.",
+          );
+        }
         const invalidAllowedTool = ctx.toolsConfig.allowedTools.find((tool) => tool.trim().toLowerCase() === "skill");
         if (invalidAllowedTool) {
           throw new Error(
@@ -119,7 +124,7 @@ export class ClaudeCodeAdapter implements Adapter {
     return args;
   }
 
-  async execute(ctx: SessionContext, onChunk?: ChunkCallback): Promise<AdapterResult> {
+  async execute(ctx: SessionContext, onChunk?: ChunkCallback, hooks?: AdapterRuntimeHooks): Promise<AdapterResult> {
     const prompt = this.translate(ctx);
     const args = this.buildCommand(ctx);
     const workspace = resolveClaudeCodeWorkspace(ctx);
@@ -154,6 +159,35 @@ export class ClaudeCodeAdapter implements Adapter {
       let rawStdout = "";
       let stderr = "";
       const chunkPromises: Promise<void>[] = [];
+      let guardInterrupted = false;
+      let guardInterruptReason: string | null = null;
+      let guardKillTimer: NodeJS.Timeout | null = null;
+
+      const interruptIfRequested = () => {
+        if (guardInterrupted || !hooks?.shouldInterrupt?.()) return;
+        guardInterrupted = true;
+        guardInterruptReason = hooks.interruptReason?.() ?? "Runtime guard interrupted execution.";
+        try {
+          proc.kill("SIGTERM");
+          guardKillTimer = setTimeout(() => {
+            if (proc.exitCode === null) {
+              try { proc.kill("SIGKILL"); } catch { /* process may already be closed */ }
+            }
+          }, 5_000);
+          guardKillTimer.unref?.();
+        } catch { /* process may already be closed */ }
+      };
+
+      const handleRuntimeEvents = (events: ReturnType<StreamJsonChunker["feed"]>["runtimeEvents"]) => {
+        if (!hooks || events.length === 0) return;
+        chunkPromises.push((async () => {
+          for (const event of events) {
+            await hooks.onRuntimeEvent?.(event);
+            interruptIfRequested();
+            if (guardInterrupted) return;
+          }
+        })().catch(() => {}));
+      };
 
       // Use streaming TextDecoder to handle multi-byte UTF-8 codepoints
       // that may straddle data event boundaries
@@ -162,7 +196,8 @@ export class ClaudeCodeAdapter implements Adapter {
       proc.stdout.on("data", (data: Buffer) => {
         const text = decoder.decode(data, { stream: true });
         rawStdout += text;
-        const { texts } = chunker.feed(text);
+        const { texts, runtimeEvents } = chunker.feed(text);
+        handleRuntimeEvents(runtimeEvents);
         if (onChunk && texts.length > 0) {
           for (const t of texts) {
             chunkPromises.push(onChunk({ text: t, type: "stdout" }).catch(() => {}));
@@ -180,12 +215,14 @@ export class ClaudeCodeAdapter implements Adapter {
       });
 
       proc.on("close", async (code) => {
+        if (guardKillTimer) clearTimeout(guardKillTimer);
         // Flush any final bytes still buffered in the streaming decoder
         // (multi-byte UTF-8 codepoint at the very end of the stream).
         const finalText = decoder.decode();
         if (finalText) {
           rawStdout += finalText;
-          const { texts } = chunker.feed(finalText);
+          const { texts, runtimeEvents } = chunker.feed(finalText);
+          handleRuntimeEvents(runtimeEvents);
           if (onChunk && texts.length > 0) {
             for (const t of texts) {
               chunkPromises.push(onChunk({ text: t, type: "stdout" }).catch(() => {}));
@@ -195,6 +232,7 @@ export class ClaudeCodeAdapter implements Adapter {
         // Drain any unterminated final line. flush() also returns the
         // captured result envelope, if any was seen during streaming.
         const tail = chunker.flush();
+        handleRuntimeEvents(tail.runtimeEvents);
         if (onChunk && tail.texts.length > 0) {
           for (const t of tail.texts) {
             chunkPromises.push(onChunk({ text: t, type: "stdout" }).catch(() => {}));
@@ -203,6 +241,16 @@ export class ClaudeCodeAdapter implements Adapter {
         await Promise.allSettled(chunkPromises);
 
         const result = tail.result;
+
+        if (guardInterrupted) {
+          resolve({
+            success: false,
+            output: stderr || rawStdout,
+            failureReason: guardInterruptReason ?? "Runtime guard interrupted execution.",
+            failureKind: "guard_interrupted",
+          });
+          return;
+        }
 
         if (code !== 0) {
           // SIGTERM timeout: same handling as before.
@@ -273,8 +321,10 @@ export class ClaudeCodeAdapter implements Adapter {
         resolve({
           success: false,
           output: "",
-          failureReason: `Spawn error: ${err.message}`,
-          failureKind: "spawn_error",
+          failureReason: guardInterrupted
+            ? (guardInterruptReason ?? "Runtime guard interrupted execution.")
+            : `Spawn error: ${err.message}`,
+          failureKind: guardInterrupted ? "guard_interrupted" : "spawn_error",
         });
       });
     });

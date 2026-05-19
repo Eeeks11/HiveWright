@@ -244,6 +244,11 @@ describe("ClaudeCodeAdapter", () => {
       expect(args[tIdx + 1]).toBe("Bash,Read");
     });
 
+    it("rejects empty toolsConfig.allowedTools instead of failing open", () => {
+      const ctx = makeCtx({ toolsConfig: { allowedTools: [] } });
+      expect(() => adapter.buildCommand(ctx)).toThrow(/zero tools/i);
+    });
+
     it("rejects legacy Skill entries in toolsConfig.allowedTools", () => {
       const ctx = makeCtx({ toolsConfig: { allowedTools: ["Bash", "Skill"] } });
       expect(() => adapter.buildCommand(ctx)).toThrow(/skills:\s*\[\.\.\.\]/i);
@@ -403,6 +408,63 @@ describe("ClaudeCodeAdapter", () => {
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       expect(mockSpawn.mock.calls[0][2].cwd).toBe("/repo/base");
       expect(ctx.worktreeContext?.baseWorkspace).toBe("/repo/base");
+    });
+
+    it("returns guard_interrupted when runtime hooks request interruption", async () => {
+      const kill = vi.fn();
+      mockSpawn.mockImplementation(() => {
+        const proc = new EventEmitter() as EventEmitter & {
+          stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+          stdout: EventEmitter;
+          stderr: EventEmitter;
+          kill: ReturnType<typeof vi.fn>;
+        };
+        proc.stdin = { write: vi.fn(), end: vi.fn() };
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.kill = kill;
+        queueMicrotask(() => {
+          proc.stdout.emit("data", Buffer.from(JSON.stringify({
+            type: "stream_event",
+            event: {
+              type: "content_block_start",
+              content_block: {
+                type: "tool_use",
+                id: "toolu_guard",
+                name: "Read",
+                input: { file_path: "src/app.ts" },
+              },
+            },
+          }) + "\n"));
+          proc.emit("close", 143);
+        });
+        return proc;
+      });
+
+      let interrupted = false;
+      const result = await adapter.execute(makeCtx(), undefined, {
+        onRuntimeEvent: () => {
+          interrupted = true;
+        },
+        shouldInterrupt: () => interrupted,
+        interruptReason: () => "loop guard interrupted repeated Read calls",
+      });
+
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+      expect(result).toMatchObject({
+        success: false,
+        failureKind: "guard_interrupted",
+        failureReason: "loop guard interrupted repeated Read calls",
+      });
+    });
+
+    it("runs the normal path without runtime hooks", async () => {
+      mockSuccessfulSpawn();
+
+      const result = await adapter.execute(makeCtx());
+
+      expect(result.success).toBe(true);
+      expect(result.failureKind).toBeUndefined();
     });
   });
 

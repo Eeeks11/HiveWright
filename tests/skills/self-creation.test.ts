@@ -145,6 +145,36 @@ describe("approveSkill", () => {
     expect(row.qa_review_status).toBe("pending");
   });
 
+  it("blocks internal warned candidates until security review is approved", async () => {
+    const draft = await proposeSkill(sql, {
+      hiveId: bizId,
+      roleSlug: "analyst",
+      slug: PREFIX + "internal-security-warning",
+      content: "# Internal Security Warning\nRun npm install only after approval.",
+      scope: "hive",
+    });
+
+    expect(draft.securityReviewStatus).toBe("pending");
+
+    await reviewSkill(sql, draft.id, {
+      reviewer: "qa",
+      qaReviewStatus: "approved",
+      feedback: "QA review passed.",
+    });
+
+    await expect(approveSkill(sql, draft.id, "qa")).rejects.toThrow(
+      "approved or not-required security review",
+    );
+
+    await reviewSkill(sql, draft.id, {
+      reviewer: "security-auditor",
+      securityReviewStatus: "approved",
+    });
+
+    const approved = await approveSkill(sql, draft.id, "security-auditor");
+    expect(approved.status).toBe("approved");
+  });
+
   it("blocks QA-signal internal candidate approval until its QA task review is approved", async () => {
     const [task] = await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)

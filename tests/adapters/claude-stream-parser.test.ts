@@ -8,6 +8,51 @@ describe("parseStreamJsonLine", () => {
     expect(result).toEqual({ kind: "text", text: "Hello" });
   });
 
+  it("returns runtime event for structured tool_use content blocks", () => {
+    const line = JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 1,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_1",
+          name: "Read",
+          input: { file_path: "src/app.ts" },
+        },
+      },
+      session_id: "s",
+      uuid: "u",
+    });
+
+    const result = parseStreamJsonLine(line);
+
+    expect(result).toMatchObject({
+      kind: "runtime_event",
+      event: {
+        type: "tool_call",
+        adapter: "claude-code",
+        toolName: "Read",
+        args: { file_path: "src/app.ts" },
+        callId: "toolu_1",
+        source: "structured_stream",
+      },
+    });
+  });
+
+  it("does not emit runtime events for prose that mentions tool use", () => {
+    const line = JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "I will use Read on src/app.ts." },
+      },
+    });
+
+    expect(parseStreamJsonLine(line)).toEqual({ kind: "text", text: "I will use Read on src/app.ts." });
+  });
+
   it("ignores thinking_delta events (internal, not user-visible)", () => {
     const line = `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning..."}},"session_id":"s","uuid":"u"}`;
     expect(parseStreamJsonLine(line)).toEqual({ kind: "ignore" });
@@ -90,7 +135,97 @@ describe("StreamJsonChunker", () => {
       `{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" world"}},"session_id":"s","uuid":"u"}\n`
     );
     expect(out.texts).toEqual(["Hello", " world"]);
+    expect(out.runtimeEvents).toEqual([]);
     expect(out.result).toBeNull();
+  });
+
+  it("emits runtime events from complete lines", () => {
+    const chunker = new StreamJsonChunker();
+    const out = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: {
+          type: "tool_use",
+          id: "toolu_2",
+          name: "Bash",
+          input: { command: "npm test" },
+        },
+      },
+    }) + "\n");
+
+    expect(out.texts).toEqual([]);
+    expect(out.runtimeEvents).toHaveLength(1);
+    expect(out.runtimeEvents[0]).toMatchObject({
+      type: "tool_call",
+      adapter: "claude-code",
+      toolName: "Bash",
+      args: { command: "npm test" },
+    });
+  });
+
+  it("emits a tool call only after streamed input_json_delta is complete", () => {
+    const chunker = new StreamJsonChunker();
+    const start = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 2,
+        content_block: { type: "tool_use", id: "toolu_delta", name: "Read", input: {} },
+      },
+    }) + "\n");
+    expect(start.runtimeEvents).toEqual([]);
+
+    const delta = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 2,
+        delta: { type: "input_json_delta", partial_json: "{\"file_path\":\"src/app.ts\"}" },
+      },
+    }) + "\n");
+    expect(delta.runtimeEvents).toEqual([]);
+
+    const stop = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_stop", index: 2 },
+    }) + "\n");
+
+    expect(stop.runtimeEvents).toHaveLength(1);
+    expect(stop.runtimeEvents[0]).toMatchObject({
+      type: "tool_call",
+      adapter: "claude-code",
+      toolName: "Read",
+      args: { file_path: "src/app.ts" },
+      callId: "toolu_delta",
+    });
+  });
+
+  it("emits no-argument tool calls on content_block_stop", () => {
+    const chunker = new StreamJsonChunker();
+    const start = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 3,
+        content_block: { type: "tool_use", id: "toolu_empty", name: "ListMcpResourcesTool", input: {} },
+      },
+    }) + "\n");
+    expect(start.runtimeEvents).toEqual([]);
+
+    const stop = chunker.feed(JSON.stringify({
+      type: "stream_event",
+      event: { type: "content_block_stop", index: 3 },
+    }) + "\n");
+
+    expect(stop.runtimeEvents).toHaveLength(1);
+    expect(stop.runtimeEvents[0]).toMatchObject({
+      type: "tool_call",
+      adapter: "claude-code",
+      toolName: "ListMcpResourcesTool",
+      args: {},
+      callId: "toolu_empty",
+    });
   });
 
   it("buffers partial lines across feed() calls", () => {

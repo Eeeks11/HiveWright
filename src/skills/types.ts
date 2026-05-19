@@ -1,8 +1,21 @@
+export interface SkillMetadata {
+  allowedTools?: string[] | null;
+}
+
 export interface LoadedSkill {
   slug: string;
   content: string;
+  metadata?: SkillMetadata;
   /** "system" = from skills-library/, "hive" = from hive skills dir */
   tier: "system" | "hive";
+}
+
+export interface ResolvedSkill {
+  slug: string;
+  content: string;
+  metadata?: SkillMetadata;
+  tier: "system" | "hive";
+  rendered: string;
 }
 
 export interface SkillDraft {
