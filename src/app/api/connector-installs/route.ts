@@ -2,7 +2,7 @@ import { sql } from "../_lib/db";
 import { jsonError, jsonOk } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
 import { storeCredential } from "@/credentials/manager";
-import { getConnectorDefinition, type ConnectorScopeDeclaration } from "@/connectors/registry";
+import { getConnectorDefinitionForHive, type ConnectorScopeDeclaration } from "@/connectors/registry";
 import { canAccessHive, canMutateHive } from "@/auth/users";
 
 export async function GET(request: Request) {
@@ -70,8 +70,8 @@ export async function POST(request: Request) {
       if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
     }
 
-    const def = getConnectorDefinition(connectorSlug);
-    if (!def) return jsonError(`unknown connector: ${connectorSlug}`, 400);
+    const def = await getConnectorDefinitionForHive(sql, hiveId, connectorSlug);
+    if (!def) return jsonError(`unknown or disabled connector for hive: ${connectorSlug}`, 400);
 
     const requestedScopes: unknown[] = Array.isArray(body.grantedScopes) ? body.grantedScopes : [];
     if (!requestedScopes.every((scope) => typeof scope === "string")) {

@@ -96,6 +96,33 @@ describe("quality doctor triggers", () => {
     expect(doctorTaskId).toBeTruthy();
   });
 
+  it("does not create a quality-doctor task for internal diagnostic work", async () => {
+    const taskId = await seedCompletedTask("Quality diagnosis: Hive supervisor heartbeat");
+    await sql`
+      UPDATE tasks
+      SET assigned_to = 'doctor',
+          created_by = 'quality-doctor'
+      WHERE id = ${taskId}
+    `;
+
+    const doctorTaskId = await maybeCreateQualityDoctorForSignal(sql, taskId, {
+      source: "implicit_ea",
+      signalType: "negative",
+      evidence: "diagnostic output was low quality",
+      confidence: 0.9,
+    });
+
+    expect(doctorTaskId).toBeNull();
+    const [count] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count
+      FROM tasks
+      WHERE parent_task_id = ${taskId}
+        AND assigned_to = 'doctor'
+        AND created_by = 'quality-doctor'
+    `;
+    expect(count.count).toBe(0);
+  });
+
   it("reuses an active quality-doctor task instead of creating a duplicate", async () => {
     const taskId = await seedCompletedTask();
     const firstDoctorTaskId = await maybeCreateQualityDoctorForSignal(sql, taskId, {

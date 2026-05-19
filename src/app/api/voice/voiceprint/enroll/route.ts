@@ -37,6 +37,13 @@ import { loadVoiceServicesUrl } from "@/lib/voice-services-url";
 const MAX_SAMPLE_BYTES = 10 * 1024 * 1024;
 const EMBEDDING_DIM = 192;
 
+async function ownerVoiceprintsAvailable(): Promise<boolean> {
+  const [row] = await sql<{ exists: string | null }[]>`
+    SELECT to_regclass('public.owner_voiceprints')::text AS exists
+  `;
+  return row?.exists !== null;
+}
+
 export async function POST(req: Request): Promise<NextResponse> {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
@@ -66,6 +73,13 @@ export async function POST(req: Request): Promise<NextResponse> {
         { status: 403 },
       );
     }
+  }
+
+  if (!(await ownerVoiceprintsAvailable())) {
+    return NextResponse.json(
+      { error: "voiceprint enrollment unavailable: pgvector/owner_voiceprints is not installed for this database" },
+      { status: 503 },
+    );
   }
 
   const audioBuf = Buffer.from(await sample.arrayBuffer());

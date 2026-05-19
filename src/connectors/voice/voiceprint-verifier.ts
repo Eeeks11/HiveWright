@@ -1,4 +1,5 @@
 import { desc, eq } from "drizzle-orm";
+import { sql } from "@/app/api/_lib/db";
 import { db } from "@/db";
 import { ownerVoiceprints } from "@/db/schema/voice-sessions";
 
@@ -73,6 +74,13 @@ export class VoiceprintVerifier {
     if (this.enrolledLoaded) return;
     this.enrolledLoaded = true;
     try {
+      const [availability] = await sql<{ exists: string | null }[]>`
+        SELECT to_regclass('public.owner_voiceprints')::text AS exists
+      `;
+      if (availability?.exists === null) {
+        return;
+      }
+
       const [row] = await db
         .select({ embedding: ownerVoiceprints.embedding })
         .from(ownerVoiceprints)

@@ -20,13 +20,21 @@ async function main() {
     } catch (err: unknown) {
       const code = (err as { code?: string } | null)?.code;
       const msg = err instanceof Error ? err.message : String(err);
-      if (code === "42501" || msg.includes("permission denied") || msg.includes("superuser")) {
+      if (
+        code === "42501" ||
+        msg.includes("permission denied") ||
+        msg.includes("superuser")
+      ) {
         throw new Error(
           `[migrate-app-db] cannot install pgvector: ${msg}\n` +
           "Install the extension with a superuser and re-run this script.",
         );
       }
-      throw err;
+      if (code === "0A000" || msg.includes("extension \"vector\" is not available")) {
+        console.log("[migrate-app-db] pgvector unavailable; vector-backed optional tables will be skipped");
+      } else {
+        throw err;
+      }
     }
 
     const db = drizzle(sql);

@@ -18,4 +18,4 @@ set +a
 
 export PATH="$PWD/node_modules/.bin:$PATH"
 
-exec "$@"
+exec tsx scripts/with-managed-postgres.ts "$@"

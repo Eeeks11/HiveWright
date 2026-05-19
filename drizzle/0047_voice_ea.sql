@@ -36,15 +36,22 @@ CREATE TABLE IF NOT EXISTS "voice_session_events" (
 CREATE INDEX IF NOT EXISTS "voice_session_events_session_at_idx"
   ON "voice_session_events" ("session_id", "at");
 
-CREATE TABLE IF NOT EXISTS "owner_voiceprints" (
-  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-  "hive_id" uuid NOT NULL,
-  "embedding" vector(192) NOT NULL,
-  "enrolled_at" timestamp NOT NULL DEFAULT now(),
-  "last_verified_at" timestamp,
-  CONSTRAINT "owner_voiceprints_hive_id_fkey"
-    FOREIGN KEY ("hive_id") REFERENCES "hives"("id") ON DELETE CASCADE
-);
+DO $$
+BEGIN
+  IF to_regtype('vector') IS NOT NULL THEN
+    CREATE TABLE IF NOT EXISTS "owner_voiceprints" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+      "hive_id" uuid NOT NULL,
+      "embedding" vector(192) NOT NULL,
+      "enrolled_at" timestamp NOT NULL DEFAULT now(),
+      "last_verified_at" timestamp,
+      CONSTRAINT "owner_voiceprints_hive_id_fkey"
+        FOREIGN KEY ("hive_id") REFERENCES "hives"("id") ON DELETE CASCADE
+    );
 
-CREATE INDEX IF NOT EXISTS "owner_voiceprints_hive_idx"
-  ON "owner_voiceprints" ("hive_id");
+    CREATE INDEX IF NOT EXISTS "owner_voiceprints_hive_idx"
+      ON "owner_voiceprints" ("hive_id");
+  ELSE
+    RAISE NOTICE 'pgvector is unavailable; skipping optional owner_voiceprints table';
+  END IF;
+END $$;

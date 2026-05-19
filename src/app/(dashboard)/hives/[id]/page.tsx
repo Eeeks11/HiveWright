@@ -47,6 +47,8 @@ export default function HiveDetailPage() {
   const [changesSaveState, setChangesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [referenceTitle, setReferenceTitle] = useState("");
   const [budgetSaveState, setBudgetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [exportState, setExportState] = useState<"idle" | "exporting" | "exported" | "error">("idle");
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Load hive + targets. Called on mount and after any mutation.
@@ -166,6 +168,37 @@ export default function HiveDetailPage() {
       setContextPreview(body.data?.block ?? "");
     }
     setShowPreview(true);
+  };
+
+  const exportTemplate = async () => {
+    if (!hive) return;
+    setExportState("exporting");
+    setExportMessage(null);
+    try {
+      const res = await fetch(`/api/hives/${id}/portability/export`);
+      const text = await res.text();
+      const body = text ? JSON.parse(text) : null;
+      if (!res.ok) throw new Error(body?.error ?? `Export failed with ${res.status}`);
+      const pkg = body.data;
+      const blob = new Blob([`${JSON.stringify(pkg, null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${hive.slug || "hive"}-template.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setExportState("exported");
+      setExportMessage("Template downloaded. Credentials and runtime history were omitted.");
+      setTimeout(() => {
+        setExportState("idle");
+        setExportMessage(null);
+      }, 4000);
+    } catch (error) {
+      setExportState("error");
+      setExportMessage(error instanceof Error ? error.message : "Failed to export template");
+    }
   };
   const uploadReferenceDocument = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -294,6 +327,30 @@ export default function HiveDetailPage() {
         </div>
         <HiveSectionNav hiveId={id} />
       </div>
+
+      <section className="space-y-4 rounded-lg border border-amber-200/70 bg-amber-50/40 p-6 dark:border-amber-900/40 dark:bg-amber-950/10">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Hive portability</h2>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Export this hive as a reusable template for another business. Credentials, decisions, runs, memory, and work products are deliberately left out.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={exportTemplate}
+            disabled={exportState === "exporting"}
+            className="cursor-pointer rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-wait disabled:opacity-50"
+          >
+            {exportState === "exporting" ? "Exporting…" : "Export Template"}
+          </button>
+        </div>
+        {exportMessage && (
+          <p className={`text-sm ${exportState === "error" ? "text-red-600 dark:text-red-400" : "text-green-700 dark:text-green-300"}`}>
+            {exportMessage}
+          </p>
+        )}
+      </section>
 
       <section className="space-y-4 rounded-lg border p-6">
         <div>

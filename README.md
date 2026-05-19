@@ -26,9 +26,11 @@ If someone else is handling the machine for you, ask them to complete the comman
 npm install
 ```
 
-2. Create and fill in your `.env` file with the database and secret values this install needs.
+2. For local development, you can leave `DATABASE_URL` unset. HiveWright will start a managed native embedded PostgreSQL instance on first use, store its data under `~/.hivewright/postgres`, and run app migrations before `npm run dev` or `npm run dispatcher` starts. This preserves Postgres features such as `LISTEN`/`NOTIFY`, `jsonb`, and `gen_random_uuid`; if `pgvector` is not available in the embedded binary, only the optional vector-backed voiceprint table is skipped.
 
-3. Apply database migrations:
+   For production or an existing database, set `DATABASE_URL` in your shell or in `~/.hivewright/config/.env` / `~/.hivewright/secrets.env`; explicit `DATABASE_URL` always wins and the embedded database is not started.
+
+3. Apply database migrations manually when you want to migrate without starting the dashboard:
 
 ```bash
 npm run db:migrate:app

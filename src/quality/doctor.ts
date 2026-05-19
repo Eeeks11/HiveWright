@@ -119,15 +119,17 @@ export async function createQualityDoctorTask(
     hive_id: string;
     goal_id: string | null;
     assigned_to: string;
+    created_by: string;
     title: string;
     brief: string;
     result_summary: string | null;
   }[]>`
-    SELECT id, hive_id, goal_id, assigned_to, title, brief, result_summary
+    SELECT id, hive_id, goal_id, assigned_to, created_by, title, brief, result_summary
     FROM tasks
     WHERE id = ${taskId}
   `;
   if (!task) return null;
+  if (isInternalQualityControlTask(task)) return null;
 
   const [workProduct] = await sql<{ summary: string | null; content: string | null }[]>`
     SELECT summary, content
@@ -169,6 +171,27 @@ export async function createQualityDoctorTask(
     RETURNING id
   `;
   return row.id;
+}
+
+function isInternalQualityControlTask(task: {
+  assigned_to: string;
+  created_by: string;
+  title: string;
+}): boolean {
+  const title = task.title.trim().toLowerCase();
+  if (task.created_by === "quality-doctor" || task.created_by === "quality-feedback-sampler") {
+    return true;
+  }
+
+  const qualityRole = task.assigned_to === "doctor" ||
+    task.assigned_to === "qa" ||
+    task.assigned_to === "quality-reviewer";
+  if (!qualityRole) return false;
+
+  return title.startsWith("quality diagnosis:") ||
+    title.startsWith("ai peer quality review:") ||
+    title.startsWith("[qa] review:") ||
+    title.startsWith("[doctor] diagnose:");
 }
 
 export async function applyQualityDoctorDiagnosis(

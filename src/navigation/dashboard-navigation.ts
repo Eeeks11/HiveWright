@@ -80,6 +80,13 @@ export function buildDashboardNavigation({
       links: [],
     },
     {
+      id: "supervision",
+      label: "Supervision",
+      href: "/supervision",
+      isActive: (pathname) => pathname === "/supervision",
+      links: [],
+    },
+    {
       id: "work",
       label: "Work",
       links: [
@@ -175,7 +182,8 @@ export function buildDashboardNavigation({
       label: "Global",
       global: true,
       links: [
-        { id: "hives", href: "/hives", label: "Hives" },
+        { id: "hives", href: "/hives", label: "Hives", isActive: (pathname) => pathname === "/hives" || (pathname.startsWith("/hives/") && pathname !== "/hives/import") },
+        { id: "hive-template-import", href: "/hives/import", label: "Import hive template" },
         {
           id: "global-settings",
           href: "/settings",

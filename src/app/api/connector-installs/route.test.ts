@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
     canAccessHive: vi.fn(),
     canMutateHive: vi.fn(),
     storeCredential: vi.fn(),
-    getConnectorDefinition: vi.fn(),
+    getConnectorDefinitionForHive: vi.fn(),
   };
 });
 
@@ -30,7 +30,7 @@ vi.mock("@/credentials/manager", () => ({
 }));
 
 vi.mock("@/connectors/registry", () => ({
-  getConnectorDefinition: mocks.getConnectorDefinition,
+  getConnectorDefinitionForHive: mocks.getConnectorDefinitionForHive,
 }));
 
 import { GET, POST } from "./route";
@@ -120,7 +120,7 @@ describe("POST /api/connector-installs access control", () => {
     });
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.canMutateHive.mockResolvedValue(true);
-    mocks.getConnectorDefinition.mockReturnValue(connectorDefinition);
+    mocks.getConnectorDefinitionForHive.mockReturnValue(connectorDefinition);
     mocks.storeCredential.mockResolvedValue({ id: "cred-1" });
     mocks.sql.mockResolvedValue([{ id: "install-1" }]);
   });
@@ -141,7 +141,7 @@ describe("POST /api/connector-installs access control", () => {
 
     expect(res.status).toBe(403);
     expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
-    expect(mocks.getConnectorDefinition).not.toHaveBeenCalled();
+    expect(mocks.getConnectorDefinitionForHive).not.toHaveBeenCalled();
     expect(mocks.storeCredential).not.toHaveBeenCalled();
     expect(mocks.sql).not.toHaveBeenCalled();
   });

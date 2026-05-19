@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { canAccessHive, canMutateHive } from "@/auth/users";
-import { CONNECTOR_REGISTRY, toPublicConnector } from "@/connectors/registry";
+import { listConnectorDefinitionsForHive, toPublicConnector } from "@/connectors/registry";
 import { normalizeActionPolicyConditions } from "@/actions/policy-conditions";
 import { requireApiUser } from "../_lib/auth";
 import { sql } from "../_lib/db";
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     data: {
       hiveId,
       policies,
-      connectors: CONNECTOR_REGISTRY.map(toPublicConnector),
+      connectors: (await listConnectorDefinitionsForHive(sql, hiveId)).map(toPublicConnector),
     },
   });
 }

@@ -8,6 +8,7 @@ import {
   integer,
   bigserial,
   uniqueIndex,
+  boolean,
 } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 import { credentials } from "./credentials";
@@ -37,6 +38,22 @@ export const connectorInstalls = pgTable("connector_installs", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+export const hiveConnectorPlugins = pgTable(
+  "hive_connector_plugins",
+  {
+    hiveId: uuid("hive_id")
+      .references(() => hives.id, { onDelete: "cascade" })
+      .notNull(),
+    pluginSlug: varchar("plugin_slug", { length: 100 }).notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("hive_connector_plugins_hive_plugin_idx").on(table.hiveId, table.pluginSlug),
+  ],
+);
 
 export const connectorEvents = pgTable("connector_events", {
   id: bigserial("id", { mode: "number" }).primaryKey(),

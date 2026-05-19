@@ -806,6 +806,13 @@
       "when": 1778981400000,
       "tag": "0117_skill_curator_provenance_memory_dialectic",
       "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1778985000000,
+      "tag": "0118_hive_connector_plugins",
+      "breakpoints": true
     }
   ]
 }
