@@ -241,6 +241,23 @@ describe("<NavLinks>", () => {
     expect(screen.queryByRole("link", { name: "Models" })).toBeNull();
   });
 
+  it("lets the always-visible Global section collapse when clicked", () => {
+    vi.mocked(usePathname).mockReturnValue("/hives");
+    mockHiveContext();
+    mockBriefCount(0);
+
+    renderWithQueryClient(<NavLinks />);
+
+    const globalButton = screen.getByRole("button", { name: /Global/ });
+    expect(globalButton.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("link", { name: "Hives" })).toBeTruthy();
+
+    fireEvent.click(globalButton);
+
+    expect(globalButton.getAttribute("aria-expanded")).not.toBe("true");
+    expect(screen.queryByRole("link", { name: "Hives" })).toBeNull();
+  });
+
   it("shows a pending count badge for Quality feedback when ratings are waiting", async () => {
     vi.mocked(usePathname).mockReturnValue("/tasks");
     mockHiveContext();

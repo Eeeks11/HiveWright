@@ -42,6 +42,9 @@ export function NavLinks({ onClose }: { onClose?: () => void }) {
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(
     () => new Set<string>(),
   );
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<string>>(
+    () => new Set<string>(),
+  );
 
   const navItemClassName = (isActive: boolean, indented = false) =>
     `flex w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:ring-ring/45 ${
@@ -78,13 +81,22 @@ export function NavLinks({ onClose }: { onClose?: () => void }) {
     );
   };
 
-  const toggleGroup = (groupId: string) => {
+  const toggleGroup = (groupId: string, isExpanded: boolean) => {
     setExpandedGroupIds((current) => {
       const next = new Set(current);
-      if (next.has(groupId)) {
+      if (isExpanded) {
         next.delete(groupId);
       } else {
         next.add(groupId);
+      }
+      return next;
+    });
+    setCollapsedGroupIds((current) => {
+      const next = new Set(current);
+      if (isExpanded) {
+        next.add(groupId);
+      } else {
+        next.delete(groupId);
       }
       return next;
     });
@@ -99,7 +111,7 @@ export function NavLinks({ onClose }: { onClose?: () => void }) {
         type="button"
         aria-expanded={isExpanded}
         aria-controls={childrenId}
-        onClick={() => toggleGroup(group.id)}
+        onClick={() => toggleGroup(group.id, isExpanded)}
         className={navItemClassName(isActive)}
       >
         <span className="min-w-0 truncate">{group.label}</span>
@@ -123,7 +135,9 @@ export function NavLinks({ onClose }: { onClose?: () => void }) {
           const isActiveGroup = dashboardNavigationGroupIsActive(group, pathname);
           const hasChildren = group.links.length > 0;
           const isExpanded =
-            expandedGroupIds.has(group.id) || activeGroupIds.includes(group.id) || Boolean(group.global && hasChildren);
+            expandedGroupIds.has(group.id) ||
+            (!collapsedGroupIds.has(group.id) &&
+              (activeGroupIds.includes(group.id) || Boolean(group.global && hasChildren)));
           const childrenId = `dashboard-nav-${group.id}-items`;
           const topLevelIsLink = Boolean(group.href && !hasChildren);
 
