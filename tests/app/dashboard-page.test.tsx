@@ -111,6 +111,7 @@ describe("DashboardPage", () => {
     expect(screen.getAllByText("Ship mapped goal").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("dev-agent").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("Recent runs")).toBeNull();
+    expect(screen.getByRole("link", { name: /Open supervision/i })).toBeTruthy();
     // Supervisor findings panel renders (empty-state copy since mock returns []).
     expect(screen.getByText("Supervisor findings")).toBeTruthy();
     await waitFor(() =>

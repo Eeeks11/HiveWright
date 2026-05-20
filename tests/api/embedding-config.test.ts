@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { GET, POST } from "../../src/app/api/embedding-config/route";
+import { DELETE, GET, POST } from "../../src/app/api/embedding-config/route";
 import { resetEmbeddingConfigCache } from "../../src/memory/embedding-config";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -136,6 +136,104 @@ describe("GET /api/embedding-config", () => {
       latestMessage: "synthetic failure",
     });
     expect(body.data.recentErrors).toHaveLength(1);
+  });
+});
+
+describe("DELETE /api/embedding-config", () => {
+  it("stops an active re-embed run", async () => {
+    await sql`
+      INSERT INTO embedding_config (
+        provider,
+        model_name,
+        dimension,
+        api_credential_key,
+        endpoint_override,
+        status,
+        reembed_total,
+        reembed_processed,
+        updated_by
+      )
+      VALUES (
+        'ollama',
+        'nomic-embed-text-v2-moe:latest',
+        768,
+        null,
+        'http://192.0.2.1:11434',
+        'reembedding',
+        100,
+        12,
+        'test@local'
+      )
+    `;
+
+    const res = await DELETE(new Request("http://localhost/api/embedding-config", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "wrong endpoint" }),
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.stopped).toBe(true);
+    expect(body.data.config.status).toBe("error");
+    expect(body.data.config.lastError).toBe("wrong endpoint");
+
+    const [row] = await sql`
+      SELECT status, last_error
+      FROM embedding_config
+      LIMIT 1
+    `;
+    expect(row.status).toBe("error");
+    expect(row.last_error).toBe("wrong endpoint");
+  });
+
+  it("does not corrupt a completed embedding config when stop is requested", async () => {
+    await sql`
+      INSERT INTO embedding_config (
+        provider,
+        model_name,
+        dimension,
+        api_credential_key,
+        endpoint_override,
+        status,
+        reembed_total,
+        reembed_processed,
+        last_error,
+        updated_by
+      )
+      VALUES (
+        'ollama',
+        'nomic-embed-text-v2-moe:latest',
+        768,
+        null,
+        'http://192.0.2.1:11434',
+        'ready',
+        100,
+        100,
+        null,
+        'test@local'
+      )
+    `;
+
+    const res = await DELETE(new Request("http://localhost/api/embedding-config", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: "late click" }),
+    }));
+
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toMatch(/no active embedding re-embed/i);
+
+    const [row] = await sql`
+      SELECT status, last_error, reembed_processed, reembed_total
+      FROM embedding_config
+      LIMIT 1
+    `;
+    expect(row.status).toBe("ready");
+    expect(row.last_error).toBeNull();
+    expect(row.reembed_processed).toBe(100);
+    expect(row.reembed_total).toBe(100);
   });
 });
 

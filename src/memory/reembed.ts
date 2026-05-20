@@ -18,7 +18,7 @@ import {
   resetMemoryEmbeddingsForDimension,
 } from "./embeddings";
 
-const ACTIVE_REEMBEDS = new Set<string>();
+const ACTIVE_REEMBEDS = new Map<string, symbol>();
 const DEFAULT_BATCH_SIZE = 50;
 const TRANSIENT_EMBEDDING_MAX_ATTEMPTS = 3;
 const TRANSIENT_EMBEDDING_BACKOFF_MS = [250, 750] as const;
@@ -71,17 +71,61 @@ export interface RunReembedJobOptions {
   stopAfterRows?: number;
 }
 
+export async function cancelEmbeddingReembedRun(
+  sql: Sql,
+  options: { configId?: string; cancelledBy: string; reason?: string },
+): Promise<EmbeddingConfigRecord | null> {
+  const reason = (options.reason?.trim() || "Re-embed cancelled by owner.").slice(0, 1_000);
+  const [existing] = options.configId
+    ? await sql`
+        SELECT *
+        FROM embedding_config
+        WHERE id = ${options.configId}
+          AND status = 'reembedding'
+        LIMIT 1
+      `
+    : await sql`
+        SELECT *
+        FROM embedding_config
+        WHERE status = 'reembedding'
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+      `;
+
+  if (!existing) return null;
+
+  const [row] = await sql`
+    UPDATE embedding_config
+    SET
+      status = 'error',
+      reembed_finished_at = NOW(),
+      last_error = ${reason},
+      updated_at = NOW(),
+      updated_by = ${options.cancelledBy}
+    WHERE id = ${existing.id}
+      AND status = 'reembedding'
+    RETURNING *
+  `;
+  if (!row) return null;
+  ACTIVE_REEMBEDS.delete(String(existing.id));
+  resetEmbeddingConfigCache();
+  return mapConfigRow(row);
+}
+
 export function startEmbeddingReembedInBackground(
   options: { sql: Sql; configId: string; batchSize?: number },
 ): boolean {
   if (ACTIVE_REEMBEDS.has(options.configId)) return false;
-  ACTIVE_REEMBEDS.add(options.configId);
+  const activeMarker = Symbol(options.configId);
+  ACTIVE_REEMBEDS.set(options.configId, activeMarker);
   void runEmbeddingReembedJob(options)
     .catch((err) => {
       console.error("[reembed] background job failed:", err);
     })
     .finally(() => {
-      ACTIVE_REEMBEDS.delete(options.configId);
+      if (ACTIVE_REEMBEDS.get(options.configId) === activeMarker) {
+        ACTIVE_REEMBEDS.delete(options.configId);
+      }
     });
   return true;
 }
@@ -269,11 +313,13 @@ export async function runEmbeddingReembedJob(
       reason: "not-requested",
     };
   }
+  let runStartedAt = toRunStartedAtMs(config.reembedStartedAt);
 
   if (!(await checkPgvectorAvailable(sql))) {
-    await markConfigTerminalState(
+    const marked = await markConfigTerminalState(
       sql,
       config.id,
+      runStartedAt,
       "error",
       config.reembedProcessed,
       config.reembedTotal,
@@ -281,6 +327,14 @@ export async function runEmbeddingReembedJob(
       config.lastReembeddedId,
     );
     resetEmbeddingConfigCache();
+    if (!marked) {
+      return {
+        status: "interrupted",
+        processed: config.reembedProcessed,
+        total: config.reembedTotal,
+        reason: "cancelled-or-replaced",
+      };
+    }
     return {
       status: "error",
       processed: config.reembedProcessed,
@@ -291,24 +345,11 @@ export async function runEmbeddingReembedJob(
 
   await initializeEmbeddings(sql);
   const totalAtStart = await countMemoryEmbeddings(sql);
-  const freshRun = !config.lastReembeddedId && config.reembedProcessed === 0;
-  const failedAtStart = await countReembedFailures(sql, config.id);
-
-  if (freshRun) {
-    await resetMemoryEmbeddingsForDimension(sql, config.dimension);
-    await sql`DELETE FROM embedding_reembed_errors WHERE config_id = ${config.id}`;
-  }
 
   let cursor = config.lastReembeddedId;
   let processed = config.reembedProcessed;
 
-  if (!freshRun && failedAtStart > 0 && config.lastError == null) {
-    await sql`DELETE FROM embedding_reembed_errors WHERE config_id = ${config.id}`;
-    cursor = null;
-    processed = await countEmbeddedRows(sql);
-  }
-
-  await sql`
+  const [started] = await sql<{ id: string; run_started_at: string | Date | null }[]>`
     UPDATE embedding_config
     SET
       reembed_total = ${totalAtStart},
@@ -319,7 +360,44 @@ export async function runEmbeddingReembedJob(
       last_error = null,
       updated_at = NOW()
     WHERE id = ${config.id}
+      AND status = 'reembedding'
+      AND date_trunc('milliseconds', reembed_started_at) IS NOT DISTINCT FROM ${runStartedAt}
+    RETURNING id, date_trunc('milliseconds', reembed_started_at) AS run_started_at
   `;
+  if (!started) {
+    resetEmbeddingConfigCache();
+    return {
+      status: "interrupted",
+      processed,
+      total: totalAtStart,
+      reason: "cancelled-or-replaced",
+    };
+  }
+  runStartedAt = toRunStartedAtMs(started.run_started_at);
+
+  const freshRun = !config.lastReembeddedId && config.reembedProcessed === 0;
+  const failedAtStart = await countReembedFailures(sql, config.id);
+
+  if (await shouldStopReembed(sql, config.id, runStartedAt)) {
+    resetEmbeddingConfigCache();
+    return {
+      status: "interrupted",
+      processed,
+      total: totalAtStart,
+      reason: "cancelled-or-replaced",
+    };
+  }
+
+  if (freshRun) {
+    await resetMemoryEmbeddingsForDimension(sql, config.dimension);
+    await sql`DELETE FROM embedding_reembed_errors WHERE config_id = ${config.id}`;
+  }
+
+  if (!freshRun && failedAtStart > 0 && config.lastError == null) {
+    await sql`DELETE FROM embedding_reembed_errors WHERE config_id = ${config.id}`;
+    cursor = null;
+    processed = await countEmbeddedRows(sql);
+  }
 
   const modelConfig = buildModelConfig(config);
   let processedThisRun = 0;
@@ -329,6 +407,16 @@ export async function runEmbeddingReembedJob(
     if (rows.length === 0) break;
 
     for (const row of rows) {
+      if (await shouldStopReembed(sql, config.id, runStartedAt)) {
+        resetEmbeddingConfigCache();
+        return {
+          status: "interrupted",
+          processed,
+          total: totalAtStart,
+          reason: "cancelled-or-replaced",
+        };
+      }
+
       let rowError: string | null = null;
       let rowAttempts = 1;
 
@@ -341,6 +429,15 @@ export async function runEmbeddingReembedJob(
         });
         const embedding = result.embedding;
         rowAttempts = result.attempts;
+        if (await shouldStopReembed(sql, config.id, runStartedAt)) {
+          resetEmbeddingConfigCache();
+          return {
+            status: "interrupted",
+            processed,
+            total: totalAtStart,
+            reason: "cancelled-or-replaced",
+          };
+        }
         const vector = `[${embedding.join(",")}]`;
         await sql.unsafe(
           `UPDATE memory_embeddings SET embedding = $1::vector WHERE id = $2`,
@@ -361,7 +458,7 @@ export async function runEmbeddingReembedJob(
       processedThisRun += 1;
       cursor = row.id;
 
-      await sql`
+      const [progressRow] = await sql<{ id: string }[]>`
         UPDATE embedding_config
         SET
           last_reembedded_id = ${cursor},
@@ -370,7 +467,19 @@ export async function runEmbeddingReembedJob(
           last_error = ${rowError},
           updated_at = NOW()
         WHERE id = ${config.id}
+          AND status = 'reembedding'
+          AND date_trunc('milliseconds', reembed_started_at) IS NOT DISTINCT FROM ${runStartedAt}
+        RETURNING id
       `;
+      if (!progressRow) {
+        resetEmbeddingConfigCache();
+        return {
+          status: "interrupted",
+          processed,
+          total: totalAtStart,
+          reason: "cancelled-or-replaced",
+        };
+      }
 
       if (
         typeof options.stopAfterRows === "number" &&
@@ -388,12 +497,23 @@ export async function runEmbeddingReembedJob(
   }
 
   await ensureMemoryEmbeddingsVectorIndex(sql);
+  if (await shouldStopReembed(sql, config.id, runStartedAt)) {
+    resetEmbeddingConfigCache();
+    return {
+      status: "interrupted",
+      processed,
+      total: totalAtStart,
+      reason: "cancelled-or-replaced",
+    };
+  }
+
   const failed = await countReembedFailures(sql, config.id);
 
   if (failed > 0) {
-    await markConfigTerminalState(
+    const marked = await markConfigTerminalState(
       sql,
       config.id,
+      runStartedAt,
       "error",
       processed,
       totalAtStart,
@@ -401,6 +521,14 @@ export async function runEmbeddingReembedJob(
       cursor,
     );
     resetEmbeddingConfigCache();
+    if (!marked) {
+      return {
+        status: "interrupted",
+        processed,
+        total: totalAtStart,
+        reason: "cancelled-or-replaced",
+      };
+    }
     return {
       status: "error",
       processed,
@@ -409,8 +537,16 @@ export async function runEmbeddingReembedJob(
     };
   }
 
-  await markConfigTerminalState(sql, config.id, "ready", totalAtStart, totalAtStart, null, null);
+  const marked = await markConfigTerminalState(sql, config.id, runStartedAt, "ready", totalAtStart, totalAtStart, null, null);
   resetEmbeddingConfigCache();
+  if (!marked) {
+    return {
+      status: "interrupted",
+      processed,
+      total: totalAtStart,
+      reason: "cancelled-or-replaced",
+    };
+  }
   return { status: "ready", processed: totalAtStart, total: totalAtStart };
 }
 
@@ -543,6 +679,29 @@ async function countReembedFailures(sql: Sql, configId: string): Promise<number>
   return Number(row?.count ?? 0);
 }
 
+function toRunStartedAtMs(value: string | Date | null): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(Math.floor(date.getTime()));
+}
+
+async function shouldStopReembed(
+  sql: Sql,
+  configId: string,
+  runStartedAt: Date | null,
+): Promise<boolean> {
+  const [row] = await sql<{ id: string }[]>`
+    SELECT id
+    FROM embedding_config
+    WHERE id = ${configId}
+      AND status = 'reembedding'
+      AND date_trunc('milliseconds', reembed_started_at) IS NOT DISTINCT FROM ${runStartedAt}
+    LIMIT 1
+  `;
+  return !row;
+}
+
 async function fetchBatch(
   sql: Sql,
   configId: string,
@@ -640,13 +799,14 @@ async function recordRowFailure(
 async function markConfigTerminalState(
   sql: Sql,
   configId: string,
+  runStartedAt: Date | null,
   status: "ready" | "error",
   processed: number,
   total: number,
   errorMessage: string | null,
   cursor: string | null,
-): Promise<void> {
-  await sql`
+): Promise<boolean> {
+  const [row] = await sql<{ id: string }[]>`
     UPDATE embedding_config
     SET
       status = ${status},
@@ -657,7 +817,11 @@ async function markConfigTerminalState(
       last_error = ${errorMessage},
       updated_at = NOW()
     WHERE id = ${configId}
+      AND status = 'reembedding'
+      AND date_trunc('milliseconds', reembed_started_at) IS NOT DISTINCT FROM ${runStartedAt}
+    RETURNING id
   `;
+  return Boolean(row);
 }
 
 async function embedRowWithRetry(options: {

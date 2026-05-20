@@ -13,13 +13,16 @@ beforeEach(async () => {
   resetEmbeddingConfigCache();
   delete process.env.OLLAMA_ENDPOINT;
   delete process.env.OLLAMA_EMBEDDING_MODEL;
+  delete process.env.OLLAMA_EMBEDDING_TIMEOUT_MS;
 });
 
 afterEach(() => {
   delete process.env.OLLAMA_ENDPOINT;
   delete process.env.OLLAMA_EMBEDDING_MODEL;
+  delete process.env.OLLAMA_EMBEDDING_TIMEOUT_MS;
   resetEmbeddingConfigCache();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("callGenerationModel", () => {
@@ -102,6 +105,59 @@ describe("callEmbeddingModel", () => {
       fetchFn: mockFetch as unknown as typeof fetch,
     };
     await expect(callEmbeddingModel("test", config)).rejects.toThrow("Ollama embedding failed");
+  });
+
+  it("treats Ollama embedding timeouts as retryable transport failures", async () => {
+    const config: ModelCallerConfig = {
+      ollamaUrl: "http://localhost:11434",
+      generationModel: "mistral",
+      embeddingModel: "all-minilm",
+      fetchFn: vi.fn(async () => {
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      }) as unknown as typeof fetch,
+    };
+
+    await expect(callEmbeddingModel("test", config)).rejects.toBeInstanceOf(RetryableEmbeddingError);
+    await expect(callEmbeddingModel("test", config)).rejects.toThrow(
+      "Ollama embedding transport failed: The operation was aborted due to timeout",
+    );
+  });
+
+  it("treats Ollama embedding fetch failures as retryable transport failures", async () => {
+    const config: ModelCallerConfig = {
+      ollamaUrl: "http://localhost:11434",
+      generationModel: "mistral",
+      embeddingModel: "all-minilm",
+      fetchFn: vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch,
+    };
+
+    await expect(callEmbeddingModel("test", config)).rejects.toBeInstanceOf(RetryableEmbeddingError);
+    await expect(callEmbeddingModel("test", config)).rejects.toThrow(
+      "Ollama embedding transport failed: fetch failed",
+    );
+  });
+
+  it("uses a configurable Ollama embedding timeout", async () => {
+    process.env.OLLAMA_EMBEDDING_TIMEOUT_MS = "45000";
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const mockFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ embeddings: [[0.1, 0.2, 0.3]] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    const config: ModelCallerConfig = {
+      ollamaUrl: "http://localhost:11434",
+      generationModel: "mistral",
+      embeddingModel: "all-minilm",
+      fetchFn: mockFetch as unknown as typeof fetch,
+    };
+
+    await expect(callEmbeddingModel("test", config)).resolves.toEqual([0.1, 0.2, 0.3]);
+    expect(timeoutSpy).toHaveBeenCalledWith(45_000);
+    timeoutSpy.mockRestore();
   });
 
   it("loads the embedding runtime config from the database when no config is passed", async () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
 import { ActiveAgentGrid } from "@/components/active-agent-grid";
 import { ActiveSupervisorsPanel } from "@/components/active-supervisors-panel";
@@ -7,6 +8,7 @@ import { HiveCreationPauseButton } from "@/components/hive-creation-pause-button
 import { OperationsMap } from "@/components/operations-map";
 import { OwnerBrief } from "@/components/owner-brief";
 import { SupervisorFindingsPanel } from "@/components/supervisor-findings-panel";
+import { buttonVariants } from "@/components/ui/button";
 
 export default function DashboardPage() {
   const { selected, loading } = useHiveContext();
@@ -34,7 +36,12 @@ export default function DashboardPage() {
             Owner brief · refreshed every 30s
           </p>
         </div>
-        <HiveCreationPauseButton hiveId={selected.id} />
+        <div className="flex items-center gap-2">
+          <Link href="/supervision" className={buttonVariants({ size: "sm", variant: "outline" })}>
+            Open supervision
+          </Link>
+          <HiveCreationPauseButton hiveId={selected.id} />
+        </div>
       </div>
       <OperationsMap hiveId={selected.id} hiveName={selected.name} />
       <section>

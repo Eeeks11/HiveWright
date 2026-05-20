@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { NextResponse } from "next/server";
 
 export type HiveCreationPause = {
@@ -25,10 +25,12 @@ type RuntimeLockRow = {
   schedule_snapshot: unknown;
 };
 
+type QuerySql = Sql | TransactionSql;
+
 export const CREATION_PAUSE_ERROR = "Hive creation is paused";
 
 export async function getHiveCreationPause(
-  db: Sql,
+  db: QuerySql,
   hiveId: string,
 ): Promise<HiveCreationPause> {
   const [row] = await db<HiveCreationPauseRow[]>`
@@ -76,7 +78,7 @@ export async function getHiveCreationPause(
 }
 
 export async function assertHiveCreationAllowed(
-  db: Sql,
+  db: QuerySql,
   hiveId: string,
 ): Promise<HiveCreationPause | null> {
   const pause = await getHiveCreationPause(db, hiveId);

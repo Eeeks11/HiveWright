@@ -12,6 +12,7 @@ import {
   type EmbeddingProvider,
 } from "@/memory/embedding-config";
 import {
+  cancelEmbeddingReembedRun,
   saveEmbeddingConfigAndRequestReembed,
   startEmbeddingReembedInBackground,
 } from "@/memory/reembed";
@@ -114,6 +115,36 @@ export async function POST(request: Request) {
   } catch (err) {
     console.error("[embedding-config POST] failed:", err);
     return jsonError("Failed to save embedding config", 500);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const authz = await requireSystemOwner();
+  if ("response" in authz) return authz.response;
+
+  try {
+    const body = await request.json().catch(() => ({})) as { reason?: string; configId?: string };
+    const cancelled = await cancelEmbeddingReembedRun(sql, {
+      configId: normalizeNullableString(body.configId) ?? undefined,
+      cancelledBy: authz.user.email,
+      reason: body.reason,
+    });
+
+    if (!cancelled) {
+      return jsonError("No active embedding re-embed exists to stop", 404);
+    }
+
+    const { errorSummary, recentErrors } = await loadErrorState(cancelled.id);
+    return jsonOk({
+      config: serializeConfigPayload(cancelled, errorSummary),
+      catalog: getEmbeddingCatalog(),
+      errorSummary,
+      recentErrors,
+      stopped: true,
+    });
+  } catch (err) {
+    console.error("[embedding-config DELETE] failed:", err);
+    return jsonError("Failed to stop embedding re-embed", 500);
   }
 }
 

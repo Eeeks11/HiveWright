@@ -10,11 +10,14 @@ export interface ModelCallerConfig {
   embeddingModel: string;
   embeddingProvider?: EmbeddingProvider;
   embeddingDimension?: number;
+  embeddingTimeoutMs?: number;
   endpointOverride?: string | null;
   apiKey?: string | null;
   /** Injectable fetch for testing. Defaults to global fetch. */
   fetchFn?: typeof fetch;
 }
+
+const DEFAULT_OLLAMA_EMBEDDING_TIMEOUT_MS = 60_000;
 
 export class RetryableEmbeddingError extends Error {
   constructor(message: string) {
@@ -131,20 +134,43 @@ async function embedWithOllama(
   config: ModelCallerConfig,
   fetchFn: typeof fetch,
 ): Promise<number[]> {
-  const response = await fetchFn(`${config.ollamaUrl}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: config.embeddingModel,
-      input: text,
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
+  let response: Response;
+  try {
+    response = await fetchFn(`${config.ollamaUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: config.embeddingModel,
+        input: text,
+      }),
+      signal: AbortSignal.timeout(getOllamaEmbeddingTimeoutMs(config)),
+    });
+  } catch (error) {
+    throw toRetryableOllamaTransportError(error);
+  }
   if (!response.ok) {
     throw new Error(`Ollama embedding failed: ${response.status} ${response.statusText}`);
   }
   const data = await parseEmbeddingJson<{ embeddings?: unknown[][] }>(response, "Ollama");
   return validateEmbeddingVector(data.embeddings?.[0], "Ollama");
+}
+
+function getOllamaEmbeddingTimeoutMs(config: ModelCallerConfig): number {
+  if (Number.isFinite(config.embeddingTimeoutMs) && (config.embeddingTimeoutMs ?? 0) > 0) {
+    return Math.floor(config.embeddingTimeoutMs ?? DEFAULT_OLLAMA_EMBEDDING_TIMEOUT_MS);
+  }
+
+  const configured = Number(process.env.OLLAMA_EMBEDDING_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+
+  return DEFAULT_OLLAMA_EMBEDDING_TIMEOUT_MS;
+}
+
+function toRetryableOllamaTransportError(error: unknown): RetryableEmbeddingError {
+  const message = error instanceof Error ? error.message : String(error);
+  return new RetryableEmbeddingError(`Ollama embedding transport failed: ${message}`);
 }
 
 async function embedWithOpenAiCompatible(

@@ -79,6 +79,88 @@ describe("EmbeddingsSettingsPage", () => {
     expect((screen.getByRole("button", { name: /Re-embed running/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("lets the owner stop a stuck re-embed and save corrected settings", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push({ url, init });
+
+      if (url.includes("/api/embedding-config/local-setup")) {
+        return jsonResponse({ data: localSetupResponse({ reachable: false, modelInstalled: false, embeddingTestOk: false }) });
+      }
+      if (url.includes("/api/embedding-config") && init?.method === "DELETE") {
+        return jsonResponse({
+          data: {
+            stopped: true,
+            config: {
+              id: "cfg-1",
+              provider: "openrouter",
+              modelName: "openai/text-embedding-3-small",
+              dimension: 1536,
+              apiCredentialKey: "OPENROUTER_API_KEY",
+              endpointOverride: "https://openrouter.ai/api/v1",
+              status: "error",
+              lastReembeddedId: null,
+              reembedTotal: 120,
+              reembedProcessed: 35,
+              reembedStartedAt: "2026-04-22T08:01:00.000Z",
+              reembedFinishedAt: "2026-04-22T08:05:00.000Z",
+              lastError: "Re-embed stopped by owner so settings can be corrected.",
+              updatedAt: "2026-04-22T08:05:00.000Z",
+              updatedBy: "owner@local",
+            },
+            errorSummary: null,
+            recentErrors: [],
+          },
+        });
+      }
+      if (url.includes("/api/embedding-config") && (!init?.method || init.method === "GET")) {
+        return jsonResponse({
+          data: {
+            config: {
+              id: "cfg-1",
+              provider: "openrouter",
+              modelName: "openai/text-embedding-3-small",
+              dimension: 1536,
+              apiCredentialKey: "OPENROUTER_API_KEY",
+              endpointOverride: "https://openrouter.ai/api/v1",
+              status: "reembedding",
+              lastReembeddedId: null,
+              reembedTotal: 120,
+              reembedProcessed: 35,
+              reembedStartedAt: "2026-04-22T08:01:00.000Z",
+              reembedFinishedAt: null,
+              lastError: null,
+              updatedAt: "2026-04-22T08:01:00.000Z",
+              updatedBy: "owner@local",
+            },
+            catalog: embeddingCatalog(),
+            errorSummary: null,
+            recentErrors: [],
+          },
+        });
+      }
+      if (url.includes("/api/credentials")) {
+        return jsonResponse({
+          data: [
+            { id: "cred-1", key: "OPENROUTER_API_KEY", name: "OpenRouter" },
+          ],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+
+    render(<EmbeddingsSettingsPage />);
+
+    const stopButton = await screen.findByRole("button", { name: /Stop re-embed and edit settings/i });
+    fireEvent.click(stopButton);
+
+    await waitFor(() => expect(calls.some((call) => call.init?.method === "DELETE")).toBe(true));
+    expect(await screen.findByText(/Re-embed stopped\. You can now correct the endpoint and save again\./i)).toBeTruthy();
+    expect(screen.getByText(/Status: error/i)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Save & re-embed/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("renders terminal error state details after a run finishes with failures", async () => {
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();

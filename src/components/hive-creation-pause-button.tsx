@@ -9,6 +9,16 @@ type HiveCreationPause = {
   reason: string | null;
   pausedBy: string | null;
   updatedAt: string | null;
+  operatingState: "normal" | "paused" | "recovery" | "degraded";
+  pausedScheduleIds: string[];
+  resumeApproval: {
+    status: "not_required" | "approval_needed" | "pending" | "approved";
+    decisionId: string | null;
+    requestedBy: string | null;
+    requestedAt: string | null;
+    approvedBy: string | null;
+    approvedAt: string | null;
+  };
 };
 
 async function fetchCreationPause(hiveId: string): Promise<HiveCreationPause> {
@@ -22,6 +32,7 @@ async function setCreationPause(input: {
   hiveId: string;
   paused: boolean;
   reason?: string;
+  approvalDecisionId?: string;
 }): Promise<HiveCreationPause> {
   const res = await fetch(`/api/hives/${input.hiveId}/creation-pause`, {
     method: "PATCH",
@@ -29,6 +40,7 @@ async function setCreationPause(input: {
     body: JSON.stringify({
       paused: input.paused,
       reason: input.reason,
+      approvalDecisionId: input.approvalDecisionId,
     }),
   });
   const body = await res.json();
@@ -49,25 +61,41 @@ export function HiveCreationPauseButton({ hiveId }: { hiveId: string }) {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["hive-creation-pause", hiveId] }),
         queryClient.invalidateQueries({ queryKey: ["brief", hiveId] }),
+        queryClient.invalidateQueries({ queryKey: ["mobile-supervision", "decisions", hiveId] }),
+        queryClient.invalidateQueries({ queryKey: ["creation-pause-control-plane", hiveId] }),
       ]);
     },
   });
 
   const paused = data?.paused ?? false;
+  const resumeApproval = data?.resumeApproval;
   const busy = mutation.isPending;
+  const approvalPending = paused && resumeApproval?.status === "pending";
+  const canResumeNow = paused && resumeApproval?.status === "approved" && Boolean(resumeApproval.decisionId);
+  const label = paused
+    ? approvalPending
+      ? "Approval pending"
+      : canResumeNow
+        ? "Resume work"
+        : "Request resume approval"
+    : "Pause Hive";
+  const title = approvalPending
+    ? "Resume approval pending"
+    : data?.reason ?? undefined;
 
   return (
     <Button
       type="button"
       size="sm"
       variant={paused ? "outline" : "destructive"}
-      disabled={busy}
-      title={data?.reason ?? undefined}
+      disabled={busy || approvalPending}
+      title={title}
       onClick={() => {
         mutation.mutate({
           hiveId,
           paused: !paused,
           reason: paused ? undefined : "Paused from dashboard",
+          approvalDecisionId: canResumeNow ? resumeApproval.decisionId ?? undefined : undefined,
         });
       }}
     >
@@ -76,7 +104,7 @@ export function HiveCreationPauseButton({ hiveId }: { hiveId: string }) {
       ) : (
         <Pause className="size-3.5" aria-hidden="true" />
       )}
-      {paused ? "Resume work" : "Pause Hive"}
+      {label}
     </Button>
   );
 }

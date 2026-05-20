@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { hashPassword, verifyPassword } from "./password";
 
 export interface AuthUser {
@@ -18,7 +18,11 @@ export interface HiveMembership {
  * one-time "create owner" form instead of sign-in. Once non-zero, the old
  * single-password fallback is disabled.
  */
-export async function countUsers(sql: Sql): Promise<number> {
+type QuerySql = Sql | TransactionSql;
+
+const FIRST_OWNER_BOOTSTRAP_LOCK_KEY = "hivewright:first-owner-bootstrap";
+
+export async function countUsers(sql: QuerySql): Promise<number> {
   const [row] = await sql<{ c: number }[]>`
     SELECT COUNT(*)::int AS c FROM users WHERE is_active = true
   `;
@@ -70,22 +74,29 @@ export async function bootstrapFirstOwner(
   sql: Sql,
   input: { email: string; password: string; displayName?: string },
 ): Promise<AuthUser> {
-  const count = await countUsers(sql);
-  if (count > 0) {
-    throw new Error(
-      "Users already exist — first-owner bootstrap can only run on an empty users table",
-    );
-  }
-  const hash = hashPassword(input.password);
-  const [row] = await sql<
-    { id: string; email: string; displayName: string | null; isSystemOwner: boolean }[]
-  >`
-    INSERT INTO users (email, display_name, password_hash, is_system_owner)
-    VALUES (${input.email}, ${input.displayName ?? null}, ${hash}, true)
-    RETURNING id, email, display_name AS "displayName",
-              is_system_owner AS "isSystemOwner"
-  `;
-  return row;
+  return await sql.begin(async (tx) => {
+    await tx`
+      SELECT pg_advisory_xact_lock(hashtext(${FIRST_OWNER_BOOTSTRAP_LOCK_KEY}))
+    `;
+
+    const count = await countUsers(tx);
+    if (count > 0) {
+      throw new Error(
+        "Users already exist — first-owner bootstrap can only run on an empty users table",
+      );
+    }
+
+    const hash = hashPassword(input.password);
+    const [row] = await tx<
+      { id: string; email: string; displayName: string | null; isSystemOwner: boolean }[]
+    >`
+      INSERT INTO users (email, display_name, password_hash, is_system_owner)
+      VALUES (${input.email}, ${input.displayName ?? null}, ${hash}, true)
+      RETURNING id, email, display_name AS "displayName",
+                is_system_owner AS "isSystemOwner"
+    `;
+    return row;
+  });
 }
 
 export async function listMemberships(

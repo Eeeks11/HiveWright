@@ -450,6 +450,40 @@ export default function EmbeddingsSettingsPage() {
     ? localSetup.plan.warnings ?? localSetup.plan.recommended?.warnings ?? []
     : [];
 
+  async function handleStopReembed() {
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const res = await fetch("/api/embedding-config", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Re-embed stopped by owner so settings can be corrected." }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || `Failed to stop re-embed (${res.status})`);
+      }
+
+      const nextConfig = body.data?.config;
+      setStatus(nextConfig?.status ?? "error");
+      const nextErrorSummary = body.data?.errorSummary ?? null;
+      const nextProgress = toObservedProgress(nextConfig ?? null, nextErrorSummary);
+      setPreviousProgress(null);
+      setProgress(nextProgress);
+      setErrorSummary(nextErrorSummary);
+      setRecentErrors(body.data?.recentErrors ?? []);
+      setUpdatedAt(nextConfig?.updatedAt ?? null);
+      setUpdatedBy(nextConfig?.updatedBy ?? null);
+      setSuccess("Re-embed stopped. You can now correct the endpoint and save again.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to stop re-embed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleSave() {
     if (!selectedModel) return;
 
@@ -658,8 +692,8 @@ export default function EmbeddingsSettingsPage() {
         </div>
 
         {reembedRunning && (
-          <div className="space-y-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/[0.06] dark:text-amber-200">
-            <p>Re-embedding is currently running. Saving is disabled until the migration finishes.</p>
+          <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-400/20 dark:bg-amber-400/[0.06] dark:text-amber-200">
+            <p>Re-embedding is currently running. Saving is disabled until the migration finishes or you stop it.</p>
             <p>
               Progress: {progress?.processed ?? 0} of {progress?.total ?? 0}
               {etaLabel ? ` · ETA ${etaLabel}` : ""}
@@ -667,6 +701,14 @@ export default function EmbeddingsSettingsPage() {
             {progress?.failed ? (
               <p>{progress.failed} chunk{progress.failed === 1 ? "" : "s"} failed so far.</p>
             ) : null}
+            <button
+              type="button"
+              onClick={() => void handleStopReembed()}
+              disabled={saving}
+              className="rounded-md border border-amber-500/60 bg-white px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50 dark:bg-zinc-950 dark:text-amber-100"
+            >
+              {saving ? "Stopping…" : "Stop re-embed and edit settings"}
+            </button>
           </div>
         )}
 

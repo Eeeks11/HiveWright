@@ -260,6 +260,90 @@ describe("runReembedJob", () => {
     expect(remainingErrors).toHaveLength(0);
   });
 
+  it("stops promptly when the config is cancelled mid-run", async () => {
+    await seedMemoryRows(["alpha", "bravo"]);
+    await beginReembedRun(sql, CONFIG_ID, 1536);
+
+    const embedText = vi.fn(async () => {
+      await sql`
+        UPDATE embedding_config
+        SET status = 'error', last_error = 'cancelled by owner', reembed_finished_at = NOW()
+        WHERE id = ${CONFIG_ID}
+      `;
+      return buildEmbedding(19);
+    });
+
+    const result = await runEmbeddingReembedJob({
+      sql,
+      configId: CONFIG_ID,
+      embed: embedText,
+    });
+
+    expect(result.status).toBe("interrupted");
+    expect(result.reason).toBe("cancelled-or-replaced");
+    expect(embedText).toHaveBeenCalledTimes(1);
+
+    const [state] = await sql`
+      SELECT status, reembed_processed, last_error
+      FROM embedding_config
+      WHERE id = ${CONFIG_ID}
+    `;
+    expect(state.status).toBe("error");
+    expect(state.reembed_processed).toBe(0);
+    expect(state.last_error).toBe("cancelled by owner");
+
+    const [embeddingState] = await sql`
+      SELECT COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded
+      FROM memory_embeddings
+    `;
+    expect(embeddingState.embedded).toBe(0);
+  });
+
+  it("does not let a stale worker continue after the same config is restarted", async () => {
+    await seedMemoryRows(["alpha", "bravo"]);
+    await beginReembedRun(sql, CONFIG_ID, 1536);
+
+    const embedText = vi.fn(async () => {
+      await sql`
+        UPDATE embedding_config
+        SET
+          status = 'reembedding',
+          reembed_started_at = clock_timestamp(),
+          reembed_processed = 0,
+          last_reembedded_id = null,
+          last_error = null,
+          reembed_finished_at = null
+        WHERE id = ${CONFIG_ID}
+      `;
+      return buildEmbedding(23);
+    });
+
+    const result = await runEmbeddingReembedJob({
+      sql,
+      configId: CONFIG_ID,
+      embed: embedText,
+    });
+
+    expect(result.status).toBe("interrupted");
+    expect(result.reason).toBe("cancelled-or-replaced");
+    expect(embedText).toHaveBeenCalledTimes(1);
+
+    const [state] = await sql`
+      SELECT status, reembed_processed, last_reembedded_id
+      FROM embedding_config
+      WHERE id = ${CONFIG_ID}
+    `;
+    expect(state.status).toBe("reembedding");
+    expect(state.reembed_processed).toBe(0);
+    expect(state.last_reembedded_id).toBeNull();
+
+    const [embeddingState] = await sql`
+      SELECT COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded
+      FROM memory_embeddings
+    `;
+    expect(embeddingState.embedded).toBe(0);
+  });
+
   it("migrates vector dimension without losing chunk text and noops after completion", async () => {
     await sql`CREATE EXTENSION IF NOT EXISTS vector`;
     await sql.unsafe(`ALTER TABLE memory_embeddings ADD COLUMN IF NOT EXISTS embedding vector(768)`);

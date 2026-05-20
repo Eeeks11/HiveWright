@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireSuiteIsolation,
   createFixtureNamespace,
@@ -73,6 +73,39 @@ describe("bootstrapFirstOwner", () => {
         password: "password123!",
       }),
     ).rejects.toThrow(/already exist/);
+  });
+
+  it("serializes first-owner creation before checking whether users exist", async () => {
+    const queries: string[] = [];
+    const tx = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      queries.push(String(strings));
+      if (String(strings).includes("COUNT(*)")) return [{ c: 0 }];
+      if (String(strings).includes("INSERT INTO users")) {
+        return [{
+          id: fixture.uuid("owner-lock"),
+          email: values[0] as string,
+          displayName: null,
+          isSystemOwner: true,
+        }];
+      }
+      return [];
+    };
+    const fakeSql = Object.assign(
+      vi.fn(),
+      {
+        begin: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => callback(tx)),
+      },
+    );
+
+    await bootstrapFirstOwner(fakeSql as unknown as typeof sql, {
+      email: fixture.email("locked-owner"),
+      password: "password123!",
+    });
+
+    expect(fakeSql.begin).toHaveBeenCalledTimes(1);
+    expect(queries[0]).toContain("pg_advisory_xact_lock");
+    expect(queries.findIndex((query) => query.includes("pg_advisory_xact_lock")))
+      .toBeLessThan(queries.findIndex((query) => query.includes("COUNT(*)")));
   });
 });
 

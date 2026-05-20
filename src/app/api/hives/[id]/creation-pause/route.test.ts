@@ -8,14 +8,27 @@ vi.mock("@/app/api/_lib/auth", () => ({
   requireSystemOwner: vi.fn(),
 }));
 
+vi.mock("@/operations/creation-pause-control-plane", () => ({
+  getCreationPauseControlState: vi.fn(),
+  requestCreationPauseResumeApproval: vi.fn(),
+}));
+
 import { PATCH } from "./route";
 import { sql } from "@/app/api/_lib/db";
 import { requireSystemOwner } from "@/app/api/_lib/auth";
+import {
+  getCreationPauseControlState,
+  requestCreationPauseResumeApproval,
+} from "@/operations/creation-pause-control-plane";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn> & {
   begin: ReturnType<typeof vi.fn>;
 };
 const mockRequireSystemOwner = requireSystemOwner as unknown as ReturnType<typeof vi.fn>;
+const mockGetCreationPauseControlState =
+  getCreationPauseControlState as unknown as ReturnType<typeof vi.fn>;
+const mockRequestCreationPauseResumeApproval =
+  requestCreationPauseResumeApproval as unknown as ReturnType<typeof vi.fn>;
 
 const hiveId = "11111111-1111-4111-8111-111111111111";
 const params = { params: Promise.resolve({ id: hiveId }) };
@@ -34,6 +47,8 @@ describe("PATCH /api/hives/[id]/creation-pause", () => {
     mockRequireSystemOwner.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mockGetCreationPauseControlState.mockResolvedValue(null);
+    mockRequestCreationPauseResumeApproval.mockResolvedValue(null);
   });
 
   it("requires a system owner before DB use", async () => {
@@ -99,7 +114,61 @@ describe("PATCH /api/hives/[id]/creation-pause", () => {
     expect(queryText.some((query) => query.includes("INSERT INTO hive_runtime_lock_events"))).toBe(true);
   });
 
-  it("restores the saved schedule snapshot when resuming", async () => {
+  it("creates a pending approval instead of resuming immediately", async () => {
+    mockSql.mockResolvedValueOnce([{ "?column?": 1 }]);
+    mockGetCreationPauseControlState.mockResolvedValueOnce({
+      paused: true,
+      reason: "Manual recovery",
+      pausedBy: "owner@example.com",
+      updatedAt: "2026-05-02T06:00:00.000Z",
+      operatingState: "paused",
+      pausedScheduleIds: ["22222222-2222-4222-8222-222222222222"],
+      resumeApproval: {
+        status: "approval_needed",
+        decisionId: null,
+        requestedBy: null,
+        requestedAt: null,
+        approvedBy: null,
+        approvedAt: null,
+      },
+    });
+    mockRequestCreationPauseResumeApproval.mockResolvedValueOnce({
+      paused: true,
+      reason: "Manual recovery",
+      pausedBy: "owner@example.com",
+      updatedAt: "2026-05-02T06:00:00.000Z",
+      operatingState: "paused",
+      pausedScheduleIds: ["22222222-2222-4222-8222-222222222222"],
+      resumeApproval: {
+        status: "pending",
+        decisionId: "33333333-3333-4333-8333-333333333333",
+        requestedBy: "owner@example.com",
+        requestedAt: "2026-05-02T06:05:00.000Z",
+        approvedBy: null,
+        approvedAt: null,
+      },
+    });
+
+    const res = await PATCH(patchRequest({ paused: false }), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(202);
+    expect(body.data.resumeApproval).toMatchObject({
+      status: "pending",
+      decisionId: "33333333-3333-4333-8333-333333333333",
+    });
+    expect(mockRequestCreationPauseResumeApproval).toHaveBeenCalledWith(
+      mockSql,
+      expect.objectContaining({
+        hiveId,
+        requestedBy: "owner@example.com",
+      }),
+    );
+    const queryText = mockSql.mock.calls.map((call) => String(call[0]));
+    expect(queryText.some((query) => query.includes("UPDATE schedules") && query.includes("enabled = true"))).toBe(false);
+  });
+
+  it("restores the saved schedule snapshot when an approved resume decision is supplied", async () => {
     mockSql
       .mockResolvedValueOnce([{ "?column?": 1 }])
       .mockResolvedValueOnce([{
@@ -126,8 +195,27 @@ describe("PATCH /api/hives/[id]/creation-pause", () => {
         operating_state: "normal",
         schedule_snapshot: [],
       }]);
+    mockGetCreationPauseControlState.mockResolvedValueOnce({
+      paused: true,
+      reason: "Manual recovery",
+      pausedBy: "owner@example.com",
+      updatedAt: "2026-05-02T06:00:00.000Z",
+      operatingState: "paused",
+      pausedScheduleIds: ["22222222-2222-4222-8222-222222222222"],
+      resumeApproval: {
+        status: "approved",
+        decisionId: "33333333-3333-4333-8333-333333333333",
+        requestedBy: "owner@example.com",
+        requestedAt: "2026-05-02T06:05:00.000Z",
+        approvedBy: "owner-1",
+        approvedAt: "2026-05-02T06:10:00.000Z",
+      },
+    });
 
-    const res = await PATCH(patchRequest({ paused: false }), params);
+    const res = await PATCH(patchRequest({
+      paused: false,
+      approvalDecisionId: "33333333-3333-4333-8333-333333333333",
+    }), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
