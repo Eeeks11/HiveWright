@@ -7,14 +7,16 @@ import { buildHiveContextBlock } from "../../src/hives/context";
 
 async function insertHive(overrides: Partial<{
   name: string; slug: string; type: string;
+  kind: string;
   description: string | null; mission: string | null; softwareStack: string | null;
 }> = {}): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
-    INSERT INTO hives (name, slug, type, description, mission, software_stack)
+    INSERT INTO hives (name, slug, type, kind, description, mission, software_stack)
     VALUES (
       ${overrides.name ?? "Test Hive"},
       ${overrides.slug ?? `test-hive-${Math.random().toString(36).slice(2, 8)}`},
       ${overrides.type ?? "digital"},
+      ${overrides.kind ?? "business"},
       ${overrides.description ?? null},
       ${overrides.mission ?? null},
       ${overrides.softwareStack ?? null}
@@ -287,5 +289,90 @@ describe("buildHiveContextBlock", () => {
     expect(block).not.toContain("HiveWright buyers prefer concise demos.");
     expect(block).not.toContain("archive receipts");
     expect(block).not.toContain("restricted memory");
+  });
+
+  it("adds business operating doctrine to hive context", async () => {
+    const id = await insertHive({
+      kind: "business",
+      description: "Commercial growth hive.",
+      mission: "Find a profitable customer acquisition loop.",
+    });
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Operating Profile:** business");
+    expect(block).toContain("business outcomes, revenue, customers, margins, fulfilment, and the path to profit");
+  });
+
+  it("adds personal project operating doctrine to hive context", async () => {
+    const id = await insertHive({
+      kind: "personal_project",
+      description: "Course launch project.",
+      mission: "Ship the first course module.",
+    });
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Operating Profile:** personal_project");
+    expect(block).toContain("milestones, deliverables, blockers, dependencies, and the next shippable artifact");
+  });
+
+  it("adds personal assistant approval gates to hive context", async () => {
+    const id = await insertHive({
+      kind: "personal_assistant",
+      description: "Life admin helper.",
+      mission: "Prepare admin work for owner review.",
+    });
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    expect(block).toContain("**Operating Profile:** personal_assistant");
+    expect(block).toContain("External or sensitive actions require owner approval before execution.");
+  });
+
+  it("surfaces owner-defined operating policies before generic autonomy guidance", async () => {
+    const id = await insertHive({
+      kind: "business",
+      mission: "Grow revenue.",
+    });
+    await sql`
+      INSERT INTO hive_operating_profiles (
+        hive_id,
+        kind,
+        purpose,
+        desired_outcome,
+        current_30_day_outcome,
+        constraints,
+        approval_rules,
+        forbidden_actions,
+        important_context,
+        success_criteria,
+        stop_or_pause_criteria,
+        kind_profile
+      )
+      VALUES (
+        ${id},
+        'business',
+        'Grow revenue without risky commitments.',
+        'Create an owner-approved profit path.',
+        'Book qualified calls.',
+        ${sql.json(["Owner only has 4 hours/week"])},
+        ${sql.json(["Owner approval required before any customer-facing promise."])},
+        ${sql.json(["Never offer discounts without owner approval."])},
+        ${sql.json(["Use the existing service offer first."])},
+        ${sql.json(["Three qualified calls booked"])},
+        ${sql.json(["Pause if legal review is needed"])},
+        ${sql.json({ offer: "Ops consulting" })}
+      )
+    `;
+
+    const block = await buildHiveContextBlock(sql, id);
+
+    const ownerPolicyIndex = block.indexOf("Owner approval required before any customer-facing promise.");
+    const doctrineIndex = block.indexOf("business outcomes, revenue, customers");
+    expect(ownerPolicyIndex).toBeGreaterThan(-1);
+    expect(doctrineIndex).toBeGreaterThan(-1);
+    expect(ownerPolicyIndex).toBeLessThan(doctrineIndex);
+    expect(block).toContain("Never offer discounts without owner approval.");
   });
 });

@@ -5,6 +5,8 @@ export const hives = pgTable("hives", {
   slug: varchar("slug", { length: 100 }).unique().notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   type: varchar("type", { length: 50 }).notNull(), // physical | digital | greenfield
+  kind: varchar("kind", { length: 50 }).default("business").notNull(),
+  operatingMode: varchar("operating_mode", { length: 50 }).default("exploring").notNull(),
   description: text("description"),
   mission: text("mission"),
   softwareStack: text("software_stack"),

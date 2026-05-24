@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
+import { HiveScoreboard } from "@/components/hives/hive-scoreboard";
 
 type RoleSummary = {
   assignedTo: string;
@@ -130,9 +131,13 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold">Cost Analytics</h1>
-        <p className="text-sm text-zinc-500 mt-1">Task execution costs and token usage for {selected.name}.</p>
+        <h1 className="text-2xl font-semibold">Outcome Analytics</h1>
+        <p className="text-sm text-zinc-500 mt-1">
+          Scoreboard first, cost and token usage second for {selected.name}.
+        </p>
       </div>
+
+      <HiveScoreboard hiveId={selected.id} compact />
 
       {/* Period filter tabs */}
       <div

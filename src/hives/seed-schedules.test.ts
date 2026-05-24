@@ -14,6 +14,54 @@ beforeEach(async () => {
 });
 
 describe("seedDefaultSchedules", () => {
+  it("seeds a business first operating loop without using generic project cadence keys", async () => {
+    const res = await seedDefaultSchedules(sql, {
+      id: HIVE,
+      name: "Seed Co",
+      description: "A test hive",
+      kind: "business",
+    });
+
+    expect(res.created).toBeGreaterThan(0);
+
+    const rows = await sql<{ origin_key: string | null; task_template: { kind?: string; title?: string; brief?: string } }[]>`
+      SELECT origin_key, task_template
+      FROM schedules
+      WHERE hive_id = ${HIVE}::uuid
+    `;
+
+    expect(rows.some((row) => row.origin_key === "daily-world-scan")).toBe(true);
+    expect(rows.some((row) => row.origin_key === "weekly-business-review")).toBe(true);
+    expect(rows.some((row) => row.origin_key === "weekly-milestone-review")).toBe(false);
+    expect(rows.some((row) => row.origin_key === "project-blocker-check")).toBe(false);
+    expect(rows.find((row) => row.origin_key === "weekly-business-review")?.task_template.brief).toMatch(/revenue|customer|pipeline/i);
+  });
+
+  it("seeds a personal project first operating loop without business review tasks", async () => {
+    const res = await seedDefaultSchedules(sql, {
+      id: HIVE,
+      name: "Kitchen Renovation",
+      description: "Finish the planning and approvals",
+      kind: "personal_project",
+    });
+
+    expect(res.created).toBeGreaterThan(0);
+
+    const rows = await sql<{ origin_type: string; origin_key: string | null; task_template: { kind?: string; title?: string; brief?: string } }[]>`
+      SELECT origin_type, origin_key, task_template
+      FROM schedules
+      WHERE hive_id = ${HIVE}::uuid
+      ORDER BY origin_key ASC
+    `;
+
+    expect(rows.some((row) => row.origin_key === "weekly-milestone-review")).toBe(true);
+    expect(rows.some((row) => row.origin_key === "project-blocker-check")).toBe(true);
+    expect(rows.some((row) => row.origin_key === "weekly-business-review")).toBe(false);
+    expect(rows.some((row) => row.origin_key === "daily-world-scan")).toBe(false);
+    expect(rows.every((row) => row.origin_type === "system_default")).toBe(true);
+    expect(rows.find((row) => row.origin_key === "weekly-milestone-review")?.task_template.brief).toMatch(/milestone|deliverable|blocker/i);
+  });
+
   it("creates the daily world-scan, supervisor-heartbeat, ideas-daily-review, initiative-evaluation, LLM release-scan, current-tech research, and task-quality feedback schedules for a new hive", async () => {
     const expectedWorldScanNextRun = CronExpressionParser.parse("0 7 * * *").next().toDate();
 
@@ -22,7 +70,7 @@ describe("seedDefaultSchedules", () => {
       name: "Seed Co",
       description: "A test hive",
     });
-    expect(res.created).toBe(7);
+    expect(res.created).toBe(8);
     expect(res.skipped).toBe(0);
 
     const rows = await sql`
@@ -30,7 +78,7 @@ describe("seedDefaultSchedules", () => {
       WHERE hive_id = ${HIVE}::uuid
       ORDER BY cron_expression ASC
     `;
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
 
     // World scan row (cron "0 7 * * *" sorts after "*/15 * * * *")
     const worldScan = rows.find(
@@ -169,13 +217,13 @@ describe("seedDefaultSchedules", () => {
       proactiveEnabled: false,
     });
 
-    expect(res.created).toBe(7);
+    expect(res.created).toBe(8);
 
     const rows = await sql<{ enabled: boolean; origin_key: string }[]>`
       SELECT enabled, origin_key FROM schedules
       WHERE hive_id = ${HIVE}::uuid
     `;
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     expect(rows.find((row) => row.origin_key === "hive-supervisor-heartbeat")?.enabled).toBe(true);
     expect(rows.filter((row) => row.origin_key !== "hive-supervisor-heartbeat").every((row) => row.enabled === false)).toBe(true);
   });
@@ -206,10 +254,10 @@ describe("seedDefaultSchedules", () => {
       ORDER BY hive_id, origin_key NULLS LAST
     `;
 
-    expect(rows.filter((row) => row.hive_id === HIVE)).toHaveLength(8);
-    expect(rows.filter((row) => row.hive_id === secondHive)).toHaveLength(7);
+    expect(rows.filter((row) => row.hive_id === HIVE)).toHaveLength(9);
+    expect(rows.filter((row) => row.hive_id === secondHive)).toHaveLength(8);
     expect(rows.filter((row) => row.hive_id === secondHive).some((row) => row.task_template.title === "Hive A custom schedule")).toBe(false);
-    expect(rows.filter((row) => row.origin_type === "system_default")).toHaveLength(14);
+    expect(rows.filter((row) => row.origin_type === "system_default")).toHaveLength(16);
     expect(rows.filter((row) => row.origin_type === "custom")).toHaveLength(1);
   });
 
@@ -234,7 +282,7 @@ describe("seedDefaultSchedules", () => {
     });
 
     expect(res.created).toBe(0);
-    expect(res.skipped).toBe(7);
+    expect(res.skipped).toBe(8);
     const [row] = await sql<{ cron_expression: string; enabled: boolean }[]>`
       SELECT cron_expression, enabled FROM schedules
       WHERE hive_id = ${HIVE}::uuid
@@ -256,12 +304,12 @@ describe("seedDefaultSchedules", () => {
       description: null,
     });
     expect(res.created).toBe(0);
-    expect(res.skipped).toBe(7);
+    expect(res.skipped).toBe(8);
 
     const [{ c: total }] = (await sql`
       SELECT COUNT(*)::int AS c FROM schedules WHERE hive_id = ${HIVE}::uuid
     `) as unknown as { c: number }[];
-    expect(total).toBe(7);
+    expect(total).toBe(8);
 
     // Exactly one heartbeat row per hive — this is the invariant the
     // schedule timer relies on so supervisor runs don't stack up.
@@ -351,7 +399,7 @@ describe("seedDefaultSchedules", () => {
       description: null,
     });
 
-    expect(res.created).toBe(5);
+    expect(res.created).toBe(6);
     expect(res.skipped).toBe(2);
 
     const [{ currentTechResearchRuns }] = await sql<{ currentTechResearchRuns: number }[]>`
@@ -410,7 +458,7 @@ describe("seedDefaultSchedules", () => {
       name: "Seed Co",
       description: null,
     });
-    expect(res.created).toBe(6); // world scan + ideas review + initiative evaluation + release scan + current tech research + quality feedback filled in
+    expect(res.created).toBe(7); // business loop + ideas review + initiative evaluation + release scan + current tech research + quality feedback filled in
     expect(res.skipped).toBe(1); // heartbeat already present
 
     const [{ c: heartbeats }] = (await sql`

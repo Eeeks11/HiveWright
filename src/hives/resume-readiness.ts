@@ -12,6 +12,7 @@ import {
   type ModelSpawnHealthInput,
 } from "@/model-health/spawn-gate";
 import { classifyProbeFreshness } from "@/model-health/probe-policy";
+import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
 import {
   getHiveCreationPause,
   type HiveCreationPause,
@@ -121,11 +122,14 @@ export async function getHiveResumeReadiness(
       (SELECT COUNT(*) FROM tasks
         WHERE hive_id = ${input.hiveId}::uuid
           AND status IN ('pending', 'active', 'claimed', 'running', 'in_review'))::int AS runnable_tasks,
-      (SELECT COUNT(*) FROM decisions
-        WHERE hive_id = ${input.hiveId}::uuid
-          AND status = 'pending'
-          AND kind = 'decision'
-          AND is_qa_fixture = false)::int AS pending_decisions,
+      (SELECT COUNT(*) FROM decisions d
+        JOIN hives h ON h.id = d.hive_id
+        LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+        WHERE d.hive_id = ${input.hiveId}::uuid
+          AND d.status = 'pending'
+          AND d.kind = 'decision'
+          AND d.is_qa_fixture = false
+          AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)})::int AS pending_decisions,
       (SELECT COUNT(*) FROM tasks
         WHERE hive_id = ${input.hiveId}::uuid
           AND status = 'unresolvable'

@@ -155,6 +155,7 @@ export function buildDashboardNavigation({
       label: "Operations",
       links: [
         { id: "roles", href: "/roles", label: "Roles" },
+        { id: "health", href: "/health", label: "Health" },
         { id: "board", href: "/board", label: "Board" },
         { id: "voice", href: "/voice", label: "Voice" },
         {

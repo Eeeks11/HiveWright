@@ -13,7 +13,7 @@ function createDb(input: {
   }>;
   models?: Array<{ provider: string; adapter_type: string; model_id: string }>;
 }) {
-  return vi.fn((strings: TemplateStringsArray) => {
+  const db = vi.fn((strings: TemplateStringsArray) => {
     const query = strings.join("?");
     if (query.includes("FROM hive_runtime_locks")) {
       return Promise.resolve(input.paused === false ? [] : [{
@@ -38,6 +38,8 @@ function createDb(input: {
     }
     return Promise.resolve([]);
   });
+  (db as typeof db & { unsafe: (value: string) => string }).unsafe = (value) => value;
+  return db;
 }
 
 describe("getHiveResumeReadiness", () => {

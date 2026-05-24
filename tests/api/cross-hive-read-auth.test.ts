@@ -37,6 +37,8 @@ const hiveRow = {
   slug: "hive-a",
   name: "Hive A",
   type: "digital",
+  kind: "business",
+  operating_mode: "active",
   description: null,
   mission: null,
   workspace_path: "/tmp/hive-a",
@@ -87,7 +89,16 @@ describe("cross-hive read route auth", () => {
   });
 
   it("GET /api/hives/[id] allows an authorized member", async () => {
-    mockSql.mockResolvedValueOnce([hiveRow]);
+    mockSql
+      .mockResolvedValueOnce([hiveRow])
+      .mockResolvedValueOnce([{
+        id: hiveRow.id,
+        name: hiveRow.name,
+        kind: hiveRow.kind,
+        description: hiveRow.description,
+        mission: hiveRow.mission,
+      }])
+      .mockResolvedValueOnce([]);
 
     const res = await getHive(
       new Request("http://localhost/api/hives/hive-a"),

@@ -44,10 +44,21 @@ describe("GET /api/connector-installs/[id]/actions", () => {
           executed_at: new Date("2026-05-12T01:02:00Z"),
           completed_at: new Date("2026-05-12T01:03:00Z"),
         },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 123,
+          operation: "send_message",
+          status: "error",
+          duration_ms: 12,
+          error_text: "token=[REDACTED] failed",
+          actor: "ea",
+          created_at: new Date("2026-05-12T01:04:00Z"),
+        },
       ]);
   });
 
-  it("returns redacted recent action history for an install", async () => {
+  it("returns redacted recent action and connector event history for an install", async () => {
     const response = await GET(
       new Request("http://localhost/api/connector-installs/install-1/actions"),
       { params: Promise.resolve({ id: "install-1" }) },
@@ -57,6 +68,14 @@ describe("GET /api/connector-installs/[id]/actions", () => {
     const body = await response.json();
     expect(body.data).toEqual([
       expect.objectContaining({
+        kind: "connector_event",
+        id: "event-123",
+        operation: "send_message",
+        state: "error",
+        errorText: "token=[REDACTED] failed",
+      }),
+      expect.objectContaining({
+        kind: "external_action_request",
         id: "action-1",
         connector: "discord-webhook",
         operation: "send_message",

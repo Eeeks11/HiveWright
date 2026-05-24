@@ -38,6 +38,7 @@ function hiveCreateRequest(slug: string) {
       name: "Test Hive",
       slug,
       type: "business",
+      kind: "personal_project",
     }),
   });
 }
@@ -89,6 +90,7 @@ describe("POST /api/hives", () => {
       name: "Test Hive",
       slug: "valid-hive",
       type: "business",
+      kind: "personal_project",
       description: null,
     }]);
 
@@ -101,6 +103,7 @@ describe("POST /api/hives", () => {
       name: "Test Hive",
       slug: "valid-hive",
       type: "business",
+      kind: "personal_project",
     });
     expect(mockMkdirSync).toHaveBeenCalledWith(configuredHivePath("valid-hive", "projects"), { recursive: true });
     expect(mockMkdirSync).toHaveBeenCalledWith(configuredHivePath("valid-hive", "skills"), { recursive: true });
@@ -114,6 +117,7 @@ describe("POST /api/hives", () => {
       name: "Test Hive",
       slug: "valid-hive",
       type: "business",
+      kind: "personal_project",
       description: null,
     }]);
 
@@ -124,6 +128,23 @@ describe("POST /api/hives", () => {
     expect(mockMkdirSync).toHaveBeenCalledWith("/tmp/hw-test-hives/valid-hive/projects", { recursive: true });
     expect(mockMkdirSync).toHaveBeenCalledWith("/tmp/hw-test-hives/valid-hive/skills", { recursive: true });
     expect(mockMkdirSync).toHaveBeenCalledWith("/tmp/hw-test-hives/valid-hive/ea", { recursive: true });
+  });
+
+  it("rejects create requests without a valid hive kind", async () => {
+    const res = await POST(new Request("http://localhost/api/hives", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Test Hive",
+        slug: "valid-hive",
+        type: "business",
+      }),
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("name, slug, type, and kind are required");
+    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockMkdirSync).not.toHaveBeenCalled();
   });
 });
 
@@ -156,6 +177,7 @@ describe("GET /api/hives", () => {
       slug: "member-hive",
       name: "Member Hive",
       type: "business",
+      kind: null,
       description: null,
       workspace_path: configuredHivePath("member-hive", "projects"),
       is_system_fixture: false,
@@ -171,6 +193,7 @@ describe("GET /api/hives", () => {
       slug: "member-hive",
       name: "Member Hive",
       type: "business",
+      kind: "business",
       description: null,
       workspacePath: configuredHivePath("member-hive", "projects"),
       isSystemFixture: false,
@@ -179,5 +202,41 @@ describe("GET /api/hives", () => {
     expect(mockSql).toHaveBeenCalledTimes(1);
     expect(String(mockSql.mock.calls[0][0])).toContain("INNER JOIN hive_memberships");
     expect(mockSql.mock.calls[0]).toContain("member-1");
+  });
+
+  it("returns explicit hive kind when present and safely maps legacy null kind to business", async () => {
+    mockSql.mockResolvedValueOnce([
+      {
+        id: "hive-1",
+        slug: "creative-hive",
+        name: "Creative Hive",
+        type: "digital",
+        kind: "creative",
+        description: null,
+        workspace_path: configuredHivePath("creative-hive", "projects"),
+        is_system_fixture: false,
+        created_at: "2026-04-27T00:00:00.000Z",
+      },
+      {
+        id: "hive-2",
+        slug: "legacy-hive",
+        name: "Legacy Hive",
+        type: "business",
+        kind: null,
+        description: null,
+        workspace_path: configuredHivePath("legacy-hive", "projects"),
+        is_system_fixture: false,
+        created_at: "2026-04-28T00:00:00.000Z",
+      },
+    ]);
+
+    const res = await GET(new Request("http://localhost/api/hives"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.map((hive: { slug: string; kind: string }) => [hive.slug, hive.kind])).toEqual([
+      ["creative-hive", "creative"],
+      ["legacy-hive", "business"],
+    ]);
   });
 });

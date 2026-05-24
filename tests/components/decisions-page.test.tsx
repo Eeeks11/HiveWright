@@ -140,6 +140,38 @@ describe("<DecisionsPage>", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
+  it("adds the include internal/system query flag only when the owner turns on the toggle", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.startsWith("/api/decisions?")) {
+        return okJson({ data: [decision()] });
+      }
+      if (url === "/api/decisions/decision-1/activity") {
+        return okJson({ data: [] });
+      }
+      return okJson({ data: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DecisionsPage />);
+
+    await screen.findByText("Choose Gemini CLI authentication");
+
+    const listCallsBeforeToggle = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.startsWith("/api/decisions?"));
+    expect(listCallsBeforeToggle[0]).toContain("includeInternalSystem=false");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /include internal\/system/i }));
+
+    await waitFor(() => {
+      const listCalls = fetchMock.mock.calls
+        .map(([url]) => String(url))
+        .filter((url) => url.startsWith("/api/decisions?"));
+      expect(listCalls.at(-1)).toContain("includeInternalSystem=true");
+    });
+  });
+
   it("renders decision activity from all timeline sources", async () => {
     vi.stubGlobal(
       "fetch",

@@ -13,6 +13,8 @@ const { auth } = NextAuth(authConfig);
 // Everything else under /api/* now requires auth at the framework level.
 const PUBLIC_API_PREFIXES = [
   "/api/auth/",           // NextAuth handlers + bootstrap-owner + setup-state
+  "/api/health",
+  "/api/readiness",
   "/api/oauth/callback",  // 3rd-party OAuth redirect target (cannot carry our session)
 ];
 

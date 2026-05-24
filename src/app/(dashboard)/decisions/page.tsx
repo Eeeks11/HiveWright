@@ -216,6 +216,7 @@ export default function DecisionsPage() {
   const [responding, setResponding] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
   const [kindFilter, setKindFilter] = useState<"decision" | "system_error">("decision");
+  const [includeInternalSystem, setIncludeInternalSystem] = useState(false);
   const [expandedThread, setExpandedThread] = useState<string | null>(null);
   const [threadMessages, setThreadMessages] = useState<DecisionMessage[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -226,8 +227,14 @@ export default function DecisionsPage() {
     if (!selectedHiveId) return;
     setLoading(true);
     try {
+      const query = new URLSearchParams({
+        status: statusFilter,
+        kind: kindFilter,
+        hiveId: selectedHiveId,
+        includeInternalSystem: String(includeInternalSystem),
+      });
       const res = await fetch(
-        `/api/decisions?status=${statusFilter}&kind=${kindFilter}&hiveId=${selectedHiveId}`,
+        `/api/decisions?${query.toString()}`,
       );
       if (!res.ok) throw new Error("Failed to fetch decisions");
       const data = await res.json();
@@ -237,7 +244,7 @@ export default function DecisionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedHiveId, statusFilter, kindFilter]);
+  }, [selectedHiveId, statusFilter, kindFilter, includeInternalSystem]);
 
   useEffect(() => {
     if (selectedHiveId) fetchDecisions();
@@ -607,6 +614,16 @@ export default function DecisionsPage() {
           onChange={setStatusFilter}
         />
       </div>
+
+      <label className="inline-flex items-center gap-2 rounded-md border border-amber-200/70 bg-amber-50/60 px-3 py-2 text-sm font-medium text-amber-950/75 dark:border-white/[0.08] dark:bg-white/[0.035] dark:text-zinc-300">
+        <input
+          type="checkbox"
+          checked={includeInternalSystem}
+          onChange={(event) => setIncludeInternalSystem(event.target.checked)}
+          className="h-4 w-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"
+        />
+        Include internal/system
+      </label>
 
       <RunsTable
         rows={decisionRows}

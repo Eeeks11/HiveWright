@@ -86,3 +86,27 @@ export const connectorSyncCursors = pgTable(
     uniqueIndex("connector_sync_cursors_install_stream_idx").on(table.installId, table.stream),
   ],
 );
+
+export const connectorWebhookTokens = pgTable(
+  "connector_webhook_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    installId: uuid("install_id")
+      .references(() => connectorInstalls.id, { onDelete: "cascade" })
+      .notNull(),
+    stream: varchar("stream", { length: 128 }).default("default").notNull(),
+    label: varchar("label", { length: 255 }),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    lastUsedAt: timestamp("last_used_at"),
+    revokedAt: timestamp("revoked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("connector_webhook_tokens_hash_idx").on(table.tokenHash),
+    uniqueIndex("connector_webhook_tokens_install_stream_idx").on(
+      table.installId,
+      table.stream,
+    ),
+  ],
+);

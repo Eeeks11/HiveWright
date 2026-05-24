@@ -3,8 +3,10 @@ import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { normalizeAiBudgetSettings } from "@/budget/ai-budget";
+import { normalizeHiveKind, normalizeHiveOperatingMode } from "@/hives/kind";
+import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
 
-const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget"]);
+const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget", "operatingProfile"]);
 const REJECTED_FIELDS = new Set([
   "slug", "type", "id", "createdAt", "created_at",
   "eaSessionId", "ea_session_id", "workspacePath", "workspace_path",
@@ -19,7 +21,7 @@ export async function GET(
   const { id } = await params;
   if (!id) return jsonError("id is required", 400);
   const [row] = await sql`
-    SELECT id, slug, name, type, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
+    SELECT id, slug, name, type, kind, operating_mode, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
     FROM hives WHERE id = ${id}
   `;
   if (!row) return jsonError("hive not found", 404);
@@ -29,11 +31,14 @@ export async function GET(
       return jsonError("Forbidden: hive access required", 403);
     }
   }
+  const operatingProfile = await getOperatingProfile(sql, id);
   return jsonOk({
     id: row.id,
     slug: row.slug,
     name: row.name,
     type: row.type,
+    kind: normalizeHiveKind(row.kind),
+    operatingMode: normalizeHiveOperatingMode(row.operating_mode),
     description: row.description,
     mission: row.mission,
     softwareStack: row.software_stack,
@@ -43,6 +48,7 @@ export async function GET(
       capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
       window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
     },
+    operatingProfile,
     createdAt: row.created_at,
   });
 }
@@ -77,6 +83,10 @@ export async function PATCH(
   }
 
   let aiBudget: ReturnType<typeof normalizeAiBudgetSettings> | null = null;
+  if ("operatingProfile" in body && (!body.operatingProfile || typeof body.operatingProfile !== "object" || Array.isArray(body.operatingProfile))) {
+    return jsonError("operatingProfile must be an object", 400);
+  }
+
   if ("aiBudget" in body) {
     const raw = body.aiBudget;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -129,17 +139,23 @@ export async function PATCH(
       WHERE id = ${id}
     `;
   }
+  if ("operatingProfile" in body) {
+    await upsertOperatingProfile(sql, id, body.operatingProfile as Record<string, unknown>);
+  }
 
   const [row] = await sql`
-    SELECT id, slug, name, type, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
+    SELECT id, slug, name, type, kind, operating_mode, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
     FROM hives WHERE id = ${id}
   `;
 
+  const operatingProfile = await getOperatingProfile(sql, id);
   return jsonOk({
     id: row.id,
     slug: row.slug,
     name: row.name,
     type: row.type,
+    kind: normalizeHiveKind(row.kind),
+    operatingMode: normalizeHiveOperatingMode(row.operating_mode),
     description: row.description,
     mission: row.mission,
     softwareStack: row.software_stack,
@@ -149,6 +165,7 @@ export async function PATCH(
       capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
       window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
     },
+    operatingProfile,
     createdAt: row.created_at,
   });
 }

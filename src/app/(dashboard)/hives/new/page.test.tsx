@@ -46,6 +46,43 @@ beforeEach(() => {
 });
 
 describe("NewHiveWizard hive address setup", () => {
+  it("asks what kind of hive is being created before the name fields", async () => {
+    render(<NewHiveWizard />);
+
+    const question = await screen.findByText("What kind of hive are you creating?");
+    const nameInput = await screen.findByLabelText(/^Hive name/);
+
+    expect(question.compareDocumentPosition(nameInput) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Business — make money / run commercial ops")).toBeTruthy();
+    expect(screen.getByLabelText("Personal project — finish a defined project")).toBeTruthy();
+    expect(screen.getByLabelText("Personal assistant — help manage recurring/admin life tasks")).toBeTruthy();
+    expect(screen.getByLabelText("Research/exploration — investigate and recommend")).toBeTruthy();
+    expect(screen.getByLabelText("Creative/content — produce assets and publishable work")).toBeTruthy();
+  });
+
+  it("changes setup language when a non-business hive kind is selected", async () => {
+    render(<NewHiveWizard />);
+
+    fireEvent.click(await screen.findByLabelText("Research/exploration — investigate and recommend"));
+
+    expect(screen.getByLabelText("Research focus")).toBeTruthy();
+    expect(screen.getByPlaceholderText("What uncertainty should this hive investigate?")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Frame the research question, compare credible sources, and recommend next steps.")).toBeTruthy();
+  });
+
+  it("uses project language instead of commercial setup language for personal project hives", async () => {
+    render(<NewHiveWizard />);
+
+    fireEvent.click(await screen.findByLabelText("Personal project — finish a defined project"));
+
+    expect(screen.getByLabelText("Project focus")).toBeTruthy();
+    expect(screen.getByLabelText("Project objective")).toBeTruthy();
+    expect(screen.getByLabelText("First project goal")).toBeTruthy();
+    expect(screen.queryByLabelText("Business focus")).toBeNull();
+    expect(screen.queryByLabelText("Commercial objective")).toBeNull();
+    expect(screen.queryByLabelText("First commercial goal")).toBeNull();
+  });
+
   it("does not render a top-level Slug field on the setup form", async () => {
     render(<NewHiveWizard />);
     await screen.findByLabelText(/^Hive name/);
@@ -110,6 +147,58 @@ describe("NewHiveWizard hive address setup", () => {
     const body = JSON.parse(setupCall[1].body);
     expect(body.hive.name).toBe("Owner Acme Co.");
     expect(body.hive.slug).toBe("owner-acme-co");
+    expect(body.hive.kind).toBe("business");
+  });
+
+  it("asks operating profile questions before model routing choices", async () => {
+    render(<NewHiveWizard />);
+    fireEvent.change(await screen.findByLabelText(/^Hive name/), { target: { value: "Operating First" } });
+
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+
+    expect(await screen.findByRole("heading", { name: "Set working preferences" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Choose agent runtimes" })).toBeNull();
+  });
+
+  it("uses the final step as a dashboard handoff and opens the new hive dashboard after setup", async () => {
+    render(<NewHiveWizard />);
+    fireEvent.change(await screen.findByLabelText(/^Hive name/), { target: { value: "Dashboard Hive" } });
+    fireEvent.change(screen.getByLabelText(/^Type/) as HTMLSelectElement, {
+      target: { value: "physical" },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+    }
+
+    expect(await screen.findByRole("heading", { name: "Dashboard handoff" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Create Hive/ }));
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/hives/hive-id-1"));
+  });
+
+  it("submits the selected hive kind in the setup payload", async () => {
+    render(<NewHiveWizard />);
+    fireEvent.click(await screen.findByLabelText("Creative/content — produce assets and publishable work"));
+    fireEvent.change(screen.getByLabelText(/^Hive name/), { target: { value: "Creative Studio" } });
+    fireEvent.change(screen.getByLabelText(/^Type/) as HTMLSelectElement, {
+      target: { value: "physical" },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      fireEvent.click(screen.getByRole("button", { name: /^Next$/ }));
+    }
+
+    fireEvent.click(await screen.findByRole("button", { name: /Create Hive/ }));
+
+    await waitFor(() => {
+      const setupCall = fetchMock.mock.calls.find(([url]) => url === "/api/hives/setup");
+      expect(setupCall).toBeDefined();
+    });
+
+    const setupCall = fetchMock.mock.calls.find(([url]) => url === "/api/hives/setup")!;
+    const body = JSON.parse(setupCall[1].body);
+    expect(body.hive.kind).toBe("creative");
   });
 
   it("does not display the word slug anywhere in the rendered setup or review UI", async () => {

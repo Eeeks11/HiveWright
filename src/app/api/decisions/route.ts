@@ -8,6 +8,11 @@ import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle"
 import { recordDecisionAuditEvent } from "./_audit";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import {
+  OWNER_ACTION_REQUIRED_ORDER_SQL,
+  OWNER_ACTION_REQUIRED_SQL,
+  shouldIncludeInternalSystem,
+} from "@/decisions/visibility";
+import {
   assertHiveCreationAllowed,
   creationPausedResponse,
   databaseCreationPaused,
@@ -104,6 +109,9 @@ export async function GET(request: Request) {
     const offset = params.getInt("offset", 0);
     const qaFixtures = params.get("qaFixtures") === "true";
     const qaRunId = params.get("qaRunId");
+    const includeInternalSystem =
+      shouldIncludeInternalSystem(params.get("includeInternalSystem")) ||
+      shouldIncludeInternalSystem(params.get("includeInternal"));
 
     if (!hiveId) return jsonError("hiveId is required", 400);
     if (!user.isSystemOwner) {
@@ -142,6 +150,9 @@ export async function GET(request: Request) {
     } else {
       conditions.push("d.is_qa_fixture = false");
     }
+    if (!includeInternalSystem && !qaFixtures) {
+      conditions.push(OWNER_ACTION_REQUIRED_SQL);
+    }
     const requestsQualityFeedback = kind === "task_quality_feedback" ||
       includeKinds?.includes("task_quality_feedback");
     if (requestsQualityFeedback && params.get("includeAiPeerQualityFeedback") !== "true") {
@@ -150,17 +161,21 @@ export async function GET(request: Request) {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    const countQuery = `SELECT COUNT(*) as total FROM decisions d ${whereClause}`;
+    const fromClause = `
+      FROM decisions d
+      JOIN hives h ON h.id = d.hive_id
+      LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+    `;
+    const countQuery = `SELECT COUNT(*) as total ${fromClause} ${whereClause}`;
     const dataQuery = `
       SELECT d.id, d.hive_id, d.goal_id, d.task_id, d.title, d.context, d.recommendation, d.options,
              d.priority, d.status, d.kind, d.owner_response, d.selected_option_key, d.selected_option_label,
              d.ea_attempts, d.ea_reasoning, d.ea_decided_at,
              d.created_at, d.resolved_at, d.is_qa_fixture,
              t.title AS task_title, t.assigned_to AS task_role, t.completed_at AS task_completed_at
-      FROM decisions d
-      LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+      ${fromClause}
       ${whereClause}
-      ORDER BY ${PRIORITY_ORDER}, d.created_at DESC
+      ORDER BY ${OWNER_ACTION_REQUIRED_ORDER_SQL}, ${PRIORITY_ORDER}, d.created_at DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
     `;
 

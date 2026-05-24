@@ -18,6 +18,10 @@ export type OwnerOutcomeRow = {
   hive_id: string;
   goal_title: string;
   summary: string | null;
+  why_it_matters: string | null;
+  recommended_next_action: string | null;
+  impact_statement: string | null;
+  review_state: string;
   evidence: unknown;
   primary_work_product_id: string | null;
   primary_open_url: string | null;
@@ -40,6 +44,18 @@ function parseEvidenceWorkProductIds(evidence: unknown): string[] {
 
 function normalizeRenderMode(value: string | null): OwnerOutcomeRenderMode | null {
   return RENDER_MODES.has(value as OwnerOutcomeRenderMode) ? value as OwnerOutcomeRenderMode : null;
+}
+
+function normalizeStatus(value: string): OwnerOutcomeSummary["status"] {
+  switch (value) {
+    case "accepted":
+    case "needs_revision":
+    case "archived":
+    case "converted_to_process_candidate":
+      return value;
+    default:
+      return "new";
+  }
 }
 
 export function ownerOutcomeActionLabel(renderMode: OwnerOutcomeRenderMode | null, openUrl: string | null): string {
@@ -75,7 +91,10 @@ export function mapOwnerOutcomeRow(row: OwnerOutcomeRow): OwnerOutcomeSummary {
     hiveId: row.hive_id,
     goalTitle: row.goal_title,
     summary: row.summary?.trim() || "Goal completed. Review the final owner handoff and linked audit evidence.",
-    status: "unread",
+    whyItMatters: row.why_it_matters?.trim() || "This durable handoff separates the owner outcome from lower-level task artifacts.",
+    recommendedNextAction: row.recommended_next_action?.trim() || "Review the handoff and accept it, request revision, archive it, or mark it as a process candidate.",
+    impactStatement: row.impact_statement?.trim() || "Hive impact: completed work is ready for owner review.",
+    status: normalizeStatus(row.review_state),
     createdAt: toIso(row.created_at),
     evidenceWorkProductIds,
     primaryWorkProductId,
@@ -94,19 +113,38 @@ export async function listOwnerOutcomes(
   const limit = Math.min(Math.max(Math.trunc(filters.limit ?? 100), 1), 100);
   const rows = await sql`
     SELECT
-      gc.id,
-      gc.goal_id,
-      gc.summary,
-      gc.evidence,
-      gc.created_at,
-      g.hive_id,
+      oo.id,
+      oo.goal_id,
+      oo.summary,
+      oo.why_it_matters,
+      oo.recommended_next_action,
+      oo.impact_statement,
+      oo.review_state,
+      oo.evidence,
+      oo.created_at,
+      oo.hive_id,
       g.title AS goal_title,
-      primary_wp.id AS primary_work_product_id,
-      primary_wp.open_url AS primary_open_url,
-      primary_wp.title AS primary_artifact_title,
-      primary_wp.render_mode AS primary_artifact_render_mode
-    FROM goal_completions gc
-    JOIN goals g ON g.id = gc.goal_id
+      COALESCE(stored_wp.id, primary_wp.id) AS primary_work_product_id,
+      COALESCE(oo.primary_open_url, stored_wp.open_url, primary_wp.open_url) AS primary_open_url,
+      COALESCE(oo.primary_artifact_title, stored_wp.title, primary_wp.title) AS primary_artifact_title,
+      COALESCE(oo.primary_artifact_render_mode, stored_wp.render_mode, primary_wp.render_mode) AS primary_artifact_render_mode
+    FROM owner_outcomes oo
+    JOIN goals g ON g.id = oo.goal_id
+    JOIN goal_completions gc ON gc.id = oo.goal_completion_id
+    LEFT JOIN LATERAL (
+      SELECT
+        wp.id,
+        COALESCE(NULLIF(BTRIM(wp.title), ''), NULLIF(BTRIM(wp.filename), ''), 'Deliverable') AS title,
+        wp.render_mode,
+        CASE
+          WHEN wp.public_url ~* '^https?://' THEN wp.public_url
+          ELSE '/deliverables/' || wp.id::text || '/open'
+        END AS open_url
+      FROM work_products wp
+      WHERE wp.id = oo.primary_work_product_id
+        AND wp.hive_id = oo.hive_id
+      LIMIT 1
+    ) stored_wp ON true
     LEFT JOIN LATERAL (
       SELECT
         wp.id,
@@ -118,17 +156,17 @@ export async function listOwnerOutcomes(
         END AS open_url
       FROM jsonb_array_elements_text(
         CASE
-          WHEN jsonb_typeof(gc.evidence->'workProductIds') = 'array' THEN gc.evidence->'workProductIds'
+          WHEN jsonb_typeof(oo.evidence->'workProductIds') = 'array' THEN oo.evidence->'workProductIds'
           ELSE '[]'::jsonb
         END
       ) WITH ORDINALITY AS evidence_ids(id, ord)
       JOIN work_products wp ON wp.id::text = evidence_ids.id
-      WHERE wp.hive_id = g.hive_id
+      WHERE wp.hive_id = oo.hive_id
         AND EXISTS (
           SELECT 1
           FROM tasks t
           WHERE t.id = wp.task_id
-            AND t.goal_id = gc.goal_id
+            AND t.goal_id = oo.goal_id
         )
       ORDER BY
         CASE
@@ -148,8 +186,8 @@ export async function listOwnerOutcomes(
         evidence_ids.ord
       LIMIT 1
     ) primary_wp ON true
-    WHERE (${filters.hiveId ?? null}::uuid IS NULL OR g.hive_id = ${filters.hiveId ?? null})
-    ORDER BY gc.created_at DESC
+    WHERE (${filters.hiveId ?? null}::uuid IS NULL OR oo.hive_id = ${filters.hiveId ?? null})
+    ORDER BY oo.created_at DESC
     LIMIT ${limit}
   `;
   return (rows as OwnerOutcomeRow[]).map(mapOwnerOutcomeRow);
@@ -161,9 +199,9 @@ export async function countOwnerOutcomes(
 ): Promise<number> {
   const [row] = await sql`
     SELECT COUNT(*)::int AS count
-    FROM goal_completions gc
-    JOIN goals g ON g.id = gc.goal_id
-    WHERE (${filters.hiveId ?? null}::uuid IS NULL OR g.hive_id = ${filters.hiveId ?? null})
+    FROM owner_outcomes oo
+    WHERE oo.review_state = 'new'
+      AND (${filters.hiveId ?? null}::uuid IS NULL OR oo.hive_id = ${filters.hiveId ?? null})
   ` as Array<{ count: number | string }>;
   return Number(row?.count ?? 0);
 }

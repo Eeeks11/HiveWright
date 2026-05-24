@@ -61,7 +61,7 @@ describe("NewHiveWizard setup failure handling", () => {
       expect(screen.getByRole("alert").textContent).toContain("We couldn't finish setting up one of the selected services. Please try again.");
       expect(screen.getByRole("alert").textContent).toContain("Nothing has been marked complete. You can fix the issue and try again.");
     });
-    expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry setup" })).toBeTruthy();
     expect(pushMock).not.toHaveBeenCalled();
   });

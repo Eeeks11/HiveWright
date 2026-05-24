@@ -1,8 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHiveContext } from "@/components/hive-context";
-import { OutcomeCard } from "@/components/outcomes/outcome-card";
+import { OutcomeCardView } from "@/components/outcomes/outcome-card";
 import type { OwnerOutcomeSummary } from "@/outcomes/types";
 
 async function fetchOutcomes(hiveId: string): Promise<OwnerOutcomeSummary[]> {
@@ -18,12 +18,30 @@ export function FinalOutputsPage() {
   const { selected, hives, loading } = useHiveContext();
   const activeHive = selected ?? hives[0] ?? null;
   const hiveId = activeHive?.id ?? null;
+  const queryClient = useQueryClient();
 
   const outcomesQuery = useQuery({
     queryKey: ["owner-outcomes", hiveId],
     enabled: Boolean(hiveId),
     queryFn: () => fetchOutcomes(hiveId as string),
     refetchInterval: 30_000,
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: async ({ outcomeId, action }: { outcomeId: string; action: OwnerOutcomeSummary["status"] }) => {
+      const response = await fetch(`/api/outcomes/${encodeURIComponent(outcomeId)}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to update outcome (${response.status})`);
+      }
+      return response.json();
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["owner-outcomes", hiveId] });
+    },
   });
 
   const outcomes = outcomesQuery.data ?? [];
@@ -66,7 +84,12 @@ export function FinalOutputsPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {outcomes.map((outcome) => (
-            <OutcomeCard key={outcome.id} outcome={outcome} />
+            <OutcomeCardView
+              key={outcome.id}
+              outcome={outcome}
+              actionPending={reviewMutation.isPending}
+              onReviewAction={(action) => reviewMutation.mutate({ outcomeId: outcome.id, action })}
+            />
           ))}
         </div>
       )}

@@ -4,8 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 import { generateHiveAddress } from "@/hives/address";
+import { HIVE_KIND_SETUP_DEFAULTS, type HiveKind } from "@/hives/kind";
 
 const HIVE_TYPES = ["physical", "digital", "greenfield"];
+const HIVE_KIND_OPTIONS: { value: HiveKind; label: string; description: string }[] = [
+  { value: "business", label: "Business", description: "make money / run commercial ops" },
+  { value: "personal_project", label: "Personal project", description: "finish a defined project" },
+  { value: "personal_assistant", label: "Personal assistant", description: "help manage recurring/admin life tasks" },
+  { value: "research", label: "Research/exploration", description: "investigate and recommend" },
+  { value: "creative", label: "Creative/content", description: "produce assets and publishable work" },
+];
 const SETUP_WELCOME_DISMISSED_KEY = "hivewright.setupWelcomeDismissed";
 
 const WELCOME_CONCEPTS = [
@@ -194,6 +202,7 @@ interface Role {
 }
 
 interface WizardState {
+  kind: HiveKind;
   name: string;
   slug: string;
   type: string;
@@ -299,6 +308,7 @@ export default function NewHiveWizard() {
   const [embeddingSetupAction, setEmbeddingSetupAction] = useState<string | null>(null);
 
   const [state, setState] = useState<WizardState>({
+    kind: "business",
     name: "",
     slug: "",
     type: "digital",
@@ -325,6 +335,7 @@ export default function NewHiveWizard() {
   const isLastStep = step === REVIEW_STEP;
   const isFirstStep = step === 1;
   const hiveAddress = state.slug || generateHiveAddress(state.name);
+  const kindDefaults = HIVE_KIND_SETUP_DEFAULTS[state.kind];
   const eaDiscordConnector = connectors.find((connector) => connector.slug === EA_DISCORD_CONNECTOR_SLUG) ?? null;
   const serviceConnectors = useMemo(
     () => connectors.filter((connector) => connector.slug !== EA_DISCORD_CONNECTOR_SLUG),
@@ -710,6 +721,7 @@ export default function NewHiveWizard() {
             name: state.name,
             slug: hiveAddress,
             type: state.type,
+            kind: state.kind,
             description: state.description,
             mission: state.mission,
           },
@@ -757,7 +769,7 @@ export default function NewHiveWizard() {
         return;
       }
 
-      router.push("/setup/health");
+      router.push(`/hives/${hiveId}`);
     } catch (err: unknown) {
       setSetupStatus(null);
       setError(err instanceof Error ? err.message : "Hive setup did not finish. Please try again.");
@@ -829,6 +841,21 @@ export default function NewHiveWizard() {
             <p className="text-sm text-zinc-500">Give HiveWright the operating context agents will use when they plan and act.</p>
           </div>
           <div className="space-y-3">
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">What kind of hive are you creating?</legend>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {HIVE_KIND_OPTIONS.map((option) => (
+                  <RadioChoice
+                    key={option.value}
+                    name="hive-kind"
+                    checked={state.kind === option.value}
+                    onChange={() => update({ kind: option.value })}
+                    title={`${option.label} — ${option.description}`}
+                    description={HIVE_KIND_SETUP_DEFAULTS[option.value].initialGoalPlaceholder}
+                  />
+                ))}
+              </div>
+            </fieldset>
             <div>
               <label htmlFor="hive-name" className="text-sm font-medium">Hive name *</label>
               <input
@@ -867,45 +894,45 @@ export default function NewHiveWizard() {
               </select>
             </div>
             <div>
-              <label htmlFor="hive-description" className="text-sm font-medium">Description</label>
+              <label htmlFor="hive-description" className="text-sm font-medium">{kindDefaults.descriptionLabel}</label>
               <textarea
                 id="hive-description"
                 value={state.description}
                 onChange={(e) => update({ description: e.target.value })}
                 rows={3}
-                placeholder="What does this hive do?"
+                placeholder={kindDefaults.descriptionPlaceholder}
                 className="mt-1 w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
               />
             </div>
             <div>
-              <label htmlFor="hive-mission" className="text-sm font-medium">Mission</label>
+              <label htmlFor="hive-mission" className="text-sm font-medium">{kindDefaults.missionLabel}</label>
               <textarea
                 id="hive-mission"
                 value={state.mission}
                 onChange={(e) => update({ mission: e.target.value })}
                 rows={5}
-                placeholder="The durable purpose of this hive."
+                placeholder={kindDefaults.missionPlaceholder}
                 className="mt-1 w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
               />
-              <p className="mt-1 text-xs text-zinc-400">Agents use this to decide what matters when work is ambiguous.</p>
+              <p className="mt-1 text-xs text-zinc-400">Agents use this to decide what matters when work is ambiguous for this kind of hive.</p>
             </div>
             <div>
-              <label htmlFor="hive-initial-goal" className="text-sm font-medium">First goal</label>
+              <label htmlFor="hive-initial-goal" className="text-sm font-medium">{kindDefaults.initialGoalLabel}</label>
               <textarea
                 id="hive-initial-goal"
                 value={state.initialGoal}
                 onChange={(e) => update({ initialGoal: e.target.value })}
                 rows={2}
-                placeholder="Optional. What should this hive achieve first?"
+                placeholder={kindDefaults.initialGoalPlaceholder}
                 className="mt-1 w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
               />
-              <p className="mt-1 text-xs text-zinc-400">HiveWright will turn this into a goal after the hive is created.</p>
+              <p className="mt-1 text-xs text-zinc-400">HiveWright will turn this into a goal after the hive is created, or use a {kindDefaults.label.toLowerCase()} starter goal.</p>
             </div>
           </div>
         </section>
       )}
 
-      {step === 2 && (
+      {step === 3 && (
         <section className="space-y-4 rounded-lg border p-6" aria-labelledby="runtime-step-title">
           <div>
             <h2 id="runtime-step-title" className="text-lg font-medium">Choose agent runtimes</h2>
@@ -1051,7 +1078,7 @@ export default function NewHiveWizard() {
         </section>
       )}
 
-      {step === 3 && (
+      {step === 2 && (
         <section className="space-y-4 rounded-lg border p-6" aria-labelledby="operating-step-title">
           <div>
             <h2 id="operating-step-title" className="text-lg font-medium">Set working preferences</h2>
@@ -1411,13 +1438,13 @@ export default function NewHiveWizard() {
       {step === REVIEW_STEP && (
         <section className="space-y-4 rounded-lg border p-6" aria-labelledby="review-step-title">
           <div>
-            <h2 id="review-step-title" className="text-lg font-medium">Review and launch</h2>
-            <p className="text-sm text-zinc-500">Review the hive, runtime choices, connectors, projects, and first goal before creation.</p>
+            <h2 id="review-step-title" className="text-lg font-medium">Dashboard handoff</h2>
+            <p className="text-sm text-zinc-500">Review the hive, runtime choices, connectors, projects, first goal, and starting review cadence before opening the hive dashboard.</p>
           </div>
           <div className="space-y-3 text-sm">
             <div className="rounded-md bg-zinc-50 p-3 dark:bg-zinc-900">
               <p className="font-medium">{state.name}</p>
-              <p className="text-zinc-500">{state.type} · Hive address: {hiveAddress}</p>
+              <p className="text-zinc-500">{kindDefaults.label} · {state.type} · Hive address: {hiveAddress}</p>
               <p className="mt-1 text-zinc-500">Mission: {state.mission ? "provided" : "not provided"}</p>
               <p className="text-zinc-500">First goal: {state.initialGoal ? "provided" : "not provided"}</p>
             </div>

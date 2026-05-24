@@ -7,11 +7,16 @@ import { sql } from "../_lib/db";
 import { requireApiAuth, requireApiUser, requireSystemOwner } from "../_lib/auth";
 import { jsonError, jsonOk } from "../_lib/responses";
 
+type DashboardReachability = SetupHealthSnapshot["dashboard"];
+
+const DASHBOARD_REACHABILITY_TIMEOUT_MS = 1200;
+
 export async function GET(request: Request) {
   const unauth = await requireApiAuth();
   if (unauth) return unauth;
 
-  const hiveId = new URL(request.url).searchParams.get("hiveId");
+  const requestUrl = new URL(request.url);
+  const hiveId = requestUrl.searchParams.get("hiveId");
   if (hiveId) {
     const authz = await requireApiUser();
     if ("response" in authz) return authz.response;
@@ -21,13 +26,16 @@ export async function GET(request: Request) {
     }
 
     try {
-      const [snapshot, operatorVerdict] = await Promise.all([
+      const [snapshot, dashboard, operatorVerdict] = await Promise.all([
         loadSetupHealthSnapshot(hiveId),
+        checkDashboardReachability(requestUrl),
         getHiveOperatorVerdict(sql, { hiveId }),
       ]);
+      const snapshotWithDashboard = { ...snapshot, dashboard };
       return jsonOk({
         hiveId,
-        rows: buildSetupHealthRows(snapshot),
+        rows: buildSetupHealthRows(snapshotWithDashboard),
+        dashboard,
         operatorVerdict,
         sources: {
           models: "model_catalog, hive_models, model_health, and role_templates",
@@ -45,11 +53,13 @@ export async function GET(request: Request) {
     }
   }
 
+  const dashboard = await checkDashboardReachability(requestUrl);
   return jsonOk({
     hiveWorkspaceRoot: resolveHiveWorkspaceRoot(),
     envKey: HIVES_WORKSPACE_ROOT_ENV,
     envFilePath: defaultEnvFilePath(),
     restartRequired: false,
+    dashboard,
   });
 }
 
@@ -81,7 +91,7 @@ export async function PATCH(request: Request) {
   }
 }
 
-async function loadSetupHealthSnapshot(hiveId: string): Promise<SetupHealthSnapshot> {
+async function loadSetupHealthSnapshot(hiveId: string): Promise<Omit<SetupHealthSnapshot, "dashboard">> {
   const [
     [roles],
     [ea],
@@ -229,4 +239,74 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+async function checkDashboardReachability(requestUrl: URL): Promise<DashboardReachability> {
+  const checkedUrls = resolveDashboardUrlCandidates(requestUrl);
+  let lastError: string | null = null;
+
+  for (const dashboardUrl of checkedUrls) {
+    try {
+      const res = await fetch(new URL("/", dashboardUrl).toString(), {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(DASHBOARD_REACHABILITY_TIMEOUT_MS),
+      });
+      if (res.status < 500) {
+        return { checkedUrls, reachableUrl: dashboardUrl, lastError: null };
+      }
+      lastError = `HTTP ${res.status} from ${dashboardUrl}`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  return { checkedUrls, reachableUrl: null, lastError };
+}
+
+function resolveDashboardUrlCandidates(requestUrl: URL): string[] {
+  return uniqueUrls([
+    process.env.NEXT_PUBLIC_DASHBOARD_URL,
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.HIVEWRIGHT_INTERNAL_BASE_URL,
+    process.env.AUTH_URL,
+    process.env.NEXTAUTH_URL,
+    process.env.BASE_URL,
+    isLocalHttpOrigin(requestUrl.origin) && requestUrl.port ? requestUrl.origin : null,
+    process.env.PORT ? `http://localhost:${process.env.PORT}` : null,
+    "http://localhost:3002",
+  ]);
+}
+
+function uniqueUrls(values: Array<string | null | undefined>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = normalizeHttpOrigin(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    urls.push(normalized);
+  }
+  return urls;
+}
+
+function normalizeHttpOrigin(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalHttpOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  } catch {
+    return false;
+  }
 }

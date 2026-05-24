@@ -159,13 +159,6 @@ export async function invokeConnector(
       error: `install ${input.installId} not found`,
     });
   }
-  if (install.status !== "active") {
-    return logAndReturn(sql, install.id as string, input.operation, actor, started, {
-      success: false,
-      error: `install is ${install.status}`,
-    });
-  }
-
   const def = getConnectorDefinition(install.connector_slug as string);
   if (!def) {
     return logAndReturn(sql, install.id as string, input.operation, actor, started, {
@@ -179,6 +172,18 @@ export async function invokeConnector(
     return logAndReturn(sql, install.id as string, input.operation, actor, started, {
       success: false,
       error: `operation ${input.operation} not supported by ${def.slug}`,
+    });
+  }
+
+  const isSafeHealthOperation = ["test_connection", "self_test"].includes(op.slug)
+    && op.governance.effectType === "system"
+    && op.governance.defaultDecision === "allow"
+    && op.governance.riskTier === "low"
+    && op.governance.externalSideEffect !== true;
+  if (install.status !== "active" && !isSafeHealthOperation) {
+    return logAndReturn(sql, install.id as string, input.operation, actor, started, {
+      success: false,
+      error: `install is ${install.status}`,
     });
   }
 
@@ -214,6 +219,7 @@ export async function invokeConnector(
         AND operation = ${op.slug}
         AND state IN ('approved', 'executing')
         AND request_payload_hash = ${expectedHash}
+        AND execution_metadata->>'installId' = ${input.installId}
         AND (${input.idempotencyKey ?? null}::text IS NULL OR idempotency_key = ${input.idempotencyKey ?? null})
       LIMIT 1
     `;

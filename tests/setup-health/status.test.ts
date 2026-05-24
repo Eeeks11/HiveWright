@@ -20,6 +20,11 @@ const baseSnapshot: SetupHealthSnapshot = {
     embeddingStatus: "ready",
     embeddingError: false,
   },
+  dashboard: {
+    checkedUrls: ["http://localhost:3002"],
+    reachableUrl: "http://localhost:3002",
+    lastError: null,
+  },
 };
 
 describe("buildSetupHealthRows", () => {
@@ -30,6 +35,7 @@ describe("buildSetupHealthRows", () => {
       ["models", "ready"],
       ["ea", "ready"],
       ["dispatcher", "ready"],
+      ["dashboard", "ready"],
       ["connectors", "ready"],
       ["safety", "ready"],
       ["schedules", "ready"],
@@ -40,11 +46,32 @@ describe("buildSetupHealthRows", () => {
       "/setup/models",
       "/setup/connectors",
       "/tasks",
+      "/setup/health",
       "/setup/connectors",
       "/setup/action-policies",
       "/schedules",
       "/memory/health",
     ]);
+  });
+
+  it("reports the configured dashboard URL instead of assuming only 3000 or 3001 matter", () => {
+    const rows = buildSetupHealthRows({
+      ...baseSnapshot,
+      dashboard: {
+        checkedUrls: ["http://localhost:3002"],
+        reachableUrl: "http://localhost:3002",
+        lastError: null,
+      },
+    });
+
+    const dashboard = rows.find((row) => row.key === "dashboard");
+    expect(dashboard).toMatchObject({
+      title: "Dashboard",
+      status: "ready",
+      href: "/setup/health",
+    });
+    expect(dashboard?.summary).toContain("http://localhost:3002");
+    expect(dashboard?.summary).not.toMatch(/3000|3001/);
   });
 
   it("represents deferred EA setup and skipped connectors honestly", () => {

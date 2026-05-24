@@ -8,6 +8,7 @@ export type SetupHealthRowKey =
   | "models"
   | "ea"
   | "dispatcher"
+  | "dashboard"
   | "connectors"
   | "safety"
   | "schedules"
@@ -39,6 +40,11 @@ export type SetupHealthSnapshot = {
     configured: boolean;
     maxConcurrentAgents: number | null;
     openTasks: number;
+  };
+  dashboard: {
+    checkedUrls: string[];
+    reachableUrl: string | null;
+    lastError: string | null;
   };
   connectors: {
     installed: number;
@@ -84,11 +90,51 @@ export function buildSetupHealthRows(snapshot: SetupHealthSnapshot): SetupHealth
     buildModelsRow(snapshot),
     buildEaRow(snapshot),
     buildDispatcherRow(snapshot),
+    buildDashboardRow(snapshot),
     buildConnectorsRow(snapshot),
     buildSafetyRow(snapshot),
     buildSchedulesRow(snapshot),
     buildMemoryRow(snapshot),
   ];
+}
+
+function buildDashboardRow(snapshot: SetupHealthSnapshot): SetupHealthRow {
+  const checked = snapshot.dashboard.checkedUrls;
+  if (snapshot.dashboard.reachableUrl) {
+    return row({
+      key: "dashboard",
+      title: "Dashboard",
+      status: "ready",
+      summary: `Dashboard responded at ${snapshot.dashboard.reachableUrl}. Checked ${formatUrlList(checked)}.`,
+      href: "/setup/health",
+      hrefLabel: "Review dashboard health",
+    });
+  }
+
+  if (checked.length === 0) {
+    return row({
+      key: "dashboard",
+      title: "Dashboard",
+      status: "pending",
+      summary: "HiveWright has not resolved a dashboard URL to check yet.",
+      href: "/settings",
+      hrefLabel: "Review host settings",
+    });
+  }
+
+  return row({
+    key: "dashboard",
+    title: "Dashboard",
+    status: "needs_attention",
+    summary: `Dashboard did not respond at the configured URL${checked.length === 1 ? "" : "s"}: ${formatUrlList(checked)}.`,
+    href: "/settings",
+    hrefLabel: "Review host settings",
+    limitation: snapshot.dashboard.lastError ?? undefined,
+  });
+}
+
+function formatUrlList(urls: string[]): string {
+  return urls.join(", ");
 }
 
 function buildModelsRow(snapshot: SetupHealthSnapshot): SetupHealthRow {

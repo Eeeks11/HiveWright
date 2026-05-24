@@ -820,6 +820,48 @@
       "when": 1779165799000,
       "tag": "0119_schedule_revision_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1779169400000,
+      "tag": "0120_hive_kind_foundation",
+      "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1779173000000,
+      "tag": "0121_hive_operating_profiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1779357854562,
+      "tag": "0122_generic_hive_records",
+      "breakpoints": true
+    },
+    {
+      "idx": 121,
+      "version": "7",
+      "when": 1779361454562,
+      "tag": "0123_owner_outcomes",
+      "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1779645600000,
+      "tag": "0124_connector_webhook_ingress",
+      "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1779623700000,
+      "tag": "0125_dispatcher_heartbeats",
+      "breakpoints": true
     }
   ]
 }

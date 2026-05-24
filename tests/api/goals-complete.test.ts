@@ -332,12 +332,17 @@ describe("POST /api/goals/[id]/complete", () => {
       VALUES (${bizId}, 'gccomplete-role', 'system', 'gccomplete-evidence-task', 'b', ${goalId})
       RETURNING id
     `)[0].id;
+    const workProductId = (await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, department, content, summary, title, filename, artifact_kind, mime_type, render_mode, review_status)
+      VALUES (${taskId}, ${bizId}, 'gccomplete-role', null, 'Evidence output', 'Evidence output summary', 'Evidence output', 'evidence.txt', 'final_artifact', 'text/plain', 'text', 'ready')
+      RETURNING id
+    `)[0].id;
 
     const res = await POST(
       makeRequest(completionBody("gccomplete: with evidence", {
         evidence: undefined,
         evidenceTaskIds: [taskId],
-        evidenceWorkProductIds: ["wp-fake-uuid-for-test"],
+        evidenceWorkProductIds: [workProductId],
       })),
       makeParams(goalId),
     );
@@ -346,7 +351,7 @@ describe("POST /api/goals/[id]/complete", () => {
     const [completion] = await sql`SELECT evidence FROM goal_completions WHERE goal_id = ${goalId}`;
     expect(completion.evidence).toEqual({
       taskIds: [taskId],
-      workProductIds: ["wp-fake-uuid-for-test"],
+      workProductIds: [workProductId],
     });
   });
 

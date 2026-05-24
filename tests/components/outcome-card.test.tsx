@@ -10,7 +10,10 @@ const baseOutcome: OwnerOutcomeSummary = {
   hiveId: "hive-1",
   goalTitle: "Launch HiveWright landing page",
   summary: "Landing page is ready for owner review.",
-  status: "unread",
+  whyItMatters: "The owner can inspect the actual launch page.",
+  recommendedNextAction: "Open the page and accept it if ready.",
+  impactStatement: "Business hive impact: a launch asset is ready for review.",
+  status: "new",
   createdAt: "2026-05-17T02:00:00.000Z",
   evidenceWorkProductIds: ["wp-1"],
   primaryWorkProductId: "wp-1",
@@ -46,5 +49,18 @@ describe("OutcomeCard", () => {
     const fallback = screen.getByRole("link", { name: "Review final output" });
     expect(fallback.getAttribute("href")).toBe("/goals/goal-1");
     expect(screen.queryByRole("link", { name: "Review handoff" })).toBeNull();
+  });
+
+  it("exposes owner review actions without making task artifacts primary", () => {
+    render(<OutcomeCard outcome={baseOutcome} />);
+
+    expect(screen.getByRole("button", { name: "Accept outcome" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Needs revision" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Process candidate" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Archive outcome" })).toBeTruthy();
+    expect(screen.getByText("The owner can inspect the actual launch page.")).toBeTruthy();
+    expect(screen.getByText("Open the page and accept it if ready.")).toBeTruthy();
+    expect(screen.getByText("Business hive impact: a launch asset is ready for review.")).toBeTruthy();
+    expect(screen.getByText("1 audit artifact")).toBeTruthy();
   });
 });

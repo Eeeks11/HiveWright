@@ -2,13 +2,32 @@
 import { useEffect, useState, useCallback } from "react";
 import type { FormEvent } from "react";
 import { useParams } from "next/navigation";
+import { HiveConnectorsPanel } from "@/components/hives/hive-connectors-panel";
+import { HiveRecordsPanel } from "@/components/hives/hive-records-panel";
+import { HiveScoreboard } from "@/components/hives/hive-scoreboard";
 import { HiveSectionNav } from "@/components/hive-section-nav";
+
+interface OperatingProfile {
+  kind: string;
+  purpose: string;
+  desiredOutcome: string;
+  current30DayOutcome: string | null;
+  constraints: string[];
+  approvalRules: string[];
+  forbiddenActions: string[];
+  importantContext: string[];
+  successCriteria: string[];
+  stopOrPauseCriteria: string[];
+  kindProfile: Record<string, unknown>;
+  isDerived: boolean;
+}
 
 interface Hive {
   id: string;
   slug: string;
   name: string;
   type: string;
+  kind: string;
   description: string | null;
   mission: string | null;
   softwareStack: string | null;
@@ -17,6 +36,7 @@ interface Hive {
     capCents: number;
     window: "daily" | "weekly" | "monthly" | "all_time";
   };
+  operatingProfile: OperatingProfile | null;
   createdAt: string;
 }
 
@@ -47,6 +67,7 @@ export default function HiveDetailPage() {
   const [changesSaveState, setChangesSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [referenceTitle, setReferenceTitle] = useState("");
   const [budgetSaveState, setBudgetSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [profileSaveState, setProfileSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [exportState, setExportState] = useState<"idle" | "exporting" | "exported" | "error">("idle");
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -88,6 +109,42 @@ export default function HiveDetailPage() {
       body: JSON.stringify(patch),
     });
     if (res.ok) reload();
+  };
+
+  const linesFromForm = (form: FormData, key: string) => String(form.get(key) ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const saveOperatingProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setProfileSaveState("saving");
+    const form = new FormData(event.currentTarget);
+    const res = await fetch(`/api/hives/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operatingProfile: {
+          purpose: String(form.get("purpose") ?? ""),
+          desiredOutcome: String(form.get("desiredOutcome") ?? ""),
+          current30DayOutcome: String(form.get("current30DayOutcome") ?? ""),
+          constraints: linesFromForm(form, "constraints"),
+          approvalRules: linesFromForm(form, "approvalRules"),
+          forbiddenActions: linesFromForm(form, "forbiddenActions"),
+          importantContext: linesFromForm(form, "importantContext"),
+          successCriteria: linesFromForm(form, "successCriteria"),
+          stopOrPauseCriteria: linesFromForm(form, "stopOrPauseCriteria"),
+        },
+      }),
+    });
+    if (res.ok) {
+      setProfileSaveState("saved");
+      await reload();
+      setTimeout(() => setProfileSaveState("idle"), 2000);
+    } else {
+      setProfileSaveState("error");
+      setTimeout(() => setProfileSaveState("idle"), 4000);
+    }
   };
 
   const saveBudget = async (event: FormEvent<HTMLFormElement>) => {
@@ -352,6 +409,8 @@ export default function HiveDetailPage() {
         )}
       </section>
 
+      <HiveScoreboard hiveId={id} hiveKind={hive.kind ?? "business"} />
+
       <section className="space-y-4 rounded-lg border p-6">
         <div>
           <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Budget controls</h2>
@@ -399,6 +458,64 @@ export default function HiveDetailPage() {
           {budgetSaveState === "error" && <span className="text-red-600 dark:text-red-400">Save failed</span>}
         </div>
       </section>
+
+      {hive.operatingProfile && (
+        <section className="space-y-4 rounded-lg border p-6">
+          <div>
+            <h2 className="text-lg font-medium text-amber-900 dark:text-amber-100">Operating profile</h2>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Durable operating context for this {hive.kind?.replace("_", " ") ?? "hive"}. This is injected into agent context and should capture outcomes, constraints, approvals, and stop rules.
+            </p>
+            {hive.operatingProfile.isDerived && (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Derived from setup. Save changes here to make it explicit.</p>
+            )}
+          </div>
+          <form onSubmit={saveOperatingProfile} className="space-y-3">
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">Purpose</span>
+              <textarea name="purpose" rows={2} defaultValue={hive.operatingProfile.purpose} className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800" />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">Desired outcome</span>
+              <textarea name="desiredOutcome" rows={2} defaultValue={hive.operatingProfile.desiredOutcome} className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800" />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium text-zinc-700 dark:text-zinc-200">Current 30-day outcome</span>
+              <textarea name="current30DayOutcome" rows={2} defaultValue={hive.operatingProfile.current30DayOutcome ?? ""} className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800" />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {[
+                ["constraints", "Constraints"],
+                ["approvalRules", "Approval rules"],
+                ["forbiddenActions", "Forbidden actions"],
+                ["importantContext", "Important context"],
+                ["successCriteria", "Success criteria"],
+                ["stopOrPauseCriteria", "Stop / pause criteria"],
+              ].map(([key, label]) => (
+                <label key={key} className="block space-y-1 text-sm">
+                  <span className="font-medium text-zinc-700 dark:text-zinc-200">{label}</span>
+                  <textarea
+                    name={key}
+                    rows={4}
+                    defaultValue={(hive.operatingProfile?.[key as keyof OperatingProfile] as string[] | undefined)?.join("\n") ?? ""}
+                    className="w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+                    placeholder="One item per line"
+                  />
+                </label>
+              ))}
+            </div>
+            <button disabled={profileSaveState === "saving"} className="cursor-pointer rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-wait disabled:opacity-50">
+              {profileSaveState === "saving" ? "Saving…" : "Save operating profile"}
+            </button>
+            {profileSaveState === "saved" && <span className="ml-3 text-sm text-green-600 dark:text-green-400">✓ Saved</span>}
+            {profileSaveState === "error" && <span className="ml-3 text-sm text-red-600 dark:text-red-400">Save failed</span>}
+          </form>
+        </section>
+      )}
+
+      <HiveConnectorsPanel hiveId={id} />
+
+      <HiveRecordsPanel hiveId={id} hiveKind={hive.kind ?? "business"} />
 
       <section className="space-y-4 rounded-lg border p-6">
         <div>

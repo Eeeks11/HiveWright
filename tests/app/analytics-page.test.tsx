@@ -79,7 +79,7 @@ describe("AnalyticsPage billable usage reporting", () => {
 
     render(<AnalyticsPage />);
 
-    await waitFor(() => expect(screen.getByText("Cost Analytics")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Outcome Analytics")).toBeTruthy());
 
     expect(screen.getAllByText("Processed Context").length).toBeGreaterThan(0);
     expect(screen.getByText("Fresh Input")).toBeTruthy();

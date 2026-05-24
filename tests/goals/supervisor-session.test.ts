@@ -189,6 +189,13 @@ describe("buildSupervisorInitialPrompt", () => {
 });
 
 describe("buildSprintWakeUpPrompt", () => {
+  it("includes hive operating profile context when waking after a sprint", async () => {
+    const prompt = await buildSprintWakeUpPrompt(sql, goalId, 1);
+
+    expect(prompt).toContain("**Operating Profile:** business");
+    expect(prompt).toContain("business outcomes, revenue, customers, margins, fulfilment, and the path to profit");
+  });
+
   it("includes a plan summary when a plan exists", async () => {
     await upsertGoalPlan(sql, goalId, {
       title: "supsess-plan",
@@ -231,6 +238,19 @@ describe("buildSprintWakeUpPrompt", () => {
 });
 
 describe("buildCommentWakeUpPrompt", () => {
+  it("includes hive operating profile context when waking after an owner comment", async () => {
+    const [comment] = await sql<{ id: string }[]>`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES (${goalId}, 'Please re-check this against the hive boundaries.', 'owner')
+      RETURNING id
+    `;
+
+    const prompt = await buildCommentWakeUpPrompt(sql, goalId, comment.id);
+
+    expect(prompt).toContain("**Operating Profile:** business");
+    expect(prompt).toContain("business outcomes, revenue, customers, margins, fulfilment, and the path to profit");
+  });
+
   it("shows the current completion payload shape when owner says the goal is resolved", async () => {
     const [comment] = await sql<{ id: string }[]>`
       INSERT INTO goal_comments (goal_id, body, created_by)

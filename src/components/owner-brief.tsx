@@ -51,7 +51,7 @@ interface BriefPayload {
     goalTitle: string;
     summary: string;
     createdAt: string;
-    status: "unread" | "reviewed" | "accepted" | "changes_requested" | "archived";
+    status: "new" | "accepted" | "needs_revision" | "archived" | "converted_to_process_candidate";
   }>;
   newInsights: Array<{
     id: string;
@@ -248,7 +248,7 @@ export function OwnerBrief({ hiveId }: { hiveId: string }) {
 
   const urgent = data.flags.urgentDecisions > 0 || data.flags.unresolvableTasks > 0;
   const latestOutcome = data.latestOutcomes?.[0];
-  const unreadOutcomeCount = data.flags.unreadOutcomes ?? data.latestOutcomes?.filter((outcome) => outcome.status === "unread").length ?? 0;
+  const unreadOutcomeCount = data.flags.unreadOutcomes ?? data.latestOutcomes?.filter((outcome) => outcome.status === "new").length ?? 0;
   const creationPaused = data.operationLock?.creationPause?.paused ?? false;
   const resumeReadiness = data.operationLock?.resumeReadiness;
   const aiBudget = data.aiBudget;

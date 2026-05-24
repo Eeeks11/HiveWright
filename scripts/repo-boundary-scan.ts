@@ -14,6 +14,7 @@ const findings: Finding[] = [];
 
 const bannedTrackedPrefixes = [
   ".audit-evidence/",
+  ".hermes/",
   "artifacts/",
   "docs/audit/",
   "docs/architecture/",
@@ -208,6 +209,7 @@ function scanIgnoreRules(files: string[]) {
     "CLAUDE.md",
     ".claude/example.json",
     ".codex/example.json",
+    ".hermes/example.md",
     ".openclaw/example.json",
     ".superpowers/example.md",
   ]) {

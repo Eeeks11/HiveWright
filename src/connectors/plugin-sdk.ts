@@ -8,6 +8,7 @@ export type ConnectorEffectType = "read" | "notify" | "write" | "financial" | "d
 export type ConnectorApprovalDefault = "allow" | "require_approval" | "block";
 export type ConnectorRiskTier = "low" | "medium" | "high" | "critical";
 export type ConnectorScopeKind = "read" | "write" | "send" | "admin" | "financial" | "pii";
+export type ConnectorCapability = "health" | "sync" | "webhook_ingest" | "record_import" | "action_execute";
 
 export interface ConnectorScopeDeclaration {
   key: string;
@@ -97,6 +98,7 @@ export interface ConnectorDefinition {
   secretFields: string[];
   scopes: ConnectorScopeDeclaration[];
   operations: ConnectorOperation[];
+  capabilities?: ConnectorCapability[];
   oauth?: OAuth2Config;
   testConnection?: (ctx: ConnectorInvocationContext) => Promise<unknown>;
   /**
@@ -108,9 +110,10 @@ export interface ConnectorDefinition {
   requiresDispatcherRestart?: boolean;
 }
 
-export type ConnectorDefinitionDraft = Omit<ConnectorDefinition, "pluginSlug" | "scopes" | "operations"> & {
+export type ConnectorDefinitionDraft = Omit<ConnectorDefinition, "pluginSlug" | "scopes" | "operations" | "capabilities"> & {
   scopes?: ConnectorScopeDeclaration[];
   operations: ConnectorOperation[];
+  capabilities?: ConnectorCapability[];
 };
 
 /**
@@ -122,6 +125,19 @@ export interface ConnectorInvocationContext {
   config: Record<string, unknown>;
   secrets: Record<string, string>;
   args: Record<string, unknown>;
+}
+
+export interface ConnectorSyncItem {
+  stream: string;
+  externalId: string;
+  occurredAt?: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ConnectorSyncResult {
+  stream: string;
+  nextCursor?: string | null;
+  items: ConnectorSyncItem[];
 }
 
 
@@ -149,6 +165,20 @@ function defaultScopeKind(effectType: ConnectorEffectType): ConnectorScopeKind {
   if (effectType === "financial") return "financial";
   if (effectType === "destructive") return "admin";
   return "write";
+}
+
+function normalizeConnectorCapabilities(
+  connector: ConnectorDefinitionDraft,
+  operations: ConnectorOperation[],
+): ConnectorCapability[] {
+  const capabilities = new Set<ConnectorCapability>(["health"]);
+  for (const capability of connector.capabilities ?? []) {
+    capabilities.add(capability);
+  }
+  if (operations.some((op) => op.governance.externalSideEffect === true)) {
+    capabilities.add("action_execute");
+  }
+  return Array.from(capabilities);
 }
 
 export function normalizeConnector(connector: ConnectorDefinitionDraft, pluginSlug = "unknown"): ConnectorDefinition {
@@ -179,10 +209,12 @@ export function normalizeConnector(connector: ConnectorDefinitionDraft, pluginSl
     description: op.governance.summary,
   } satisfies ConnectorScopeDeclaration));
   const scopes = connector.scopes && connector.scopes.length > 0 ? connector.scopes : operationScopes;
+  const capabilities = normalizeConnectorCapabilities(connector, baseOperations);
   return {
     ...connector,
     pluginSlug,
     scopes,
+    capabilities,
     operations: baseOperations.map((op) => {
       const scopeKey = `${connector.slug}:${op.slug}`;
       return {
@@ -271,6 +303,7 @@ export function toPublicConnector(c: ConnectorDefinition) {
       placeholder: secretFields.has(field.key) ? "[REDACTED]" : field.placeholder,
     })),
     scopes: c.scopes ?? [],
+    capabilities: c.capabilities ?? ["health"],
     operations: c.operations.map((op) => ({
       slug: op.slug,
       label: op.label,

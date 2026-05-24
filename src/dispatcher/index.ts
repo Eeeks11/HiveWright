@@ -96,6 +96,7 @@ import {
   type DashboardHealerState,
 } from "./dashboard-healer";
 import { OutboundNotifier } from "./notifier";
+import { recordDispatcherHeartbeat } from "./heartbeat";
 import {
   finishExecutionRun,
   markExecutionRunBlocked,
@@ -213,6 +214,7 @@ export class Dispatcher {
   private outboundNotifierTimer: NodeJS.Timeout | null = null;
   private dashboardHealerTimer: NodeJS.Timeout | null = null;
   private modelHealthRenewalTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
   private outboundNotifier: OutboundNotifier | null = null;
   private dashboardHealerState: DashboardHealerState = {
     lastRecoveryAt: null,
@@ -309,6 +311,16 @@ export class Dispatcher {
         EXECUTE FUNCTION notify_new_decision_message()
     `;
     console.log("[dispatcher] NOTIFY triggers ensured.");
+
+    await recordDispatcherHeartbeat(this.sql);
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.shuttingDown) {
+        recordDispatcherHeartbeat(this.sql).catch((err) =>
+          console.error("[dispatcher] heartbeat update failed:", err),
+        );
+      }
+    }, 30_000);
+    console.log("[dispatcher] Heartbeat every 30s.");
 
     // 0b. Ensure critical indexes exist
     await this.sql.unsafe(`CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks (status, priority)`);
@@ -2313,9 +2325,9 @@ export class Dispatcher {
     try {
       const { seedDefaultSchedules } = await import("../hives/seed-schedules");
       const hives = await this.sql<
-        { id: string; name: string; description: string | null }[]
+        { id: string; name: string; description: string | null; kind: string | null }[]
       >`
-        SELECT id, name, description FROM hives
+        SELECT id, name, description, kind FROM hives
       `;
       let created = 0;
       for (const h of hives) {
@@ -2438,6 +2450,7 @@ export class Dispatcher {
     if (this.scheduleTimer) clearInterval(this.scheduleTimer);
     if (this.modelDiscoveryTimer) clearInterval(this.modelDiscoveryTimer);
     if (this.modelHealthRenewalTimer) clearInterval(this.modelHealthRenewalTimer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.sprintCheckTimer) clearInterval(this.sprintCheckTimer);
     if (this.supervisorWakeReconciliationTimer) {
       clearInterval(this.supervisorWakeReconciliationTimer);

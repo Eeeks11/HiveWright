@@ -122,6 +122,68 @@ describe("completeGoal", () => {
     });
   });
 
+  it("creates one durable owner outcome for the completion inside the completion transaction", async () => {
+    await sql`
+      UPDATE hives SET kind = 'business' WHERE id = ${bizId}
+    `;
+    const taskId = (await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id, status)
+      VALUES (${bizId}, 'goalcomp-role', 'system', 'Build owner handoff', 'evidence task', ${goalId}, 'completed')
+      RETURNING id
+    `)[0].id;
+    const workProductId = (await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, department, content, summary, title, filename, artifact_kind, mime_type, render_mode, review_status)
+      VALUES (${taskId}, ${bizId}, 'goalcomp-role', null, '<h1>Owner output</h1>', 'Owner output summary', 'Owner output page', 'index.html', 'final_artifact', 'text/html', 'html', 'ready')
+      RETURNING id
+    `)[0].id;
+
+    await completeGoal(sql, goalId, "goalcomp: owner handoff ready", {
+      evidenceTaskIds: [taskId],
+      evidenceWorkProductIds: [workProductId],
+      learningGate: {
+        category: "nothing",
+        rationale: "No reusable learning from this one-off handoff.",
+      },
+    });
+
+    const completions = await sql<{ id: string }[]>`
+      SELECT id FROM goal_completions WHERE goal_id = ${goalId}
+    `;
+    const outcomes = await sql<{
+      goal_id: string;
+      goal_completion_id: string;
+      hive_id: string;
+      summary: string;
+      why_it_matters: string;
+      recommended_next_action: string;
+      impact_statement: string;
+      review_state: string;
+      evidence: { taskIds?: string[]; workProductIds?: string[] };
+      primary_work_product_id: string | null;
+      primary_open_url: string | null;
+    }[]>`
+      SELECT goal_id, goal_completion_id, hive_id, summary, why_it_matters, recommended_next_action,
+             impact_statement, review_state, evidence, primary_work_product_id, primary_open_url
+      FROM owner_outcomes
+      WHERE goal_id = ${goalId}
+    `;
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      goal_id: goalId,
+      goal_completion_id: completions[0].id,
+      hive_id: bizId,
+      summary: "goalcomp: owner handoff ready",
+      review_state: "new",
+      primary_work_product_id: workProductId,
+      primary_open_url: `/deliverables/${workProductId}/open`,
+    });
+    expect(outcomes[0].evidence).toEqual({ taskIds: [taskId], workProductIds: [workProductId] });
+    expect(outcomes[0].why_it_matters).toContain("owner-visible handoff");
+    expect(outcomes[0].recommended_next_action).toContain("Review");
+    expect(outcomes[0].impact_statement).toContain("Business hive impact");
+  });
+
   it("persists a lightweight evidence bundle alongside existing evidence IDs", async () => {
     const taskId = (await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id)
@@ -628,6 +690,13 @@ describe("completeGoal", () => {
         AND kind = 'learning_gate_followup'
     `;
     expect(followups).toHaveLength(1);
+
+    const ownerOutcomes = await sql`
+      SELECT id FROM owner_outcomes
+      WHERE hive_id = ${bizId}
+        AND goal_id = ${goalId}
+    `;
+    expect(ownerOutcomes).toHaveLength(1);
   });
 
   it("bounds learning follow-up decision titles for very long goal titles", async () => {

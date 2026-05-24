@@ -4,7 +4,7 @@ import {
   pgTable,
   text,
   timestamp,
-  uniqueIndex,
+  unique,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -21,6 +21,7 @@ export const businessRecords = pgTable(
     }),
     sourceConnector: varchar("source_connector", { length: 128 }).notNull(),
     externalId: text("external_id").notNull(),
+    recordFamily: varchar("record_family", { length: 128 }).default("event").notNull(),
     recordType: varchar("record_type", { length: 128 }).notNull(),
     status: varchar("status", { length: 128 }),
     title: text("title"),
@@ -28,17 +29,21 @@ export const businessRecords = pgTable(
     amountCents: integer("amount_cents"),
     currency: varchar("currency", { length: 16 }),
     counterparty: text("counterparty"),
+    summary: text("summary"),
+    notes: text("notes"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),
     normalized: jsonb("normalized").$type<Record<string, unknown>>().default({}).notNull(),
     rawRedacted: jsonb("raw_redacted").$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("business_records_source_key_idx").on(
+    unique("business_records_source_key_idx").on(
       table.hiveId,
+      table.connectorInstallId,
       table.sourceConnector,
       table.externalId,
       table.recordType,
-    ),
+    ).nullsNotDistinct(),
   ],
 );

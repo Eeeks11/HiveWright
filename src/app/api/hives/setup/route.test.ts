@@ -90,15 +90,44 @@ describe("POST /api/hives/setup", () => {
     mocks.storeCredential.mockResolvedValue({ id: "credential-1" });
     mocks.sql.mockResolvedValue([]);
     mocks.tx.mockReset();
-    mocks.tx.mockImplementation(async (strings: TemplateStringsArray) => {
+    mocks.tx.mockImplementation(async (strings: TemplateStringsArray, ...values: unknown[]) => {
       const query = strings.join(" ");
       if (query.includes("INSERT INTO hives")) {
         return [{
           id: "hive-1",
-          name: "Test Hive",
-          slug: "test-hive",
-          type: "digital",
+          name: values[0],
+          slug: values[1],
+          type: values[2],
+          kind: values[3],
           description: null,
+        }];
+      }
+      if (query.includes("SELECT id, name, kind, description, mission") && query.includes("FROM hives")) {
+        return [{
+          id: values[0],
+          name: "Test Hive",
+          kind: "creative",
+          description: null,
+          mission: null,
+        }];
+      }
+      if (query.includes("SELECT") && query.includes("FROM hive_operating_profiles")) {
+        return [];
+      }
+      if (query.includes("INSERT INTO hive_operating_profiles")) {
+        return [{
+          hive_id: values[0],
+          kind: values[1],
+          purpose: values[2],
+          desired_outcome: values[3],
+          current_30_day_outcome: values[4],
+          constraints: values[5],
+          approval_rules: values[6],
+          forbidden_actions: values[7],
+          important_context: values[8],
+          success_criteria: values[9],
+          stop_or_pause_criteria: values[10],
+          kind_profile: values[11],
         }];
       }
       if (query.includes("INSERT INTO connector_installs")) {
@@ -117,7 +146,7 @@ describe("POST /api/hives/setup", () => {
     mocks.tx.unsafe.mockResolvedValueOnce([{ slug: "dev-agent" }]);
 
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "creative" },
       roleOverrides: {
         "dev-agent": { adapterType: "codex", recommendedModel: "openai-codex/gpt-5.5" },
       },
@@ -135,7 +164,7 @@ describe("POST /api/hives/setup", () => {
     const body = await res.json();
 
     expect(res.status).toBe(201);
-    expect(body.data).toMatchObject({ id: "hive-1", name: "Test Hive", slug: "test-hive", type: "digital" });
+    expect(body.data).toMatchObject({ id: "hive-1", name: "Test Hive", slug: "test-hive", type: "digital", kind: "creative" });
     expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
     expect(mocks.mkdirSync).toHaveBeenCalledWith(configuredHivePath("test-hive", "projects"), { recursive: true });
     expect(mocks.mkdirSync).toHaveBeenCalledWith(configuredHivePath("test-hive", "skills"), { recursive: true });
@@ -144,6 +173,7 @@ describe("POST /api/hives/setup", () => {
       id: "hive-1",
       name: "Test Hive",
       description: null,
+      kind: "creative",
     }, {
       coreEnabled: true,
       proactiveEnabled: true,
@@ -155,6 +185,10 @@ describe("POST /api/hives/setup", () => {
     expect(mocks.tx.json).toHaveBeenCalledWith({ maxConcurrentTasks: 3, setupPreset: "owner-setup" });
     expect(mocks.tx.json).toHaveBeenCalledWith(expect.objectContaining({ setupPreset: "balanced", confidenceThreshold: 0.6 }));
     expect(mocks.tx.json).toHaveBeenCalledWith({ enabled: true, prepareOnSetup: true, setupPreset: "ready" });
+    expect(mocks.tx.mock.calls.some((call) => String(call[0]).includes("INSERT INTO hive_operating_profiles"))).toBe(true);
+    expect(mocks.tx.json).toHaveBeenCalledWith(expect.arrayContaining([
+      "Owner approval required before publishing, spending money, or making external commitments.",
+    ]));
     expect(mocks.tx.unsafe).toHaveBeenCalledWith(
       "UPDATE role_templates SET adapter_type = $1, recommended_model = $2 WHERE slug = $3 RETURNING slug",
       ["codex", "openai-codex/gpt-5.5", "dev-agent"],
@@ -169,7 +203,7 @@ describe("POST /api/hives/setup", () => {
     process.env.HIVES_WORKSPACE_ROOT = "/tmp/hw-setup-hives";
 
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
       projects: [{ name: "Website", slug: "website" }],
     }));
 
@@ -183,7 +217,7 @@ describe("POST /api/hives/setup", () => {
 
   it("fails the whole setup when a selected connector is incomplete", async () => {
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
       connectors: [{
         connectorSlug: "discord-webhook",
         displayName: "Discord",
@@ -200,7 +234,7 @@ describe("POST /api/hives/setup", () => {
 
   it("persists customized operating preferences at the setup API boundary", async () => {
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
       operatingPreferences: {
         maxConcurrentAgents: 6,
         proactiveWork: false,
@@ -214,6 +248,7 @@ describe("POST /api/hives/setup", () => {
       id: "hive-1",
       name: "Test Hive",
       description: null,
+      kind: "business",
     }, {
       coreEnabled: true,
       proactiveEnabled: false,
@@ -227,7 +262,7 @@ describe("POST /api/hives/setup", () => {
     mocks.sql.mockResolvedValueOnce([{ id: "existing-hive" }]);
 
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
     }));
     const body = await res.json();
 
@@ -241,7 +276,7 @@ describe("POST /api/hives/setup", () => {
     mocks.tx.unsafe.mockResolvedValueOnce([]);
 
     const res = await POST(setupRequest({
-      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
       roleOverrides: {
         "ghost-role": { adapterType: "codex", recommendedModel: "openai-codex/gpt-5.5" },
       },
@@ -264,5 +299,41 @@ describe("POST /api/hives/setup", () => {
       .join("\n");
     expect(queries).not.toMatch(/INSERT INTO connector_installs/);
     expect(queries).not.toMatch(/INSERT INTO goals/);
+  });
+
+  it("rejects setup requests that omit hive kind", async () => {
+    const res = await POST(setupRequest({
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital" },
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("Please choose what kind of hive you are creating.");
+    expect(mocks.sql.begin).not.toHaveBeenCalled();
+  });
+
+  it("rejects setup requests with an unknown hive kind", async () => {
+    const res = await POST(setupRequest({
+      hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "hobby" },
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("Please choose a valid hive kind.");
+    expect(mocks.sql.begin).not.toHaveBeenCalled();
+  });
+
+  it("creates a kind-specific first goal when setup does not provide one", async () => {
+    const res = await POST(setupRequest({
+      hive: { name: "Research Hive", slug: "research-hive", type: "digital", kind: "research" },
+    }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.tx).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining("INSERT INTO goals")]),
+      "hive-1",
+      expect.stringContaining("Frame the research question"),
+      expect.stringContaining("Research Hive"),
+    );
   });
 });

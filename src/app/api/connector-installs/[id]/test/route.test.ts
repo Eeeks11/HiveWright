@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   canMutateHive: vi.fn(),
   getConnectorDefinition: vi.fn(),
   invokeConnectorReadOnlyOrSystem: vi.fn(),
+  setConnectorInstallStatus: vi.fn(),
 }));
 
 vi.mock("../../../_lib/db", () => ({
@@ -26,6 +27,10 @@ vi.mock("@/connectors/registry", () => ({
 
 vi.mock("@/connectors/runtime", () => ({
   invokeConnectorReadOnlyOrSystem: mocks.invokeConnectorReadOnlyOrSystem,
+}));
+
+vi.mock("@/connectors/installs", () => ({
+  setConnectorInstallStatus: mocks.setConnectorInstallStatus,
 }));
 
 import { POST } from "./route";
@@ -107,6 +112,40 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
       operation: "test_connection",
       args: {},
       actor: "owner-test",
+    });
+  });
+
+  it("marks a successful health test active and clears last error", async () => {
+    const res = await POST(testRequest(), params);
+
+    expect(res.status).toBe(200);
+    expect(mocks.setConnectorInstallStatus).toHaveBeenCalledWith(mocks.sql, {
+      installId: "install-1",
+      hiveId: "hive-a",
+      status: "active",
+      tested: true,
+      lastError: null,
+    });
+  });
+
+  it("marks a failed health test broken with a redacted last error", async () => {
+    mocks.invokeConnectorReadOnlyOrSystem.mockResolvedValueOnce({
+      success: false,
+      error: "webhook token secret-token failed",
+      durationMs: 3,
+    });
+
+    const res = await POST(testRequest(), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.success).toBe(false);
+    expect(mocks.setConnectorInstallStatus).toHaveBeenCalledWith(mocks.sql, {
+      installId: "install-1",
+      hiveId: "hive-a",
+      status: "broken",
+      tested: true,
+      lastError: "webhook token secret-token failed",
     });
   });
 

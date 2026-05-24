@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { CronExpressionParser } from "cron-parser";
+import { normalizeHiveKind, type HiveKind } from "@/hives/kind";
 
 const SYSTEM_DEFAULT_ORIGIN_TYPE = "system_default";
 const SYSTEM_DEFAULT_CREATED_BY = "system:seed-default-schedules";
@@ -16,7 +17,7 @@ type ScheduleTemplate = {
   priority?: number;
 };
 
-type HiveSeedContext = { id: string; name: string; description: string | null };
+type HiveSeedContext = { id: string; name: string; description: string | null; kind?: HiveKind | string | null };
 
 type InitialNextRunAt = "now-plus-1-minute" | "cron-next";
 
@@ -81,21 +82,180 @@ items that need action; hive_memory has at least one new entry if
 anything durable was learned.
 `.trim();
 
-const DEFAULT_SCHEDULE_DEFINITIONS: DefaultScheduleDefinition[] = [
-  {
-    key: "daily-world-scan",
+const BUSINESS_DAILY_OPPORTUNITY_SCAN: DefaultScheduleDefinition = {
+  key: "daily-world-scan",
+  title: WORLD_SCAN_TITLE,
+  cronExpression: WORLD_SCAN_CRON,
+  tier: "proactive",
+  createdBy: SYSTEM_DEFAULT_CREATED_BY,
+  buildTemplate: (hive) => ({
+    assignedTo: "research-analyst",
     title: WORLD_SCAN_TITLE,
-    cronExpression: WORLD_SCAN_CRON,
-    tier: "proactive",
-    createdBy: SYSTEM_DEFAULT_CREATED_BY,
-    buildTemplate: (hive) => ({
-      assignedTo: "research-analyst",
-      title: WORLD_SCAN_TITLE,
-      brief: WORLD_SCAN_BRIEF(hive.name, hive.description),
-      qaRequired: false,
-      priority: 4,
-    }),
-  },
+    brief: WORLD_SCAN_BRIEF(hive.name, hive.description),
+    qaRequired: false,
+    priority: 4,
+  }),
+};
+
+const KIND_OPERATING_LOOP_DEFINITIONS: Record<HiveKind, DefaultScheduleDefinition[]> = {
+  business: [
+    BUSINESS_DAILY_OPPORTUNITY_SCAN,
+    {
+      key: "weekly-business-review",
+      title: "Weekly business review",
+      kind: "weekly-business-review",
+      cronExpression: "0 9 * * 1",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "weekly-business-review",
+        assignedTo: "performance-analyst",
+        title: "Weekly business review",
+        brief: `Review ${hive.name}'s revenue path, customer pipeline, fulfilment risks, expenses, owner decisions, and next commercial action. Create owner decisions only for material tradeoffs or approval gates.`,
+        qaRequired: false,
+        priority: 3,
+      }),
+    },
+  ],
+  personal_project: [
+    {
+      key: "weekly-milestone-review",
+      title: "Weekly milestone review",
+      kind: "weekly-milestone-review",
+      cronExpression: "0 9 * * 1",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "weekly-milestone-review",
+        assignedTo: "goal-supervisor",
+        title: "Weekly milestone review",
+        brief: `Review ${hive.name}'s milestones, deliverables, blockers, dependencies, and next useful action. Keep the owner focused on progress toward the defined project outcome.`,
+        qaRequired: false,
+        priority: 3,
+      }),
+    },
+    {
+      key: "project-blocker-check",
+      title: "Project blocker check",
+      kind: "project-blocker-check",
+      cronExpression: "0 10 * * 3",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "project-blocker-check",
+        assignedTo: "operations-coordinator",
+        title: "Project blocker check",
+        brief: `Check ${hive.name} for blocked decisions, missing inputs, stale tasks, and owner approvals that could stop the project from moving forward.`,
+        qaRequired: false,
+        priority: 4,
+      }),
+    },
+  ],
+  personal_assistant: [
+    {
+      key: "daily-admin-digest",
+      title: "Daily admin digest",
+      kind: "daily-admin-digest",
+      cronExpression: "0 8 * * *",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "daily-admin-digest",
+        assignedTo: "lifestyle-assistant",
+        title: "Daily admin digest",
+        brief: `Prepare a concise admin digest for ${hive.name}: open requests, reminders, appointments, errands, pending approvals, and any sensitive actions that must wait for owner approval.`,
+        qaRequired: false,
+        priority: 3,
+      }),
+    },
+    {
+      key: "reminder-sweep",
+      title: "Reminder sweep",
+      kind: "reminder-sweep",
+      cronExpression: "0 16 * * *",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "reminder-sweep",
+        assignedTo: "scheduler",
+        title: "Reminder sweep",
+        brief: `Sweep ${hive.name} for reminders, follow-ups, date-sensitive tasks, and unresolved owner approvals. Do not send external messages or make commitments without approval.`,
+        qaRequired: false,
+        priority: 4,
+      }),
+    },
+  ],
+  research: [
+    {
+      key: "source-finding-review",
+      title: "Source and finding review",
+      kind: "source-finding-review",
+      cronExpression: "0 9 * * 2",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "source-finding-review",
+        assignedTo: "research-analyst",
+        title: "Source and finding review",
+        brief: `Review ${hive.name}'s questions, sources, findings, confidence levels, unknowns, and recommendation readiness. Separate evidence from inference.`,
+        qaRequired: false,
+        priority: 3,
+      }),
+    },
+    {
+      key: "research-unknowns-check",
+      title: "Research unknowns check",
+      kind: "research-unknowns-check",
+      cronExpression: "0 11 * * 4",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "research-unknowns-check",
+        assignedTo: "intelligence-analyst",
+        title: "Research unknowns check",
+        brief: `Check ${hive.name} for unresolved questions, weak sources, stale assumptions, and next evidence-gathering steps.`,
+        qaRequired: false,
+        priority: 4,
+      }),
+    },
+  ],
+  creative: [
+    {
+      key: "creative-draft-review",
+      title: "Creative draft review",
+      kind: "creative-draft-review",
+      cronExpression: "0 10 * * 2",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "creative-draft-review",
+        assignedTo: "content-review-agent",
+        title: "Creative draft review",
+        brief: `Review ${hive.name}'s drafts, assets, variants, owner feedback, brand constraints, and next production step.`,
+        qaRequired: false,
+        priority: 3,
+      }),
+    },
+    {
+      key: "publish-readiness-loop",
+      title: "Publish readiness loop",
+      kind: "publish-readiness-loop",
+      cronExpression: "0 14 * * 4",
+      tier: "proactive",
+      createdBy: SYSTEM_DEFAULT_CREATED_BY,
+      buildTemplate: (hive) => ({
+        kind: "publish-readiness-loop",
+        assignedTo: "social-media-manager",
+        title: "Publish readiness loop",
+        brief: `Check ${hive.name}'s publishable assets, review state, channel fit, missing approvals, and delivery checklist.`,
+        qaRequired: false,
+        priority: 4,
+      }),
+    },
+  ],
+};
+
+const COMMON_DEFAULT_SCHEDULE_DEFINITIONS: DefaultScheduleDefinition[] = [
   {
     key: "hive-supervisor-heartbeat",
     title: "Hive supervisor heartbeat",
@@ -183,13 +343,26 @@ const DEFAULT_SCHEDULE_DEFINITIONS: DefaultScheduleDefinition[] = [
   },
 ];
 
-export const DEFAULT_SCHEDULE_REGISTRY = DEFAULT_SCHEDULE_DEFINITIONS.map((definition) => ({
+const ALL_DEFAULT_SCHEDULE_DEFINITIONS = [
+  ...COMMON_DEFAULT_SCHEDULE_DEFINITIONS,
+  ...Object.values(KIND_OPERATING_LOOP_DEFINITIONS).flat(),
+];
+
+export const DEFAULT_SCHEDULE_REGISTRY = ALL_DEFAULT_SCHEDULE_DEFINITIONS.map((definition) => ({
   key: definition.key,
   title: definition.title,
   kind: definition.kind,
   cronExpression: definition.cronExpression,
   tier: definition.tier,
 }));
+
+function defaultScheduleDefinitionsForHive(hive: HiveSeedContext): DefaultScheduleDefinition[] {
+  const kind = normalizeHiveKind(hive.kind);
+  return [
+    ...KIND_OPERATING_LOOP_DEFINITIONS[kind],
+    ...COMMON_DEFAULT_SCHEDULE_DEFINITIONS,
+  ];
+}
 
 function legacyJsonFieldPattern(field: "kind" | "title", value: string): string {
   const escaped = value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
@@ -277,7 +450,7 @@ export async function seedDefaultSchedules(
 ): Promise<SeedResult> {
   const result: SeedResult = { created: 0, skipped: 0 };
 
-  for (const definition of DEFAULT_SCHEDULE_DEFINITIONS) {
+  for (const definition of defaultScheduleDefinitionsForHive(hive)) {
     if (await hasScheduleWithOrigin(sql, hive.id, definition.key)) {
       result.skipped++;
       continue;

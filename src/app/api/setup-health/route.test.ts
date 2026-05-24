@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   sql: vi.fn(),
@@ -40,6 +40,13 @@ describe("/api/setup-health", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.HIVES_WORKSPACE_ROOT;
+    delete process.env.NEXT_PUBLIC_DASHBOARD_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.HIVEWRIGHT_INTERNAL_BASE_URL;
+    delete process.env.AUTH_URL;
+    delete process.env.NEXTAUTH_URL;
+    delete process.env.BASE_URL;
+    delete process.env.PORT;
     mocks.requireApiAuth.mockResolvedValue(null);
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
@@ -55,6 +62,11 @@ describe("/api/setup-health", () => {
       signals: {},
       checkedAt: "2026-05-17T19:00:00.000Z",
     });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("reports the resolved hive workspace root", async () => {
@@ -69,6 +81,10 @@ describe("/api/setup-health", () => {
       envKey: "HIVES_WORKSPACE_ROOT",
       envFilePath: "/repo/.env",
       restartRequired: false,
+      dashboard: {
+        checkedUrls: ["http://localhost:3002"],
+        reachableUrl: "http://localhost:3002",
+      },
     });
   });
 
@@ -103,6 +119,8 @@ describe("/api/setup-health", () => {
       .mockResolvedValueOnce([{ config: { enabled: false, prepareOnSetup: false } }])
       .mockResolvedValueOnce([]);
 
+    process.env.NEXT_PUBLIC_DASHBOARD_URL = "http://localhost:3002";
+
     const res = await GET(new Request("http://localhost/api/setup-health?hiveId=hive-1"));
     const body = await res.json();
 
@@ -125,6 +143,12 @@ describe("/api/setup-health", () => {
           href: "/setup/connectors",
         }),
         expect.objectContaining({
+          key: "dashboard",
+          statusLabel: "Ready",
+          summary: expect.stringContaining("http://localhost:3002"),
+          href: "/setup/health",
+        }),
+        expect.objectContaining({
           key: "schedules",
           statusLabel: "Not set up yet",
           href: "/schedules",
@@ -141,6 +165,14 @@ describe("/api/setup-health", () => {
       canRunNow: true,
       summary: "Hive is running.",
     });
+    expect(body.data.dashboard).toMatchObject({
+      checkedUrls: ["http://localhost:3002"],
+      reachableUrl: "http://localhost:3002",
+    });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://localhost:3002/",
+      expect.objectContaining({ method: "HEAD", redirect: "manual" }),
+    );
     expect(mocks.getHiveOperatorVerdict).toHaveBeenCalledWith(mocks.sql, { hiveId: "hive-1" });
     expect(body.data.sources).toMatchObject({
       models: "model_catalog, hive_models, model_health, and role_templates",

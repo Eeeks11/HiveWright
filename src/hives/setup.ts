@@ -5,6 +5,8 @@ import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { storeCredential } from "@/credentials/manager";
 import { isValidHiveAddress } from "@/hives/address";
+import { defaultInitialGoalForHiveKind, isHiveKind, type HiveKind } from "@/hives/kind";
+import { deriveOperatingProfileDefaults, upsertOperatingProfile } from "@/hives/operating-profile";
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { hiveProjectsPath, hiveRootPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 
@@ -51,6 +53,7 @@ export type HiveSetupRequest = {
     name?: string;
     slug?: string;
     type?: string;
+    kind?: HiveKind | string;
     description?: string;
     mission?: string;
   };
@@ -532,10 +535,16 @@ async function saveRoleOverrides(tx: SqlExecutor, roleOverrides: Record<string, 
 
 async function validateHiveSetupRequest(sqlClient: Sql, body: HiveSetupRequest) {
   const hive = body.hive ?? {};
-  const { name, slug, type } = hive;
+  const { name, slug, type, kind } = hive;
 
   if (!name || !slug || !type) {
     throw new HiveSetupError("Please add a hive name and type before creating it.", 400);
+  }
+  if (!kind) {
+    throw new HiveSetupError("Please choose what kind of hive you are creating.", 400);
+  }
+  if (!isHiveKind(kind)) {
+    throw new HiveSetupError("Please choose a valid hive kind.", 400);
   }
   if (typeof slug !== "string" || !isValidHiveAddress(slug)) {
     throw new HiveSetupError("Please use only lowercase letters, numbers, and dashes for the hive address.", 400);
@@ -567,7 +576,8 @@ export async function runHiveSetup(
   await validateHiveSetupRequest(sqlClient, body);
 
   const hive = body.hive ?? {};
-  const { name, slug, type, description, mission } = hive;
+  const { name, slug, type, kind, description, mission } = hive;
+  const hiveKind = kind as HiveKind;
   const connectors = body.connectors ?? [];
   const projects = body.projects ?? [];
   const operatingPreferences = normalizeOperatingPreferences(body.operatingPreferences);
@@ -577,9 +587,9 @@ export async function runHiveSetup(
     return await sqlClient.begin(async (tx) => {
       const workspacePath = hiveProjectsPath(slug!);
       const [hiveRow] = await tx`
-        INSERT INTO hives (name, slug, type, description, mission, workspace_path)
-        VALUES (${name!}, ${slug!}, ${type!}, ${description || null}, ${mission || null}, ${workspacePath})
-        RETURNING id, name, slug, type, description
+        INSERT INTO hives (name, slug, type, kind, operating_mode, description, mission, workspace_path)
+        VALUES (${name!}, ${slug!}, ${type!}, ${hiveKind}, ${"exploring"}, ${description || null}, ${mission || null}, ${workspacePath})
+        RETURNING id, name, slug, type, kind, description
       `;
       const hiveId = hiveRow.id as string;
 
@@ -590,6 +600,7 @@ export async function runHiveSetup(
         id: hiveId,
         name: hiveRow.name as string,
         description: (hiveRow.description as string | null) ?? null,
+        kind: hiveKind,
       }, {
         coreEnabled: true,
         proactiveEnabled: operatingPreferences.proactiveWork,
@@ -611,6 +622,18 @@ export async function runHiveSetup(
 
       await seedSafetyPolicies(tx, hiveId, body.safetyPreset ?? "owner_review_first");
       maybeFailSetup("action-policies", options);
+
+      const initialGoal = body.initialGoal?.trim() || defaultInitialGoalForHiveKind(hiveKind, hiveRow.name as string);
+      const defaultOperatingProfile = deriveOperatingProfileDefaults({
+        hiveId,
+        name: hiveRow.name as string,
+        kind: hiveKind,
+        description: (description as string | null | undefined) ?? null,
+        mission: (mission as string | null | undefined) ?? null,
+        initialGoal,
+        safetyPreset: body.safetyPreset ?? "owner_review_first",
+      });
+      await upsertOperatingProfile(tx, hiveId, defaultOperatingProfile);
 
       const installedConnectors: InstalledConnectorSetupResult[] = [];
       for (const connector of connectors) {
@@ -635,7 +658,6 @@ export async function runHiveSetup(
       }
       maybeFailSetup("projects", options);
 
-      const initialGoal = body.initialGoal?.trim();
       if (initialGoal) {
         const [goal] = await tx`
           INSERT INTO goals (hive_id, title, description)
@@ -651,6 +673,7 @@ export async function runHiveSetup(
         name: hiveRow.name,
         slug: hiveRow.slug,
         type: hiveRow.type,
+        kind: hiveRow.kind,
         installedConnectors,
       };
     });

@@ -97,6 +97,15 @@ describe("SetupHealthPage", () => {
                   row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
                   row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
                   row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
+                  row(
+                    "dashboard",
+                    "Dashboard",
+                    "ready",
+                    "Ready",
+                    "/setup/health",
+                    "Review dashboard health",
+                    "Dashboard responded at http://localhost:3002.",
+                  ),
                   row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
                   row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
                   row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
@@ -125,6 +134,7 @@ describe("SetupHealthPage", () => {
       "Models",
       "EA",
       "Work queue",
+      "Dashboard",
       "Service connections",
       "Safety rules",
       "Recurring work",
@@ -133,15 +143,18 @@ describe("SetupHealthPage", () => {
       expect(screen.getByRole("heading", { name: title })).toBeTruthy();
     }
 
-    expect(screen.getByText("2 of 7 ready")).toBeTruthy();
+    expect(screen.getByText("3 of 8 ready")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Connect EA" }).getAttribute("href")).toBe("/setup/connectors");
     expect(screen.getByRole("link", { name: "View work queue" }).getAttribute("href")).toBe("/tasks");
+    expect(screen.getByRole("link", { name: "Review dashboard health" }).getAttribute("href")).toBe("/setup/health");
     expect(screen.getByRole("link", { name: "Review safety rules" }).getAttribute("href")).toBe("/setup/action-policies");
     expect(screen.getByRole("link", { name: "Turn on recurring work" }).getAttribute("href")).toBe("/schedules");
     expect(screen.getByRole("link", { name: "Fix memory search" }).getAttribute("href")).toBe("/setup/embeddings");
+    expect(screen.getByText(/http:\/\/localhost:3002/)).toBeTruthy();
 
     const pageText = document.body.textContent ?? "";
     expect(pageText).not.toMatch(/adapter_config|raw model|cron|route hint|action_policies|effect_type|jsonb/i);
+    expect(pageText).not.toMatch(/3000\/3001|localhost:3000|localhost:3001/);
     expect(within(screen.getByText("Service connections").closest("article")!).getByText("Pending/not checked")).toBeTruthy();
   });
 });
@@ -153,13 +166,14 @@ function row(
   statusLabel: string,
   href: string,
   hrefLabel: string,
+  summary?: string,
 ) {
   return {
     key,
     title,
     status,
     statusLabel,
-    summary: `${title} summary.`,
+    summary: summary ?? `${title} summary.`,
     href,
     hrefLabel,
   };

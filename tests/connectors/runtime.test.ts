@@ -165,6 +165,31 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
     expect(result.error).toMatch(/ungranted connector scope/);
   });
 
+  it("blocks reusing an approval issued for a different install", async () => {
+    const approvedInstallId = await installDiscord("https://discord.test/webhooks/approved");
+    const otherInstallId = await installDiscord("https://discord.test/webhooks/other");
+    const requestId = await createApprovedExternalActionRequest({
+      installId: approvedInstallId,
+      connector: "discord-webhook",
+      operation: "send_message",
+      args: { content: "hello" },
+    });
+
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeApprovedConnectorAction(sql, {
+      installId: otherInstallId,
+      operation: "send_message",
+      args: { content: "hello" },
+      approvedExternalActionRequestId: requestId,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/approved external action request does not match/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("hashes sensitive payload fields so approved actions cannot swap them after approval", () => {
     const approved = canonicalConnectorPayloadHash({ content: "hello", authHeader: "Bearer one" });
     const tampered = canonicalConnectorPayloadHash({ content: "hello", authHeader: "Bearer two" });
@@ -249,6 +274,24 @@ describe("invokeConnector(discord-webhook, send_message)", () => {
       WHERE install_id = ${installId} ORDER BY id DESC LIMIT 1
     `;
     expect(evt.status).toBe("error");
+  });
+
+  it("allows safe health tests to run on broken installs so status can recover", async () => {
+    const installId = await installDiscord("https://discord.test/webhooks/health");
+    await sql`
+      UPDATE connector_installs
+      SET status = 'broken', last_error = 'previous failure'
+      WHERE id = ${installId}
+    `;
+
+    const result = await invokeConnector(sql, {
+      installId,
+      operation: "test_connection",
+      actor: "owner-test",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.error).toBeUndefined();
   });
 });
 

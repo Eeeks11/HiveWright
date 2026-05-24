@@ -1,0 +1,62 @@
+import { sanitizeAuditString } from "@/actions/redaction";
+import { canMutateHive } from "@/auth/users";
+import { ConnectorSyncError, syncConnectorInstall } from "@/connectors/sync";
+import { requireApiUser } from "../../../_lib/auth";
+import { sql } from "../../../_lib/db";
+import { jsonError, jsonOk } from "../../../_lib/responses";
+
+function syncError(err: unknown) {
+  const message = err instanceof Error ? sanitizeAuditString(err.message) : "Sync failed";
+  const status = err instanceof ConnectorSyncError ? err.status : 500;
+  return jsonError(message, status);
+}
+
+function parseStreams(value: unknown): string[] | null {
+  if (value === undefined) return ["default"];
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const streams = value.filter((stream): stream is string => typeof stream === "string" && stream.trim().length > 0)
+    .map((stream) => stream.trim());
+  if (streams.length !== value.length) return null;
+  return Array.from(new Set(streams));
+}
+
+export async function POST(
+  request: Request,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+
+  try {
+    const { id } = await ctx.params;
+    const body = (await request.json().catch(() => ({}))) as {
+      hiveId?: unknown;
+      streams?: unknown;
+    };
+    if (typeof body.hiveId !== "string" || !body.hiveId.trim()) {
+      return jsonError("hiveId is required", 400);
+    }
+    const streams = parseStreams(body.streams);
+    if (!streams) {
+      return jsonError("streams must be a non-empty array of strings", 400);
+    }
+
+    if (!authz.user.isSystemOwner) {
+      const canMutate = await canMutateHive(sql, authz.user.id, body.hiveId);
+      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
+    }
+
+    const result = await syncConnectorInstall(sql, {
+      hiveId: body.hiveId,
+      installId: id,
+      streams,
+      actor: authz.user.id,
+    });
+    return jsonOk(result);
+  } catch (err) {
+    if (!(err instanceof ConnectorSyncError)) {
+      console.error("[api/connector-installs/:id/sync]", err);
+    }
+    return syncError(err);
+  }
+}

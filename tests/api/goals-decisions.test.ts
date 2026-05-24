@@ -305,6 +305,73 @@ describe("Decisions API", () => {
     expect(dec.priority).toBe("urgent");
   });
 
+  it("GET /api/decisions — hides internal machinery by default and exposes it through includeInternalSystem", async () => {
+    const [systemError] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Watchdog restart diagnostic',
+        'Watchdog recovered a stale heartbeat; no owner action is needed.',
+        'low',
+        'pending',
+        'system_error'
+      )
+      RETURNING id
+    `;
+    const [aiPeer] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'AI peer quality review: internal route handler',
+        'AI peer review only. Rate backend implementation quality.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "ai_peer" })},
+        'normal',
+        'pending',
+        'task_quality_feedback'
+      )
+      RETURNING id
+    `;
+    const [fixtureHive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type, is_system_fixture)
+      VALUES (${PREFIX + "fixture"}, 'System Fixture Hive', 'digital', true)
+      RETURNING id
+    `;
+    const [fixtureDecision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, title, context, priority, status, kind)
+      VALUES (
+        ${fixtureHive.id},
+        'Fixture-only owner prompt',
+        'This belongs to a system fixture hive.',
+        'normal',
+        'pending',
+        'decision'
+      )
+      RETURNING id
+    `;
+
+    const defaultRes = await getDecisions(new Request(
+      `http://localhost/api/decisions?hiveId=${hiveId}`,
+    ));
+    const defaultBody = await defaultRes.json();
+
+    expect(defaultRes.status).toBe(200);
+    expect(defaultBody.data.map((d: { id: string }) => d.id)).toContain(decisionId);
+    expect(defaultBody.data.map((d: { id: string }) => d.id)).not.toContain(systemError.id);
+    expect(defaultBody.data.map((d: { id: string }) => d.id)).not.toContain(aiPeer.id);
+
+    const includeRes = await getDecisions(new Request(
+      `http://localhost/api/decisions?hiveId=${hiveId}&kind=all&includeInternalSystem=true&includeAiPeerQualityFeedback=true`,
+    ));
+    const includeBody = await includeRes.json();
+    const includedIds = includeBody.data.map((d: { id: string }) => d.id);
+
+    expect(includeRes.status).toBe(200);
+    expect(includedIds).toEqual(expect.arrayContaining([decisionId, systemError.id, aiPeer.id]));
+    expect(includedIds).not.toContain(fixtureDecision.id);
+  });
+
   it("GET /api/decisions — orders urgent before normal", async () => {
     // Insert a normal-priority decision
     const [normalDec] = await sql`

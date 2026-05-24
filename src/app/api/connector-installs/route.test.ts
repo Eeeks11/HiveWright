@@ -33,7 +33,7 @@ vi.mock("@/connectors/registry", () => ({
   getConnectorDefinitionForHive: mocks.getConnectorDefinitionForHive,
 }));
 
-import { GET, POST } from "./route";
+import { GET, PATCH, POST } from "./route";
 
 const connectorDefinition = {
   slug: "discord-webhook",
@@ -48,6 +48,7 @@ const connectorDefinition = {
     { key: "discord-webhook:send_message", label: "Send message", required: false },
   ],
   operations: [{ slug: "send_message" }],
+  capabilities: ["health", "action_execute"],
 };
 
 function installRequest(body: Record<string, unknown>) {
@@ -106,8 +107,47 @@ describe("GET /api/connector-installs access control", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data).toEqual([{ id: "install-1", hiveId: "hive-a" }]);
+    expect(body.data).toEqual([expect.objectContaining({ id: "install-1", hiveId: "hive-a" })]);
+    expect(body.data[0]).not.toHaveProperty("credentialId");
     expect(mocks.sql).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns owner-safe redacted install summaries", async () => {
+    mocks.sql.mockResolvedValueOnce([{
+      id: "install-1",
+      hiveId: "hive-a",
+      connectorSlug: "discord-webhook",
+      displayName: "Discord",
+      config: {
+        webhookUrl: "https://discord.test/webhook/secret",
+        defaultUsername: "HiveWright",
+      },
+      grantedScopes: ["discord-webhook:test_connection"],
+      credentialId: "cred-1",
+      status: "active",
+      lastTestedAt: null,
+      lastError: null,
+      createdAt: new Date("2026-05-24T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-24T00:00:00.000Z"),
+      successes7d: 2,
+      errors7d: 1,
+    }]);
+    mocks.getConnectorDefinitionForHive.mockResolvedValueOnce(connectorDefinition);
+
+    const res = await GET(new Request("http://localhost/api/connector-installs?hiveId=hive-a"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data[0]).toMatchObject({
+      id: "install-1",
+      connectorSlug: "discord-webhook",
+      config: { defaultUsername: "HiveWright" },
+      credentialConfigured: true,
+      successes7d: 2,
+      errors7d: 1,
+    });
+    expect(JSON.stringify(body.data[0])).not.toContain("discord.test");
+    expect(body.data[0]).not.toHaveProperty("credentialId");
   });
 });
 
@@ -122,7 +162,20 @@ describe("POST /api/connector-installs access control", () => {
     mocks.canMutateHive.mockResolvedValue(true);
     mocks.getConnectorDefinitionForHive.mockReturnValue(connectorDefinition);
     mocks.storeCredential.mockResolvedValue({ id: "cred-1" });
-    mocks.sql.mockResolvedValue([{ id: "install-1" }]);
+    mocks.sql.mockResolvedValue([{
+      id: "install-1",
+      hiveId: "hive-a",
+      connectorSlug: "discord-webhook",
+      displayName: "Discord",
+      config: { defaultUsername: "HiveWright" },
+      grantedScopes: ["discord-webhook:test_connection", "discord-webhook:send_message"],
+      credentialId: "cred-1",
+      status: "active",
+      lastTestedAt: null,
+      lastError: null,
+      createdAt: new Date("2026-05-24T00:00:00.000Z"),
+      updatedAt: new Date("2026-05-24T00:00:00.000Z"),
+    }]);
   });
 
   it("rejects authenticated non-members before storing secrets or creating installs", async () => {
@@ -206,6 +259,112 @@ describe("POST /api/connector-installs access control", () => {
     const body = await res.json();
     expect(body.error).toMatch(/unknown scope/i);
     expect(mocks.storeCredential).not.toHaveBeenCalled();
+    expect(mocks.sql).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/connector-installs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.ENCRYPTION_KEY = "test-encryption-key";
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.canMutateHive.mockResolvedValue(true);
+    mocks.getConnectorDefinitionForHive.mockReturnValue(connectorDefinition);
+    mocks.storeCredential.mockResolvedValue({ id: "cred-2" });
+    mocks.sql
+      .mockResolvedValueOnce([{
+        id: "install-1",
+        hiveId: "hive-a",
+        connectorSlug: "discord-webhook",
+        displayName: "Discord",
+        config: { defaultUsername: "Old Name" },
+        grantedScopes: ["discord-webhook:test_connection", "discord-webhook:send_message"],
+        credentialId: "cred-1",
+        status: "active",
+        lastTestedAt: null,
+        lastError: null,
+        createdAt: new Date("2026-05-24T00:00:00.000Z"),
+        updatedAt: new Date("2026-05-24T00:00:00.000Z"),
+      }])
+      .mockResolvedValueOnce([{
+        id: "install-1",
+        hiveId: "hive-a",
+        connectorSlug: "discord-webhook",
+        displayName: "Quiet Discord",
+        config: { defaultUsername: "New Name" },
+        grantedScopes: ["discord-webhook:test_connection"],
+        credentialId: "cred-2",
+        status: "disabled",
+        lastTestedAt: null,
+        lastError: null,
+        createdAt: new Date("2026-05-24T00:00:00.000Z"),
+        updatedAt: new Date("2026-05-24T00:00:01.000Z"),
+      }]);
+  });
+
+  it("rejects authenticated non-members before updating installs", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
+    });
+    mocks.canMutateHive.mockResolvedValueOnce(false);
+
+    const res = await PATCH(installRequest({
+      hiveId: "hive-a",
+      installId: "install-1",
+      status: "disabled",
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
+    expect(mocks.sql).not.toHaveBeenCalled();
+    expect(mocks.storeCredential).not.toHaveBeenCalled();
+  });
+
+  it("updates config, secrets, owner-settable status, and granted scopes", async () => {
+    const res = await PATCH(installRequest({
+      hiveId: "hive-a",
+      installId: "install-1",
+      status: "disabled",
+      displayName: "Quiet Discord",
+      fields: {
+        webhookUrl: "https://discord.test/webhook/new",
+        defaultUsername: "New Name",
+      },
+      grantedScopes: [],
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toMatchObject({
+      id: "install-1",
+      displayName: "Quiet Discord",
+      status: "disabled",
+      config: { defaultUsername: "New Name" },
+      credentialConfigured: true,
+      grantedScopes: ["discord-webhook:test_connection"],
+    });
+    expect(JSON.stringify(body.data)).not.toContain("discord.test");
+    expect(body.data).not.toHaveProperty("credentialId");
+    expect(mocks.storeCredential).toHaveBeenCalledWith(
+      mocks.sql,
+      expect.objectContaining({ hiveId: "hive-a", value: JSON.stringify({ webhookUrl: "https://discord.test/webhook/new" }) }),
+    );
+  });
+
+  it("rejects owner attempts to set broken status", async () => {
+    const res = await PATCH(installRequest({
+      hiveId: "hive-a",
+      installId: "install-1",
+      status: "broken",
+    }));
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/status must be active or disabled/i);
     expect(mocks.sql).not.toHaveBeenCalled();
   });
 });

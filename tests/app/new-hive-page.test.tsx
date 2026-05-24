@@ -145,9 +145,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     expect(screen.getByText("Auto Routing (recommended)")).toBeTruthy();
     expect(screen.getByText("Codex CLI")).toBeTruthy();
     expect(screen.getByLabelText("Auto Routing (recommended) runtime preset")).toHaveProperty("checked", true);
@@ -213,9 +211,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     fireEvent.click(screen.getByRole("button", { name: "Advanced runtime details" }));
 
     const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
@@ -268,9 +264,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     fireEvent.click(screen.getByRole("button", { name: "Advanced runtime details" }));
 
     const modelSelect = screen.getByLabelText("Model") as HTMLSelectElement;
@@ -284,8 +278,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
     expect(screen.getByText("Your EA can answer you in Discord and help you start work without opening HiveWright.")).toBeTruthy();
     expect(screen.getByLabelText(/Discord Application ID/)).toBeTruthy();
@@ -321,8 +314,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Connect services" })).toBeTruthy());
@@ -352,10 +344,8 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.change(screen.getByLabelText("First goal"), { target: { value: "Launch the refreshed onboarding" } });
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("First commercial goal"), { target: { value: "Launch the refreshed onboarding" } });
+    await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
     fireEvent.change(screen.getByLabelText(/Discord Application ID/), { target: { value: "app-123" } });
     fireEvent.change(screen.getByLabelText(/Allowed Discord channel ID/), { target: { value: "channel-123" } });
@@ -376,7 +366,7 @@ describe("NewHiveWizard", () => {
     fireEvent.change(screen.getByLabelText("Local folder override"), { target: { value: "operator-folder" } });
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
 
     await waitFor(() => {
@@ -420,7 +410,7 @@ describe("NewHiveWizard", () => {
         requestSorting: "balanced",
       },
     });
-    expect(navigationMocks.push).toHaveBeenCalledWith("/setup/health");
+    expect(navigationMocks.push).toHaveBeenCalledWith("/hives/hive-123");
   });
 
   it("asks plain-language operating preference questions and submits changed presets", async () => {
@@ -428,9 +418,6 @@ describe("NewHiveWizard", () => {
 
     await fillRequiredHiveFields();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
     await waitFor(() => expect(screen.getByRole("heading", { name: "Set working preferences" })).toBeTruthy());
     expect(screen.getByLabelText("How many agents may work at once?")).toHaveProperty("value", "3");
     expect(screen.getByText("Should HiveWright look for useful work on its own?")).toBeTruthy();
@@ -453,6 +440,8 @@ describe("NewHiveWizard", () => {
     fireEvent.change(screen.getByLabelText("How should new requests be sorted?"), { target: { value: "goals" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Set up your Discord EA" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "I'll do this later" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -460,7 +449,7 @@ describe("NewHiveWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
 
     await waitFor(() => {
@@ -481,8 +470,7 @@ describe("NewHiveWizard", () => {
     render(<NewHiveWizard />);
 
     await fillRequiredHiveFields();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
     fireEvent.click(screen.getByRole("button", { name: "I'll do this later" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -493,7 +481,7 @@ describe("NewHiveWizard", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
     expect(screen.getByText(/HiveWright EA \(Discord\): set aside for Settings after launch/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
 
@@ -556,9 +544,9 @@ describe("NewHiveWizard", () => {
 
     await fillRequiredHiveFields();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Set working preferences" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Set up your Discord EA" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -566,7 +554,7 @@ describe("NewHiveWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
 
     await waitFor(() => {
@@ -588,16 +576,14 @@ describe("NewHiveWizard", () => {
     fireEvent.click(screen.getByText("Advanced"));
     fireEvent.change(screen.getByRole("textbox", { name: "Custom hive address" }), { target: { value: "owner-picked-address" } });
     fireEvent.change(screen.getByLabelText("Hive name *"), { target: { value: "Renamed Hive" } });
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+    await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Connect services" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Review and launch" })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
 
     await waitFor(() => {
@@ -622,9 +608,14 @@ async function enterSetup() {
   await waitFor(() => expect(screen.getByLabelText("Hive name *")).toBeTruthy());
 }
 
-async function advanceFromRuntimeToEa() {
+async function advanceFromHiveDetailsToRuntime() {
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(screen.getByRole("heading", { name: "Set working preferences" })).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Next" }));
+  await waitFor(() => expect(screen.getByRole("heading", { name: "Choose agent runtimes" })).toBeTruthy());
+}
+
+async function advanceFromRuntimeToEa() {
   fireEvent.click(screen.getByRole("button", { name: "Next" }));
   await waitFor(() => expect(screen.getByRole("heading", { name: "Set up your Discord EA" })).toBeTruthy());
 }

@@ -9,6 +9,7 @@ export const AGENT_AUDIT_EVENTS = {
   decisionCreated: "decision.created",
   decisionUpdated: "decision.updated",
   decisionApproved: "decision.approved",
+  decisionArchived: "decision.archived",
   decisionResolved: "decision.resolved",
   decisionRejected: "decision.rejected",
   hiveMemoryWritten: "hive_memory.written",

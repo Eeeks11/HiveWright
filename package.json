@@ -25,6 +25,7 @@
     "auth:owner-reset-local": "tsx scripts/reset-owner-session.ts",
     "auth:owner-smoke": "tsx scripts/run-owner-session-smoke.ts",
     "auth:owner-smoke:local": "tsx scripts/run-owner-session-local-smoke.ts",
+    "dashboard:agent-live-smoke": "scripts/with-runtime-env.sh tsx scripts/run-dashboard-agent-live-usage-smoke.ts",
     "qa:operations-map:parked-fixture": "tsx scripts/setup-operations-map-parked-qa-fixture.ts",
     "check:migrations": "tsx scripts/check-drizzle-journal.ts",
     "security:scan:daily": "bash scripts/run-security-scan.sh daily",

@@ -3,6 +3,7 @@ import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
+import { setConnectorInstallStatus } from "@/connectors/installs";
 import { canMutateHive } from "@/auth/users";
 
 /**
@@ -42,7 +43,8 @@ export async function POST(
       ["test_connection", "self_test"].includes(operation.slug) &&
       operation.governance.effectType === "system" &&
       operation.governance.defaultDecision === "allow" &&
-      operation.governance.riskTier === "low"
+      operation.governance.riskTier === "low" &&
+      operation.governance.externalSideEffect !== true
     );
     if (!testOperation) return jsonError("connector has no safe test operation", 400);
 
@@ -51,6 +53,14 @@ export async function POST(
       operation: testOperation.slug,
       args: {},
       actor: "owner-test",
+    });
+
+    await setConnectorInstallStatus(sql, {
+      installId: id,
+      hiveId: install.hiveId as string,
+      status: result.success ? "active" : "broken",
+      tested: true,
+      lastError: result.success ? null : result.error ?? "health test failed",
     });
 
     return jsonOk(result);

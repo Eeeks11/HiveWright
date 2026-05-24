@@ -31,6 +31,7 @@ export interface RequestExternalActionInput {
   taskId?: string | null;
   goalId?: string | null;
   idempotencyKey?: string | null;
+  now?: Date;
 }
 
 export interface RequestExternalActionResult {
@@ -420,6 +421,7 @@ export async function requestExternalAction(
     actorRoleSlug: actorRoleSlug(input.actor),
     args: input.args,
     riskTier: operation.governance.riskTier,
+    now: input.now,
     policies,
   });
 

@@ -1,9 +1,20 @@
 import { sql } from "../_lib/db";
 import { jsonError, jsonOk } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
-import { storeCredential } from "@/credentials/manager";
-import { getConnectorDefinitionForHive, type ConnectorScopeDeclaration } from "@/connectors/registry";
 import { canAccessHive, canMutateHive } from "@/auth/users";
+import {
+  ConnectorInstallError,
+  createConnectorInstall,
+  listConnectorInstalls,
+  updateConnectorInstall,
+} from "@/connectors/installs";
+
+function connectorInstallError(err: unknown, fallback: string) {
+  if (err instanceof ConnectorInstallError) {
+    return jsonError(err.message, err.status);
+  }
+  return jsonError(fallback, 500);
+}
 
 export async function GET(request: Request) {
   try {
@@ -18,33 +29,11 @@ export async function GET(request: Request) {
       if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
     }
 
-    const rows = await sql`
-      SELECT
-        ci.id,
-        ci.hive_id        AS "hiveId",
-        ci.connector_slug AS "connectorSlug",
-        ci.display_name   AS "displayName",
-        ci.config,
-        ci.granted_scopes AS "grantedScopes",
-        ci.credential_id  AS "credentialId",
-        ci.status,
-        ci.last_tested_at AS "lastTestedAt",
-        ci.last_error     AS "lastError",
-        ci.created_at     AS "createdAt",
-        (SELECT COUNT(*) FROM connector_events ce
-           WHERE ce.install_id = ci.id AND ce.status = 'success'
-             AND ce.created_at > NOW() - INTERVAL '7 days') AS "successes7d",
-        (SELECT COUNT(*) FROM connector_events ce
-           WHERE ce.install_id = ci.id AND ce.status = 'error'
-             AND ce.created_at > NOW() - INTERVAL '7 days') AS "errors7d"
-      FROM connector_installs ci
-      WHERE ci.hive_id = ${hiveId}::uuid
-      ORDER BY ci.created_at DESC
-    `;
-    return jsonOk(rows);
+    const installs = await listConnectorInstalls(sql, { hiveId });
+    return jsonOk(installs);
   } catch (err) {
     console.error("[api/connector-installs GET]", err);
-    return jsonError("Failed to fetch installs", 500);
+    return connectorInstallError(err, "Failed to fetch installs");
   }
 }
 
@@ -57,8 +46,8 @@ export async function POST(request: Request) {
       hiveId?: string;
       connectorSlug?: string;
       displayName?: string;
-      fields?: Record<string, string>;
-      grantedScopes?: string[];
+      fields?: Record<string, unknown>;
+      grantedScopes?: unknown;
     };
 
     if (!hiveId || !connectorSlug || !displayName || !fields) {
@@ -70,77 +59,65 @@ export async function POST(request: Request) {
       if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
     }
 
-    const def = await getConnectorDefinitionForHive(sql, hiveId, connectorSlug);
-    if (!def) return jsonError(`unknown or disabled connector for hive: ${connectorSlug}`, 400);
+    const install = await createConnectorInstall(sql, {
+      hiveId,
+      connectorSlug,
+      displayName,
+      fields,
+      grantedScopes: body.grantedScopes,
+    });
 
-    const requestedScopes: unknown[] = Array.isArray(body.grantedScopes) ? body.grantedScopes : [];
-    if (!requestedScopes.every((scope) => typeof scope === "string")) {
-      return jsonError("grantedScopes must be an array of strings", 400);
-    }
-    const declaredScopes = new Set(def.scopes.map((scope: ConnectorScopeDeclaration) => scope.key));
-    const unknownScope = requestedScopes.find((scope): scope is string => typeof scope === "string" && !declaredScopes.has(scope));
-    if (unknownScope) {
-      return jsonError(`unknown scope for ${def.slug}: ${unknownScope}`, 400);
-    }
-    const grantedScopes = Array.from(new Set([
-      ...def.scopes.filter((scope: ConnectorScopeDeclaration) => scope.required).map((scope: ConnectorScopeDeclaration) => scope.key),
-      ...(requestedScopes as string[]),
-    ]));
-
-    // Validate required non-secret fields.
-    for (const f of def.setupFields) {
-      if (f.required && !fields[f.key]) {
-        return jsonError(`Missing required field: ${f.label}`, 400);
-      }
-    }
-
-    // Split secrets from non-secret config.
-    const secretValues: Record<string, string> = {};
-    const publicConfig: Record<string, string> = {};
-    for (const f of def.setupFields) {
-      const v = fields[f.key];
-      if (v === undefined || v === null || v === "") continue;
-      if (def.secretFields.includes(f.key)) {
-        secretValues[f.key] = v;
-      } else {
-        publicConfig[f.key] = v;
-      }
-    }
-
-    const encryptionKey = process.env.ENCRYPTION_KEY || "";
-    let credentialId: string | null = null;
-
-    if (Object.keys(secretValues).length > 0) {
-      if (!encryptionKey) {
-        return jsonError("ENCRYPTION_KEY not configured — cannot store secrets", 500);
-      }
-      const cred = await storeCredential(sql, {
-        hiveId,
-        name: `${def.name}: ${displayName}`,
-        key: `connector:${def.slug}:${Date.now()}`,
-        value: JSON.stringify(secretValues),
-        rolesAllowed: [],
-        encryptionKey,
-      });
-      credentialId = cred.id;
-    }
-
-    const [row] = await sql`
-      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, credential_id)
-      VALUES (
-        ${hiveId}::uuid,
-        ${def.slug},
-        ${displayName},
-        ${sql.json(publicConfig)},
-        ${sql.json(grantedScopes)},
-        ${credentialId}
-      )
-      RETURNING id
-    `;
-
-    return jsonOk({ id: row.id, connectorSlug: def.slug }, 201);
+    return jsonOk({ id: install.id, connectorSlug: install.connectorSlug }, 201);
   } catch (err) {
     console.error("[api/connector-installs POST]", err);
-    return jsonError("Failed to install connector", 500);
+    return connectorInstallError(err, "Failed to install connector");
+  }
+}
+
+export async function PATCH(request: Request) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+  try {
+    const body = await request.json();
+    const { hiveId, installId, status, displayName, fields } = body as {
+      hiveId?: string;
+      installId?: string;
+      status?: unknown;
+      displayName?: unknown;
+      fields?: Record<string, unknown>;
+      grantedScopes?: unknown;
+    };
+
+    if (!hiveId || !installId) {
+      return jsonError("hiveId and installId are required", 400);
+    }
+    if (status !== undefined && status !== "active" && status !== "disabled") {
+      return jsonError("status must be active or disabled", 400);
+    }
+    if (displayName !== undefined && typeof displayName !== "string") {
+      return jsonError("displayName must be a string", 400);
+    }
+    if (fields !== undefined && (typeof fields !== "object" || fields === null || Array.isArray(fields))) {
+      return jsonError("fields must be an object", 400);
+    }
+
+    if (!authz.user.isSystemOwner) {
+      const canMutate = await canMutateHive(sql, authz.user.id, hiveId);
+      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
+    }
+
+    const install = await updateConnectorInstall(sql, {
+      hiveId,
+      installId,
+      status: status as "active" | "disabled" | undefined,
+      displayName: displayName as string | undefined,
+      fields,
+      grantedScopes: body.grantedScopes,
+    });
+
+    return jsonOk(install);
+  } catch (err) {
+    console.error("[api/connector-installs PATCH]", err);
+    return connectorInstallError(err, "Failed to update install");
   }
 }

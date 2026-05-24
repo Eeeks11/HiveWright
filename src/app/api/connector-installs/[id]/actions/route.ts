@@ -1,5 +1,5 @@
 import { canAccessHive } from "@/auth/users";
-import { redactActionPayload } from "@/actions/redaction";
+import { redactActionPayload, sanitizeAuditString } from "@/actions/redaction";
 import { requireApiUser } from "../../../_lib/auth";
 import { sql } from "../../../_lib/db";
 import { jsonError, jsonOk } from "../../../_lib/responses";
@@ -29,7 +29,7 @@ export async function GET(
     Math.max(Number(new URL(request.url).searchParams.get("limit") ?? 20), 1),
     100,
   );
-  const rows = await sql<{
+  const actionRows = await sql<{
     id: string;
     connector: string;
     operation: string;
@@ -64,7 +64,24 @@ export async function GET(
     LIMIT ${limit}
   `;
 
-  return jsonOk(rows.map((row) => ({
+  const eventRows = await sql<{
+    id: number;
+    operation: string;
+    status: string;
+    duration_ms: number | null;
+    error_text: string | null;
+    actor: string | null;
+    created_at: Date;
+  }[]>`
+    SELECT id, operation, status, duration_ms, error_text, actor, created_at
+    FROM connector_events
+    WHERE install_id = ${id}
+    ORDER BY created_at DESC
+    LIMIT ${limit}
+  `;
+
+  const actions = actionRows.map((row) => ({
+    kind: "external_action_request" as const,
     id: row.id,
     connector: row.connector,
     operation: row.operation,
@@ -77,5 +94,22 @@ export async function GET(
     reviewedAt: row.reviewed_at,
     executedAt: row.executed_at,
     completedAt: row.completed_at,
-  })));
+  }));
+  const events = eventRows.map((row) => ({
+    kind: "connector_event" as const,
+    id: `event-${row.id}`,
+    connector: install.connector_slug,
+    operation: row.operation,
+    state: row.status,
+    actor: row.actor,
+    durationMs: row.duration_ms,
+    errorText: row.error_text ? sanitizeAuditString(row.error_text) : null,
+    createdAt: row.created_at,
+  }));
+
+  return jsonOk(
+    [...actions, ...events]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit),
+  );
 }

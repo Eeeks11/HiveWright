@@ -3,6 +3,7 @@ import path from "path";
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
+import { isHiveKind, normalizeHiveKind } from "@/hives/kind";
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { hiveProjectsPath } from "@/hives/workspace-root";
 
@@ -17,25 +18,25 @@ export async function GET(request: Request) {
     const rows = authz.user.isSystemOwner
       ? includeSystemFixtures
         ? await sql`
-        SELECT id, slug, name, type, description, workspace_path, is_system_fixture, created_at
+        SELECT id, slug, name, type, kind, description, workspace_path, is_system_fixture, created_at
         FROM hives ORDER BY name ASC
       `
         : await sql`
-        SELECT id, slug, name, type, description, workspace_path, is_system_fixture, created_at
+        SELECT id, slug, name, type, kind, description, workspace_path, is_system_fixture, created_at
         FROM hives
         WHERE is_system_fixture = false
         ORDER BY name ASC
       `
       : includeSystemFixtures
         ? await sql`
-        SELECT h.id, h.slug, h.name, h.type, h.description, h.workspace_path, h.is_system_fixture, h.created_at
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
         WHERE hm.user_id = ${authz.user.id}
         ORDER BY h.name ASC
       `
         : await sql`
-        SELECT h.id, h.slug, h.name, h.type, h.description, h.workspace_path, h.is_system_fixture, h.created_at
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
         WHERE hm.user_id = ${authz.user.id}
@@ -47,6 +48,7 @@ export async function GET(request: Request) {
       slug: r.slug,
       name: r.name,
       type: r.type,
+      kind: normalizeHiveKind(r.kind),
       description: r.description,
       workspacePath: r.workspace_path,
       isSystemFixture: r.is_system_fixture,
@@ -66,15 +68,16 @@ export async function POST(request: Request) {
   }
   try {
     const body = await request.json();
-    const { name, slug, type, description, mission } = body;
-    if (!name || !slug || !type) return jsonError("name, slug, and type are required", 400);
+    const { name, slug, type, kind, description, mission } = body;
+    if (!name || !slug || !type || !kind) return jsonError("name, slug, type, and kind are required", 400);
+    if (!isHiveKind(kind)) return jsonError("kind must be one of business, personal_project, personal_assistant, research, creative", 400);
     if (typeof slug !== "string" || !HIVE_SLUG_REGEX.test(slug)) {
       return jsonError("slug must match ^[a-z0-9][a-z0-9-]{1,63}$", 400);
     }
     const workspacePath = hiveProjectsPath(slug);
     const [row] = await sql`
-      INSERT INTO hives (name, slug, type, description, mission, workspace_path)
-      VALUES (${name}, ${slug}, ${type}, ${description || null}, ${mission || null}, ${workspacePath})
+      INSERT INTO hives (name, slug, type, kind, operating_mode, description, mission, workspace_path)
+      VALUES (${name}, ${slug}, ${type}, ${kind}, ${"exploring"}, ${description || null}, ${mission || null}, ${workspacePath})
       RETURNING *
     `;
 
@@ -91,6 +94,7 @@ export async function POST(request: Request) {
         id: row.id as string,
         name: row.name as string,
         description: (row.description as string | null) ?? null,
+        kind,
       }, {
         coreEnabled: true,
         proactiveEnabled: true,
@@ -99,7 +103,7 @@ export async function POST(request: Request) {
       console.warn("[api/hives POST] failed to seed default schedules:", err);
     }
 
-    return jsonOk({ id: row.id, name: row.name, slug: row.slug, type: row.type }, 201);
+    return jsonOk({ id: row.id, name: row.name, slug: row.slug, type: row.type, kind: normalizeHiveKind(row.kind) }, 201);
   } catch {
     return jsonError("Failed to create hive", 500);
   }

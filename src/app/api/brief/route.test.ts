@@ -27,7 +27,7 @@ vi.mock("../initiative-runs/queries", () => ({
 import { createBriefGetHandler } from "./get-handler";
 
 function createDb() {
-  return vi.fn((strings: TemplateStringsArray) => {
+  const db = vi.fn((strings: TemplateStringsArray) => {
     const query = strings.join("?");
     if (query.includes("FROM decisions") && query.includes("kind = 'decision'") && query.includes("LIMIT 10")) {
       return Promise.resolve([
@@ -47,10 +47,10 @@ function createDb() {
     if (query.includes("FROM goals g")) return Promise.resolve([]);
     if (query.includes("FROM tasks t") && query.includes("recentCompletionRows")) return Promise.resolve([]);
     if (query.includes("FROM insights")) return Promise.resolve([]);
-    if (query.includes("COUNT(*)::int AS count") && query.includes("FROM goal_completions gc")) {
+    if (query.includes("COUNT(*)::int AS count") && query.includes("FROM owner_outcomes oo")) {
       return Promise.resolve([{ count: 11 }]);
     }
-    if (query.includes("JOIN work_products wp") && query.includes("FROM goal_completions gc")) {
+    if (query.includes("JOIN work_products wp") && query.includes("FROM owner_outcomes oo")) {
       return Promise.resolve([{
         id: "completion-1",
         goal_id: "a6b815ba-5109-4066-8a33-cc5560d3a0e1",
@@ -99,6 +99,9 @@ function createDb() {
     }
     return Promise.resolve([]);
   });
+  return Object.assign(db, {
+    unsafe: vi.fn((value: string) => value),
+  });
 }
 
 describe("GET /api/brief", () => {
@@ -145,7 +148,7 @@ describe("GET /api/brief", () => {
         goalTitle: "Final owner handoff",
         summary: "Completed final result.",
         createdAt: "2026-05-17T02:00:00.000Z",
-        status: "unread",
+        status: "new",
       },
     ]);
     expect(body.data.pendingDecisions).toHaveLength(1);

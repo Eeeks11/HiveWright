@@ -52,6 +52,18 @@ describe("HiveDetailPage", () => {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       }
 
+      if (url === "/api/connectors?hiveId=hive-1") {
+        return jsonResponse({ data: [connectorFixture()] });
+      }
+
+      if (url === "/api/connector-installs?hiveId=hive-1") {
+        return jsonResponse({ data: [installFixture()] });
+      }
+
+      if (url === "/api/connector-installs/install-1/actions") {
+        return jsonResponse({ data: [actionFixture()] });
+      }
+
       return new Response("not found", { status: 404 });
     }) as unknown as typeof globalThis.fetch;
   });
@@ -69,4 +81,96 @@ describe("HiveDetailPage", () => {
     expect(screen.getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals?hiveId=hive-1");
     expect(screen.getByRole("link", { name: "Decisions" }).getAttribute("href")).toBe("/decisions?hiveId=hive-1");
   });
+
+  it("shows connector health, sync, scopes, risk, and recent actions on the hive detail page", async () => {
+    renderWithQueryClient(<HiveDetailPage />);
+
+    expect(await screen.findByRole("heading", { name: "Connectors" })).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Discord operations")).toBeTruthy());
+
+    expect(screen.getByText("active")).toBeTruthy();
+    expect(screen.getByText(/last tested/i)).toBeTruthy();
+    expect(screen.getByText(/last sync/i)).toBeTruthy();
+    expect(screen.getByText(/2 ok \/ 1 err/)).toBeTruthy();
+    expect(screen.getByText("sync")).toBeTruthy();
+    expect(screen.getByText("action_execute")).toBeTruthy();
+    expect(screen.getByText("discord-webhook:send_message")).toBeTruthy();
+    expect(screen.getByText(/Send message/).textContent).toContain("approval-gated");
+    expect(screen.getByText(/send_message \/ succeeded/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "View actions" }).getAttribute("href")).toBe("/setup/connectors");
+    expect(screen.getByRole("button", { name: "Test Discord operations" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sync Discord operations" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Disable Discord operations" })).toBeTruthy();
+  });
 });
+
+function connectorFixture() {
+  return {
+    slug: "discord-webhook",
+    name: "Discord webhook",
+    category: "messaging",
+    description: "Post messages to Discord",
+    icon: null,
+    authType: "webhook",
+    setupFields: [
+      { key: "webhookUrl", label: "Webhook URL", type: "password", required: true },
+      { key: "defaultUsername", label: "Default username", type: "text", required: false },
+    ],
+    scopes: [
+      { key: "discord-webhook:test_connection", label: "Test connection", kind: "read", required: true },
+      { key: "discord-webhook:send_message", label: "Send message", kind: "send", required: false },
+    ],
+    capabilities: ["health", "sync", "action_execute"],
+    operations: [
+      {
+        slug: "send_message",
+        label: "Send message",
+        governance: { effectType: "notify", defaultDecision: "require_approval", riskTier: "medium" },
+        outputSummary: "Posts a message.",
+      },
+    ],
+  };
+}
+
+function installFixture() {
+  return {
+    id: "install-1",
+    hiveId: "hive-1",
+    connectorSlug: "discord-webhook",
+    connectorName: "Discord webhook",
+    displayName: "Discord operations",
+    config: { defaultUsername: "HiveWright" },
+    credentialConfigured: true,
+    status: "active",
+    lastTestedAt: "2026-05-12T01:00:00.000Z",
+    lastSyncedAt: "2026-05-12T03:00:00.000Z",
+    lastError: null,
+    lastSyncError: null,
+    createdAt: "2026-05-12T00:00:00.000Z",
+    successes7d: 2,
+    errors7d: 1,
+    grantedScopes: ["discord-webhook:test_connection", "discord-webhook:send_message"],
+    capabilities: ["health", "sync", "action_execute"],
+  };
+}
+
+function actionFixture() {
+  return {
+    id: "action-1",
+    kind: "external_action_request",
+    connector: "discord-webhook",
+    operation: "send_message",
+    state: "succeeded",
+    roleSlug: "ea",
+    policyId: "policy-1",
+    policyReason: "matched action policy policy-1",
+    createdAt: "2026-05-12T02:00:00.000Z",
+  };
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}

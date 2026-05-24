@@ -190,6 +190,16 @@ function buildWorkspaceFinalizationInstructions(goal: { project_id?: string | nu
   ];
 }
 
+async function buildGoalHiveContextBlock(sql: Sql, goalId: string): Promise<string> {
+  const [goal] = await sql<{ hive_id: string }[]>`
+    SELECT hive_id
+    FROM goals
+    WHERE id = ${goalId}
+  `;
+
+  return goal?.hive_id ? buildHiveContextBlock(sql, goal.hive_id) : "";
+}
+
 export async function buildSprintWakeUpPrompt(
   sql: Sql,
   goalId: string,
@@ -198,6 +208,7 @@ export async function buildSprintWakeUpPrompt(
   const summary = await buildSprintSummary(sql, goalId, sprintNumber);
   const goalStatus = await getGoalStatus(sql, goalId);
   const plan = await getGoalPlan(sql, goalId);
+  const hiveContext = await buildGoalHiveContextBlock(sql, goalId);
 
   const hasCompleted = summary.tasksCompleted.length > 0;
   const hasFailed = summary.tasksFailed.length > 0;
@@ -207,6 +218,10 @@ export async function buildSprintWakeUpPrompt(
     `## Sprint ${sprintNumber} Settled`,
     "",
   ];
+
+  if (hiveContext) {
+    sections.push(hiveContext, "");
+  }
 
   // --- Plan context (always included if a plan exists) ---
   if (plan) {
@@ -324,6 +339,7 @@ export async function buildCommentWakeUpPrompt(
 
   const goalStatus = await getGoalStatus(sql, goalId);
   const plan = await getGoalPlan(sql, goalId);
+  const hiveContext = await buildGoalHiveContextBlock(sql, goalId);
 
   const tasks = await sql<
     { id: string; title: string; status: string; assigned_to: string; result_summary: string | null; failure_reason: string | null }[]
@@ -342,6 +358,10 @@ export async function buildCommentWakeUpPrompt(
     "> " + comment.body.split("\n").join("\n> "),
     "",
   ];
+
+  if (hiveContext) {
+    sections.push(hiveContext, "");
+  }
 
   if (plan) {
     const planSnippet = plan.body.length > 1200 ? plan.body.slice(0, 1200) + "…" : plan.body;

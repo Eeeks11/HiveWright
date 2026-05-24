@@ -107,6 +107,26 @@ describe("connector plugin SDK registry", () => {
       "plugin-governance-test:write_thing",
     ]);
     expect(connector?.scopes.map((scope) => scope.kind)).toEqual(["read", "write"]);
+    expect(connector?.capabilities).toEqual(["health", "action_execute"]);
+  });
+
+  it("preserves explicit non-action capability families", () => {
+    const registry = createConnectorPluginRegistry([
+      defineConnectorPlugin({
+        slug: "sync-plugin",
+        connectors: [{
+          ...connectorDraft("plugin-sync-test"),
+          capabilities: ["sync", "record_import"],
+        }],
+      }),
+    ]);
+
+    expect(registry.get("plugin-sync-test")?.capabilities).toEqual([
+      "health",
+      "sync",
+      "record_import",
+      "action_execute",
+    ]);
   });
 
   it("makes runtime registered connectors discoverable through the compatibility facade", () => {
@@ -129,6 +149,7 @@ describe("connector plugin SDK registry", () => {
       placeholder: "[REDACTED]",
     });
     expect("handler" in publicConnector.operations[0]).toBe(false);
+    expect(publicConnector.capabilities).toEqual(["health", "action_execute"]);
   });
 
   it("filters connector definitions by hive-enabled plugin slugs", async () => {

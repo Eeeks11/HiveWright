@@ -76,7 +76,7 @@ export async function upsertBusinessRecord(
       ${sql.json(rawRedacted as never)},
       NOW()
     )
-    ON CONFLICT (hive_id, source_connector, external_id, record_type)
+    ON CONFLICT (hive_id, connector_install_id, source_connector, external_id, record_type)
     DO UPDATE SET
       connector_install_id = EXCLUDED.connector_install_id,
       status = EXCLUDED.status,

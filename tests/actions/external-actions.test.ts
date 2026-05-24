@@ -242,6 +242,56 @@ describe("external action service", () => {
     expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
   });
 
+  it("applies conditional allow policies before executing connector actions", async () => {
+    const fake = makeSql();
+    fake.policies.push({
+      id: "policy-allow-small-dry-run",
+      hive_id: hiveId,
+      connector: "http-webhook",
+      operation: "post_json",
+      effect: "allow",
+      role_slug: "researcher",
+      conditions: {
+        maxAmount: 100,
+        amountField: "payload.amount",
+        allowedDomains: ["example.com"],
+        destinationField: "payload.to",
+        businessHoursOnly: true,
+        requireDryRun: true,
+        riskTierAtMost: "medium",
+      },
+    });
+
+    const allowed = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput({
+      now: new Date("2026-05-12T11:00:00"),
+      args: {
+        payload: {
+          amount: 99,
+          to: "Owner <owner@example.com>",
+        },
+        dryRun: true,
+      },
+    }));
+
+    expect(allowed.status).toBe("succeeded");
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
+
+    const blockedByConditions = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput({
+      now: new Date("2026-05-12T11:00:00"),
+      args: {
+        payload: {
+          amount: 101,
+          to: "owner@other.test",
+        },
+        dryRun: false,
+      },
+    }));
+
+    expect(blockedByConditions.status).toBe("awaiting_approval");
+    expect(blockedByConditions.policyReason).toBe("connector operation default decision: require_approval");
+    expect(executeApprovedConnectorAction).toHaveBeenCalledTimes(1);
+  });
+
   it("executes an approved request once even when called twice", async () => {
     const fake = makeSql();
     const requested = await requestExternalAction(fake.tag as unknown as ExternalActionSql, baseInput());

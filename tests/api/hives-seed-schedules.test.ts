@@ -32,6 +32,7 @@ describe("POST /api/hives — default-schedule seeding", () => {
         name: "Seed Co",
         slug,
         type: "digital",
+        kind: "business",
         description: "A hive for schedule-seeding coverage",
       }),
     });
@@ -50,7 +51,7 @@ describe("POST /api/hives — default-schedule seeding", () => {
       SELECT cron_expression, enabled, task_template, created_by
       FROM schedules WHERE hive_id = ${hiveId}::uuid
     `;
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
 
     const worldScan = rows.find(
       (r) => (r.task_template as { title?: string }).title === "Daily world scan",
@@ -242,6 +243,7 @@ describe("POST /api/hives — default-schedule seeding", () => {
         name: "Idempotent Co",
         slug,
         type: "digital",
+        kind: "business",
         description: null,
       }),
     });
@@ -258,13 +260,13 @@ describe("POST /api/hives — default-schedule seeding", () => {
       description: null,
     });
     expect(second.created).toBe(0);
-    expect(second.skipped).toBe(7);
+    expect(second.skipped).toBe(8);
 
     const [{ total }] = (await sql`
       SELECT COUNT(*)::int AS total FROM schedules
       WHERE hive_id = ${hiveId}::uuid
     `) as unknown as { total: number }[];
-    expect(total).toBe(7);
+    expect(total).toBe(8);
 
     const [{ hb }] = (await sql`
       SELECT COUNT(*)::int AS hb FROM schedules

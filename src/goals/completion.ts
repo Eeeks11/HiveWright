@@ -16,6 +16,7 @@ import {
   assertRequiredFinalArtifactsAvailable,
   normalizeFinalArtifactsFromEvidenceBundle,
 } from "./final-artifacts";
+import { upsertOwnerOutcomeForCompletion } from "@/outcomes/durable";
 
 export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
 
@@ -285,7 +286,7 @@ export async function completeGoal(
     }
 
     // 3. Write audit row to goal_completions
-    await tx`
+    const [goalCompletion] = await tx<{ id: string }[]>`
       INSERT INTO goal_completions (goal_id, summary, evidence, learning_gate, created_by)
       VALUES (
         ${goalId},
@@ -294,7 +295,16 @@ export async function completeGoal(
         ${tx.json(learningGate as unknown as Parameters<typeof tx.json>[0])},
         ${createdBy}
       )
+      RETURNING id
     `;
+
+    await upsertOwnerOutcomeForCompletion(tx as unknown as Sql, {
+      hiveId: goal.hive_id,
+      goalId,
+      goalCompletionId: goalCompletion.id,
+      completionSummary,
+      evidence,
+    });
 
     await createLearningGateFollowup(tx as unknown as Sql, {
       goalId,
