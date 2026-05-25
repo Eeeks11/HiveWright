@@ -1,0 +1,171 @@
+import { sql } from "../../_lib/db";
+import { jsonOk, jsonError } from "../../_lib/responses";
+import { requireApiUser } from "../../_lib/auth";
+import { canAccessHive } from "@/auth/users";
+import { normalizeAiBudgetSettings } from "@/budget/ai-budget";
+import { normalizeHiveKind, normalizeHiveOperatingMode } from "@/hives/kind";
+import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
+
+const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget", "operatingProfile"]);
+const REJECTED_FIELDS = new Set([
+  "slug", "type", "id", "createdAt", "created_at",
+  "eaSessionId", "ea_session_id", "workspacePath", "workspace_path",
+]);
+
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+  const { id } = await params;
+  if (!id) return jsonError("id is required", 400);
+  const [row] = await sql`
+    SELECT id, slug, name, type, kind, operating_mode, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
+    FROM hives WHERE id = ${id}
+  `;
+  if (!row) return jsonError("hive not found", 404);
+  if (!authz.user.isSystemOwner) {
+    const hasAccess = await canAccessHive(sql, authz.user.id, id);
+    if (!hasAccess) {
+      return jsonError("Forbidden: hive access required", 403);
+    }
+  }
+  const operatingProfile = await getOperatingProfile(sql, id);
+  return jsonOk({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    type: row.type,
+    kind: normalizeHiveKind(row.kind),
+    operatingMode: normalizeHiveOperatingMode(row.operating_mode),
+    description: row.description,
+    mission: row.mission,
+    softwareStack: row.software_stack,
+    workspacePath: row.workspace_path,
+    isSystemFixture: row.is_system_fixture,
+    aiBudget: {
+      capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
+      window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
+    },
+    operatingProfile,
+    createdAt: row.created_at,
+  });
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+  const { id } = await params;
+  if (!id) return jsonError("id is required", 400);
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("invalid JSON", 400);
+  }
+
+  for (const key of Object.keys(body)) {
+    if (REJECTED_FIELDS.has(key)) {
+      return jsonError(`field not editable: ${key}`, 400);
+    }
+    if (!ALLOWED_FIELDS.has(key)) {
+      return jsonError(`unknown field: ${key}`, 400);
+    }
+  }
+
+  if (typeof body.name === "string" && body.name.trim() === "") {
+    return jsonError("name cannot be empty", 400);
+  }
+
+  let aiBudget: ReturnType<typeof normalizeAiBudgetSettings> | null = null;
+  if ("operatingProfile" in body && (!body.operatingProfile || typeof body.operatingProfile !== "object" || Array.isArray(body.operatingProfile))) {
+    return jsonError("operatingProfile must be an object", 400);
+  }
+
+  if ("aiBudget" in body) {
+    const raw = body.aiBudget;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return jsonError("aiBudget must be an object", 400);
+    }
+    const record = raw as Record<string, unknown>;
+    if (typeof record.capCents !== "number" || !Number.isFinite(record.capCents)) {
+      return jsonError("aiBudget.capCents must be a number", 400);
+    }
+    if (record.capCents < 0) {
+      return jsonError("aiBudget.capCents must be non-negative", 400);
+    }
+    aiBudget = normalizeAiBudgetSettings({
+      capCents: record.capCents,
+      window: record.window,
+    });
+  }
+
+  const [existing] = await sql`SELECT id FROM hives WHERE id = ${id}`;
+  if (!existing) return jsonError("hive not found", 404);
+
+  if (!authz.user.isSystemOwner) {
+    const hasAccess = await canAccessHive(sql, authz.user.id, id);
+    if (!hasAccess) {
+      return jsonError("Forbidden: hive access required", 403);
+    }
+  }
+
+  if (typeof body.name === "string") {
+    await sql`UPDATE hives SET name = ${body.name} WHERE id = ${id}`;
+  }
+  if ("description" in body) {
+    const v = body.description === null ? null : String(body.description);
+    await sql`UPDATE hives SET description = ${v} WHERE id = ${id}`;
+  }
+  if ("mission" in body) {
+    const v = body.mission === null ? null : String(body.mission);
+    await sql`UPDATE hives SET mission = ${v} WHERE id = ${id}`;
+  }
+  if ("softwareStack" in body || "software_stack" in body) {
+    const raw = "softwareStack" in body ? body.softwareStack : body.software_stack;
+    const v = raw === null ? null : String(raw);
+    await sql`UPDATE hives SET software_stack = ${v} WHERE id = ${id}`;
+  }
+  if (aiBudget) {
+    await sql`
+      UPDATE hives
+      SET ai_budget_cap_cents = ${aiBudget.capCents},
+          ai_budget_window = ${aiBudget.window}
+      WHERE id = ${id}
+    `;
+  }
+  if ("operatingProfile" in body) {
+    await upsertOperatingProfile(sql, id, body.operatingProfile as Record<string, unknown>);
+  }
+
+  const [row] = await sql`
+    SELECT id, slug, name, type, kind, operating_mode, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
+    FROM hives WHERE id = ${id}
+  `;
+
+  const operatingProfile = await getOperatingProfile(sql, id);
+  return jsonOk({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    type: row.type,
+    kind: normalizeHiveKind(row.kind),
+    operatingMode: normalizeHiveOperatingMode(row.operating_mode),
+    description: row.description,
+    mission: row.mission,
+    softwareStack: row.software_stack,
+    workspacePath: row.workspace_path,
+    isSystemFixture: row.is_system_fixture,
+    aiBudget: {
+      capCents: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).capCents,
+      window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
+    },
+    operatingProfile,
+    createdAt: row.created_at,
+  });
+}

@@ -1,0 +1,106 @@
+import { sql } from "@/app/api/_lib/db";
+import { requireSystemOwner } from "@/app/api/_lib/auth";
+import { jsonError, jsonOk } from "@/app/api/_lib/responses";
+import { setHiveCreationPause } from "@/operations/creation-pause";
+import {
+  getCreationPauseControlState,
+  requestCreationPauseResumeApproval,
+} from "@/operations/creation-pause-control-plane";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireSystemOwner();
+  if ("response" in authz) return authz.response;
+
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return jsonError("id must be a valid UUID", 400);
+
+  const [hive] = await sql`SELECT 1 FROM hives WHERE id = ${id} LIMIT 1`;
+  if (!hive) return jsonError("hive not found", 404);
+
+  return jsonOk(await getCreationPauseControlState(sql, id));
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireSystemOwner();
+  if ("response" in authz) return authz.response;
+
+  const { id } = await params;
+  if (!UUID_RE.test(id)) return jsonError("id must be a valid UUID", 400);
+
+  let body: { paused?: unknown; reason?: unknown; approvalDecisionId?: unknown };
+  try {
+    body = await request.json() as { paused?: unknown; reason?: unknown; approvalDecisionId?: unknown };
+  } catch {
+    return jsonError("invalid JSON", 400);
+  }
+
+  if (typeof body.paused !== "boolean") {
+    return jsonError("paused must be a boolean", 400);
+  }
+
+  const paused = body.paused;
+  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  const approvalDecisionId = typeof body.approvalDecisionId === "string" && body.approvalDecisionId.trim()
+    ? body.approvalDecisionId.trim()
+    : null;
+  if (paused && reason.length === 0) {
+    return jsonError("reason is required when pausing creation", 400);
+  }
+  if (reason.length > 500) return jsonError("reason is too long", 400);
+  if (approvalDecisionId && !UUID_RE.test(approvalDecisionId)) {
+    return jsonError("approvalDecisionId must be a valid UUID", 400);
+  }
+
+  const [hive] = await sql`SELECT 1 FROM hives WHERE id = ${id} LIMIT 1`;
+  if (!hive) return jsonError("hive not found", 404);
+
+  if (!paused) {
+    const current = await getCreationPauseControlState(sql, id);
+    if (!current.paused) return jsonOk(current);
+
+    if (current.resumeApproval.status === "approved") {
+      if (!approvalDecisionId) {
+        return jsonError("approvalDecisionId is required to execute the approved resume transition", 409);
+      }
+      if (approvalDecisionId !== current.resumeApproval.decisionId) {
+        return jsonError("approvalDecisionId does not match the approved resume transition for this pause state", 409);
+      }
+
+      return jsonOk(await setHiveCreationPause(sql, {
+        hiveId: id,
+        paused: false,
+        reason,
+        changedBy: authz.user.email,
+      }));
+    }
+
+    if (approvalDecisionId) {
+      return jsonError("resume approval is not yet approved for this pause state", 409);
+    }
+
+    return jsonOk(
+      await requestCreationPauseResumeApproval(sql, {
+        hiveId: id,
+        requestedBy: authz.user.email,
+        pauseInput: current,
+      }),
+      202,
+    );
+  }
+
+  return jsonOk(await setHiveCreationPause(sql, {
+    hiveId: id,
+    paused,
+    reason,
+    changedBy: authz.user.email,
+  }));
+}

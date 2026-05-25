@@ -1,0 +1,183 @@
+import { sql } from "../../../_lib/db";
+import { jsonOk, jsonError } from "../../../_lib/responses";
+import { isInternalServiceAccountUser, requireApiUser } from "../../../_lib/auth";
+import { completeGoal, parseCompletionEvidenceBundle, parseGoalCompletionStatus } from "@/goals/completion";
+import { parseLearningGateResult } from "@/goals/outcome-records";
+
+interface CompleteGoalBody {
+  summary?: unknown;
+  evidenceTaskIds?: unknown;
+  evidenceWorkProductIds?: unknown;
+  evidence?: unknown;
+  evidenceBundle?: unknown;
+  evidence_bundle?: unknown;
+  createdBy?: unknown;
+  learningGate?: unknown;
+  learning_gate?: unknown;
+  completionStatus?: unknown;
+  completion_status?: unknown;
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+function hasNonEmptyStringArray(v: unknown): v is string[] {
+  return isStringArray(v) && v.length > 0;
+}
+
+// Per-handler authorization (audit d20f7b46): the supervisor session that
+// owns the goal (goals.session_id, a workspace path assigned by the
+// dispatcher) is the only principal allowed to mark the goal achieved.
+// Human system owners can override for manual completion via the dashboard;
+// internal service-account callers still need supervisor-session proof.
+// Supervisors assert their session by sending `X-Supervisor-Session` with
+// the workspace path they were launched in; a mismatch against the stored
+// goals.session_id is 403. This is stricter than session presence but does
+// not yet require role propagation on the JWT.
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+  let goalId: string | undefined;
+  try {
+    const { id } = await params;
+    goalId = id;
+
+    let body: CompleteGoalBody;
+    try {
+      body = (await request.json()) as CompleteGoalBody;
+    } catch {
+      return jsonError("Invalid JSON body", 400);
+    }
+
+    const summary = typeof body.summary === "string" ? body.summary.trim() : "";
+    if (summary.length === 0) {
+      return jsonError("'summary' is required and must be a non-empty string", 400);
+    }
+
+    if (body.evidenceTaskIds !== undefined && !isStringArray(body.evidenceTaskIds)) {
+      return jsonError("'evidenceTaskIds' must be an array of strings", 400);
+    }
+    if (body.evidenceWorkProductIds !== undefined && !isStringArray(body.evidenceWorkProductIds)) {
+      return jsonError("'evidenceWorkProductIds' must be an array of strings", 400);
+    }
+    const evidenceInput = body.evidence ?? body.evidenceBundle ?? body.evidence_bundle;
+    const evidenceBundle = evidenceInput === undefined
+      ? undefined
+      : parseCompletionEvidenceBundle(evidenceInput);
+    if (evidenceBundle && !evidenceBundle.ok) {
+      return jsonError(evidenceBundle.error, 400);
+    }
+    if (
+      !hasNonEmptyStringArray(body.evidenceTaskIds) &&
+      !hasNonEmptyStringArray(body.evidenceWorkProductIds) &&
+      !evidenceBundle?.ok
+    ) {
+      return jsonError(
+        "'evidence' is required: provide a non-empty evidence bundle, evidenceTaskIds, or evidenceWorkProductIds",
+        400,
+      );
+    }
+    if (body.createdBy !== undefined) {
+      if (typeof body.createdBy !== "string" || body.createdBy.trim().length === 0) {
+        return jsonError("'createdBy' must be a non-empty string when provided", 400);
+      }
+    }
+    if (body.learningGate === undefined && body.learning_gate === undefined) {
+      return jsonError("'learningGate' is required and must record the completion learning gate", 400);
+    }
+    const learningGate = parseLearningGateResult(body.learningGate ?? body.learning_gate);
+    if (!learningGate.ok) {
+      return jsonError(learningGate.error, 400);
+    }
+    const completionStatusInput = body.completionStatus ?? body.completion_status;
+    const completionStatus = parseGoalCompletionStatus(completionStatusInput);
+    if (completionStatusInput !== undefined && !completionStatus) {
+      return jsonError("'completionStatus' must be achieved, execution_ready, or blocked_on_owner_channel", 400);
+    }
+
+    const [goal] = await sql`
+      SELECT id, status, session_id FROM goals WHERE id = ${id}
+    `;
+    if (!goal) {
+      return jsonError("Goal not found", 404);
+    }
+
+    if (!authz.user.isSystemOwner || isInternalServiceAccountUser(authz.user)) {
+      const callerSession = request.headers.get("x-supervisor-session")?.trim() ?? "";
+      if (!callerSession || callerSession !== goal.session_id) {
+        return jsonError(
+          "Forbidden: caller is not the supervisor session for this goal",
+          403,
+        );
+      }
+    }
+
+    // Cancelled, paused, and any other non-completable terminal/transitional
+    // states reject with 409 Conflict. A stale supervisor that hasn't received
+    // an out-of-band cancellation should not be able to resurrect the goal as
+    // achieved. Only 'active' goals proceed to completion; final outcome states
+    // hit the idempotent branch below.
+    if (goal.status !== "active" && !["achieved", "execution_ready", "blocked_on_owner_channel"].includes(goal.status)) {
+      return jsonError(
+        `Goal cannot be completed: current status is '${goal.status}'`,
+        409,
+      );
+    }
+
+    // Idempotency: already-final goals return current state without
+    // re-running completeGoal (avoids double memory writes + double notifications).
+    if (["achieved", "execution_ready", "blocked_on_owner_channel"].includes(goal.status)) {
+      const [latestCompletion] = await sql`
+        SELECT id, summary, evidence, learning_gate, created_by, created_at
+        FROM goal_completions
+        WHERE goal_id = ${id}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `;
+      return jsonOk({
+        goalId: id,
+        status: goal.status,
+        idempotent: true,
+        latestCompletion: latestCompletion ?? null,
+      });
+    }
+
+    const completionResult = await completeGoal(sql, id, summary, {
+      createdBy: typeof body.createdBy === "string" ? body.createdBy : "goal-supervisor",
+      evidenceTaskIds: isStringArray(body.evidenceTaskIds) ? body.evidenceTaskIds : undefined,
+      evidenceWorkProductIds: isStringArray(body.evidenceWorkProductIds)
+        ? body.evidenceWorkProductIds
+        : undefined,
+      evidenceBundle: evidenceBundle?.ok ? evidenceBundle.items : undefined,
+      learningGate: learningGate.result,
+      ...(completionStatus ? { completionStatus } : {}),
+    });
+
+    // Re-read the audit row we just wrote so the response shape is symmetric
+    // with the idempotent branch (single contract for clients regardless of
+    // whether the call was the first or a duplicate).
+    const [latestCompletion] = await sql`
+      SELECT id, summary, evidence, learning_gate, created_by, created_at
+      FROM goal_completions
+      WHERE goal_id = ${id}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+
+    return jsonOk({
+      goalId: id,
+      status: completionResult.status,
+      idempotent: false,
+      latestCompletion: latestCompletion ?? null,
+    });
+  } catch (err) {
+    // `goalId` may be undefined if the throw happened before `await params` resolved,
+    // but in practice that's a Next.js framework failure mode, not a route bug.
+    console.error(`[POST /api/goals/[id]/complete] goalId=${goalId ?? "<unresolved>"} error:`, err);
+    return jsonError("Failed to complete goal", 500);
+  }
+}
