@@ -4,6 +4,7 @@ import {
   parseUpdateStatus,
   type GitUpdateSnapshot,
 } from "@/system/update";
+import { resolveUpdateLogDirectory } from "@/system/update-logs";
 
 describe("HiveWright update system", () => {
   it("reports the app version from package metadata", () => {
@@ -73,5 +74,20 @@ describe("HiveWright update system", () => {
       "npm run build",
       "systemctl --user restart hivewright-dashboard hivewright-dispatcher",
     ]);
+  });
+
+  it("places dashboard update logs under the external runtime root", () => {
+    const dir = resolveUpdateLogDirectory({
+      HIVEWRIGHT_RUNTIME_ROOT: "/var/lib/hivewright-runtime",
+      HOME: "/home/operator",
+    });
+
+    expect(dir).toBe("/var/lib/hivewright-runtime/logs/updates");
+  });
+
+  it("falls back dashboard update logs to HOME runtime storage", () => {
+    const dir = resolveUpdateLogDirectory({ HOME: "/home/operator" });
+
+    expect(dir).toBe("/home/operator/.hivewright/logs/updates");
   });
 });

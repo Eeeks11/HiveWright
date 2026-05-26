@@ -4,9 +4,10 @@ import * as path from "node:path";
 import { jsonError, jsonOk } from "../../_lib/responses";
 import { requireApiAuth, requireSystemOwner } from "../../_lib/auth";
 import { getUpdatePlan, getUpdateStatus } from "@/system/update-runtime";
+import { resolveUpdateLogDirectory } from "@/system/update-logs";
 
 function updateLogPath() {
-  const dir = path.join(process.cwd(), ".hivewright", "update-logs");
+  const dir = resolveUpdateLogDirectory();
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(dir, `update-${stamp}.log`);
