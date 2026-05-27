@@ -4,8 +4,7 @@ import { requireApiAuth, requireSystemOwner } from "../../_lib/auth";
 
 function runRestart(): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve) => {
-    const bin = process.env.SYSTEMCTL_BIN ?? "systemctl";
-    const proc = spawn(bin, ["--user", "restart", "hivewrightv2-dispatcher"], {
+    const proc = spawn("systemctl", ["--user", "restart", "hivewright-dispatcher"], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10_000,
     });

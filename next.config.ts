@@ -22,6 +22,20 @@ const withSerwist = withSerwistInit({
 const nextConfig: NextConfig = {
   redirects: async () => settingsToSetupRedirects,
   allowedDevOrigins: allowedDevOrigins(),
+  outputFileTracingExcludes: {
+    "/*": [
+      "next.config.ts",
+      "README.md",
+      "components.json",
+      "dispatcher-bundle.js",
+      "docs/**",
+      "drizzle.config.ts",
+      "drizzle/**",
+      "scripts/**",
+      "skills-library/**",
+      "tests/**",
+    ],
+  },
   turbopack: {
     root: __dirname,
   },

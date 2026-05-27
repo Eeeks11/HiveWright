@@ -5,14 +5,17 @@ import path from "path";
 import { POST } from "../../src/app/api/dispatcher/restart/route";
 
 let tmp: string;
+let originalPath: string | undefined;
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "systemctl-stub-"));
+  originalPath = process.env.PATH;
 });
 
 afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
-  delete process.env.SYSTEMCTL_BIN;
+  if (originalPath === undefined) delete process.env.PATH;
+  else process.env.PATH = originalPath;
 });
 
 describe("POST /api/dispatcher/restart", () => {
@@ -20,7 +23,7 @@ describe("POST /api/dispatcher/restart", () => {
     const stub = path.join(tmp, "systemctl");
     fs.writeFileSync(stub, "#!/usr/bin/env bash\nexit 0\n");
     fs.chmodSync(stub, 0o755);
-    process.env.SYSTEMCTL_BIN = stub;
+    process.env.PATH = `${tmp}${path.delimiter}${originalPath ?? ""}`;
 
     const res = await POST(new Request("http://x", { method: "POST" }));
     expect(res.status).toBe(200);
@@ -32,7 +35,7 @@ describe("POST /api/dispatcher/restart", () => {
     const stub = path.join(tmp, "systemctl");
     fs.writeFileSync(stub, "#!/usr/bin/env bash\necho boom >&2\nexit 3\n");
     fs.chmodSync(stub, 0o755);
-    process.env.SYSTEMCTL_BIN = stub;
+    process.env.PATH = `${tmp}${path.delimiter}${originalPath ?? ""}`;
 
     const res = await POST(new Request("http://x", { method: "POST" }));
     expect(res.status).toBe(500);

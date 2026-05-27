@@ -726,9 +726,8 @@ describe("DELETE /api/credentials/[id] — privileged role guard", () => {
 describe("POST /api/dispatcher/restart — privileged role guard", () => {
   it("non-owner session is rejected with 403 and does not exec systemctl", async () => {
     authState.isSystemOwner = false;
-    // A bogus SYSTEMCTL_BIN would fail loudly if the handler ever reached
-    // the spawn call — the 403 gate should short-circuit before that.
-    process.env.SYSTEMCTL_BIN = "/nonexistent/systemctl-should-not-run";
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/nonexistent/systemctl-should-not-run";
 
     const res = await restartDispatcher(
       new Request("http://localhost/api/dispatcher/restart", { method: "POST" }),
@@ -737,7 +736,8 @@ describe("POST /api/dispatcher/restart — privileged role guard", () => {
     const body = await res.json();
     expect(body.error).toMatch(/forbidden/i);
 
-    delete process.env.SYSTEMCTL_BIN;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
   });
 });
 
