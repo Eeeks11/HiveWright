@@ -93,6 +93,7 @@ const UPDATE_COMMANDS: Record<string, { command: string; args: string[] }> = {
   "npm install": { command: "npm", args: ["install"] },
   "npm run db:migrate:app": { command: "npm", args: ["run", "db:migrate:app"] },
   "npm run build": { command: "npm", args: ["run", "build"] },
+  "npm run build:dispatcher": { command: "npm", args: ["run", "build:dispatcher"] },
   "systemctl --user restart hivewright-dashboard hivewright-dispatcher": {
     command: "systemctl",
     args: ["--user", "restart", "hivewright-dashboard", "hivewright-dispatcher"],

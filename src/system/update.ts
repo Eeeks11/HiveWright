@@ -124,6 +124,7 @@ export function buildUpdatePlan(status: UpdateStatus, options: UpdatePlanOptions
     "npm install",
     "npm run db:migrate:app",
     "npm run build",
+    "npm run build:dispatcher",
   ];
 
   if (options.restart) {

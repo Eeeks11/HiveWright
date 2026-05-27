@@ -72,6 +72,7 @@ describe("HiveWright update system", () => {
       "npm install",
       "npm run db:migrate:app",
       "npm run build",
+      "npm run build:dispatcher",
       "systemctl --user restart hivewright-dashboard hivewright-dispatcher",
     ]);
   });

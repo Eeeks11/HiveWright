@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-/home/trent/apps/HiveWright}"
+RUNTIME_ROOT="${HIVEWRIGHT_RUNTIME_ROOT:-/home/trent/.hivewright}"
+ENV_FILE="${HIVEWRIGHT_ENV_FILE:-$RUNTIME_ROOT/config/.env}"
+LOG_DIR="$RUNTIME_ROOT/logs/updates"
+SERVICE_USER="${HIVEWRIGHT_SERVICE_USER:-trent}"
+DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://localhost:3002}"
+MODE="${1:-status-json}"
+
+SYSTEMCTL_USER_ENV() {
+  local uid
+  uid="$(id -u "$SERVICE_USER")"
+  env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+}
+
+as_service_user() {
+  runuser -u "$SERVICE_USER" -- bash -lc "$1"
+}
+
+json_escape() {
+  node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
+}
+
+ensure_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "hivewright-operational-update must run as root" >&2
+    exit 77
+  fi
+}
+
+ensure_paths() {
+  [ "$INSTALL_DIR" = "/home/trent/apps/HiveWright" ] || { echo "Refusing unexpected install path: $INSTALL_DIR" >&2; exit 20; }
+  [ -d "$INSTALL_DIR/.git" ] || { echo "Install dir is not a git checkout: $INSTALL_DIR" >&2; exit 21; }
+  mkdir -p "$LOG_DIR"
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_ROOT/logs" 2>/dev/null || true
+}
+
+configure_root_git() {
+  git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
+}
+
+lock_repo() {
+  chown -R root:root "$INSTALL_DIR"
+  chmod -R u+rwX,go+rX,go-w "$INSTALL_DIR"
+}
+
+repo_dirty_count() {
+  git -C "$INSTALL_DIR" status --porcelain | wc -l | tr -d ' '
+}
+
+status_json() {
+  ensure_root
+  ensure_paths
+  configure_root_git
+  git -C "$INSTALL_DIR" fetch --tags --prune origin >/dev/null 2>&1 || true
+
+  local version branch current upstream remote dirty state update_available message
+  version="$(node -e "console.log(require('$INSTALL_DIR/package.json').version || '0.0.0')")"
+  branch="$(git -C "$INSTALL_DIR" branch --show-current 2>/dev/null || true)"
+  current="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+  upstream="$(git -C "$INSTALL_DIR" rev-parse '@{u}' 2>/dev/null || true)"
+  remote="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null | sed -E 's#(https?://)[^/@:]+:[^/@]+@#\1#' || true)"
+  dirty="false"
+  [ "$(repo_dirty_count)" = "0" ] || dirty="true"
+
+  if [ -z "$remote" ] || [ -z "$branch" ] || [ -z "$current" ]; then
+    state="not-configured"; update_available="false"; message="This install is not connected to a Git remote/upstream."
+  elif [ "$dirty" = "true" ]; then
+    state="blocked-dirty-worktree"; update_available="false"; [ -n "$upstream" ] && [ "$upstream" != "$current" ] && update_available="true"; message="Local changes are present. Commit, stash, or discard them before running an automatic update."
+  elif [ -z "$upstream" ]; then
+    state="unknown"; update_available="false"; message="HiveWright could not resolve the upstream commit for this branch."
+  elif [ "$upstream" != "$current" ]; then
+    state="update-available"; update_available="true"; message="A newer HiveWright commit is available from the configured Git remote."
+  else
+    state="current"; update_available="false"; message="HiveWright is current with the configured Git remote."
+  fi
+
+  cat <<JSON
+{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":$(json_escape "$upstream"),"remoteUrl":$(json_escape "$remote"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":$update_available,"state":$(json_escape "$state"),"message":$(json_escape "$message")},"plan":{"allowed":$([ "$state" = "update-available" ] && echo true || echo false),"commands":["systemctl start hivewright-update.service"],"message":$(json_escape "$([ "$state" = "update-available" ] && echo "Update can be applied by the privileged operational updater." || echo "No privileged update is currently available.")")}}
+JSON
+}
+
+apply_update() {
+  ensure_root
+  ensure_paths
+  configure_root_git
+  local log_file="$LOG_DIR/hivewright-update-$(date +%Y%m%d-%H%M%S).log"
+
+  {
+    echo "HiveWright privileged operational updater"
+    echo "started=$(date -Is)"
+    echo "install_dir=$INSTALL_DIR"
+    echo "runtime_root=$RUNTIME_ROOT"
+    echo "service_user=$SERVICE_USER"
+    echo
+
+    cd "$INSTALL_DIR"
+    echo "== preflight =="
+    [ "$(git rev-parse --show-toplevel)" = "$INSTALL_DIR" ]
+    echo "head_before=$(git rev-parse HEAD)"
+    echo "branch=$(git branch --show-current)"
+    echo "dirty_count=$(repo_dirty_count)"
+    if [ "$(repo_dirty_count)" != "0" ]; then
+      echo "Refusing update: operational checkout is dirty." >&2
+      git status --short >&2
+      exit 10
+    fi
+
+    echo
+    echo "== fetch/pull =="
+    git fetch --tags --prune origin
+    before="$(git rev-parse HEAD)"
+    upstream="$(git rev-parse '@{u}')"
+    echo "upstream=$upstream"
+    if [ "$before" = "$upstream" ]; then
+      echo "Already current; continuing verification and relock."
+    else
+      git pull --ff-only
+    fi
+
+    echo
+    echo "== dependencies/build/migrations =="
+    export HIVEWRIGHT_RUNTIME_ROOT="$RUNTIME_ROOT"
+    export HIVEWRIGHT_ENV_FILE="$ENV_FILE"
+    npm install
+    npm run db:migrate:app
+    npm run build
+    npm run build:dispatcher
+    node --check dispatcher-bundle.js
+
+    echo
+    echo "== relock =="
+    lock_repo
+    stat -c '%U:%G %A %n' "$INSTALL_DIR"
+
+    echo
+    echo "== restart services =="
+    runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user restart hivewright-dashboard.service hivewright-dispatcher.service
+
+    echo
+    echo "== verify =="
+    runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user is-active hivewright-dashboard.service hivewright-dispatcher.service
+    for pid in $(runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user show hivewright-dashboard.service hivewright-dispatcher.service -p MainPID --value); do
+      [ "$pid" = "0" ] && continue
+      cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+      echo "pid=$pid cwd=$cwd"
+      [ "$cwd" = "$INSTALL_DIR" ] || { echo "Service PID $pid is not running from $INSTALL_DIR" >&2; exit 30; }
+    done
+    curl -fsS -o /dev/null -w 'dashboard_http=%{http_code}\n' "$DASHBOARD_URL" || true
+    echo "head_after=$(git rev-parse HEAD)"
+    echo "completed=$(date -Is)"
+  } 2>&1 | tee "$log_file"
+
+  chown "$SERVICE_USER:$SERVICE_USER" "$log_file" 2>/dev/null || true
+  echo "Log: $log_file"
+}
+
+case "$MODE" in
+  status-json) status_json ;;
+  apply) apply_update ;;
+  lock) ensure_root; ensure_paths; lock_repo ;;
+  *) echo "Usage: $0 [status-json|apply|lock]" >&2; exit 2 ;;
+esac
