@@ -125,6 +125,26 @@ export function mapDeliverableRow(row: DeliverableRow): DeliverableDetail {
   };
 }
 
+export function toDeliverableSummary(detail: DeliverableDetail): DeliverableSummary {
+  return {
+    id: detail.id,
+    hiveId: detail.hiveId,
+    taskId: detail.taskId,
+    goalId: detail.goalId,
+    title: detail.title,
+    summary: detail.summary,
+    filename: detail.filename,
+    mimeType: detail.mimeType,
+    renderMode: detail.renderMode,
+    reviewStatus: detail.reviewStatus,
+    openUrl: detail.openUrl,
+    downloadUrl: detail.downloadUrl,
+    sourceTaskTitle: detail.sourceTaskTitle,
+    sourceGoalTitle: detail.sourceGoalTitle,
+    createdAt: detail.createdAt,
+  };
+}
+
 export async function listDeliverables(sql: SqlExecutor, filters: { hiveId?: string | null; taskId?: string | null; goalId?: string | null; completedOnly?: boolean } = {}): Promise<DeliverableSummary[]> {
   const rows = await sql`
     SELECT
@@ -156,10 +176,7 @@ export async function listDeliverables(sql: SqlExecutor, filters: { hiveId?: str
     ORDER BY wp.created_at DESC
     LIMIT 200
   `;
-  return (rows as DeliverableRow[]).map((row) => {
-    const { content: _content, filePath: _filePath, artifactKind: _artifactKind, publicUrl: _publicUrl, sourceUrl: _sourceUrl, workspacePath: _workspacePath, ...summary } = mapDeliverableRow(row);
-    return summary;
-  });
+  return (rows as DeliverableRow[]).map((row) => toDeliverableSummary(mapDeliverableRow(row)));
 }
 
 export async function getDeliverable(sql: SqlExecutor, id: string): Promise<DeliverableDetail | null> {

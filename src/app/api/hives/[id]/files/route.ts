@@ -209,7 +209,7 @@ async function listFilesystemCategory(hiveId: string, category: FileCategory, ro
         if (items.length >= MAX_FS_ITEMS) break;
         if (entry.name.startsWith(".") || IGNORED_FS_NAMES.has(entry.name)) continue;
         const relativePath = path.join(currentRelative, entry.name);
-        const absolutePath = path.join(root.root, relativePath);
+        const absolutePath = path.join(/* turbopackIgnore: true */ root.root, relativePath);
         let stat;
         let realPath: string;
         try {

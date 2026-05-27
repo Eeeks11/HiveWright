@@ -596,7 +596,7 @@ export default function PipelinesPage() {
   }, [selectedId]);
 
   useEffect(() => {
-    if (!selected) {
+    if (!selectedId) {
       setLoading(false);
       return;
     }

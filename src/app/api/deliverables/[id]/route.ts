@@ -1,5 +1,5 @@
 import { canAccessHive } from "@/auth/users";
-import { getDeliverable } from "@/deliverables/queries";
+import { getDeliverable, toDeliverableSummary } from "@/deliverables/queries";
 import { requireApiUser } from "../../_lib/auth";
 import { sql } from "../../_lib/db";
 import { jsonError, jsonOk } from "../../_lib/responses";
@@ -21,8 +21,7 @@ export async function GET(
       if (!hasAccess) return jsonError("Forbidden", 403);
     }
 
-    const { content: _content, filePath: _filePath, workspacePath: _workspacePath, ...metadata } = deliverable;
-    return jsonOk(metadata);
+    return jsonOk(toDeliverableSummary(deliverable));
   } catch {
     return jsonError("Internal server error", 500);
   }

@@ -284,12 +284,6 @@ function normalizeSteps(rawSteps: unknown, active: boolean): { steps: Normalized
   return { steps };
 }
 
-async function requireHiveAccess(user: { id: string; isSystemOwner: boolean }, hiveId: string) {
-  if (user.isSystemOwner) return null;
-  const hasAccess = await canAccessHive(sql, user.id, hiveId);
-  return hasAccess ? null : jsonError("Forbidden", 403);
-}
-
 async function requireHiveMutationAccess(user: { id: string; isSystemOwner: boolean }, hiveId: string) {
   if (user.isSystemOwner) return null;
   const hasAccess = await canMutateHive(sql, user.id, hiveId);

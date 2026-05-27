@@ -139,6 +139,24 @@ export function useVoiceCallDirect(hiveId: string) {
     nextStartTimeRef.current = startAt + audioBuffer.duration;
   }, []);
 
+  const cleanup = useCallback(() => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+    seenEventIdsRef.current = new Set();
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    playbackCtxRef.current?.close().catch(() => {});
+    playbackCtxRef.current = null;
+    wsRef.current = null;
+    releaseWakeLock();
+    if (visibilityListenerRef.current) {
+      document.removeEventListener("visibilitychange", visibilityListenerRef.current);
+      visibilityListenerRef.current = null;
+    }
+  }, [releaseWakeLock]);
+
   const startCall = useCallback(async () => {
     if (status === "connecting" || status === "active") return;
     setStatus("connecting");
@@ -285,25 +303,7 @@ export function useVoiceCallDirect(hiveId: string) {
       setStatus("error");
       cleanup();
     }
-  }, [hiveId, playPcm24kFrame, subscribeTranscript, status]);
-
-  const cleanup = useCallback(() => {
-    eventSourceRef.current?.close();
-    eventSourceRef.current = null;
-    seenEventIdsRef.current = new Set();
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    micStreamRef.current = null;
-    audioCtxRef.current?.close().catch(() => {});
-    audioCtxRef.current = null;
-    playbackCtxRef.current?.close().catch(() => {});
-    playbackCtxRef.current = null;
-    wsRef.current = null;
-    releaseWakeLock();
-    if (visibilityListenerRef.current) {
-      document.removeEventListener("visibilitychange", visibilityListenerRef.current);
-      visibilityListenerRef.current = null;
-    }
-  }, [releaseWakeLock]);
+  }, [acquireWakeLock, cleanup, hiveId, playPcm24kFrame, subscribeTranscript, status]);
 
   const endCall = useCallback(() => {
     setStatus("ending");

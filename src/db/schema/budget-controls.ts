@@ -1,4 +1,4 @@
-import { index, integer, pgTable, timestamp, uuid, varchar, uniqueIndex } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 
 export const budgetControls = pgTable(

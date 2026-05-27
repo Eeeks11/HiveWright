@@ -250,7 +250,7 @@ async function applyPolicyCandidate(
   };
 }
 
-function normalizePipelineStep(value: unknown, index: number): PipelineStepCandidate | null {
+function normalizePipelineStep(value: unknown): PipelineStepCandidate | null {
   if (!isRecord(value)) return null;
   const name = stringField(value, ["name", "title"]);
   const duty = stringField(value, ["duty", "brief", "description"]);

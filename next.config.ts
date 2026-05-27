@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
-import path from "path";
 import withSerwistInit from "@serwist/next";
 import { settingsToSetupRedirects } from "./src/navigation/setup-redirects";
+
+process.env.SERWIST_SUPPRESS_TURBOPACK_WARNING ??= "1";
 
 function allowedDevOrigins(): string[] {
   const configured = process.env.HIVEWRIGHT_ALLOWED_DEV_ORIGINS
@@ -22,7 +23,7 @@ const nextConfig: NextConfig = {
   redirects: async () => settingsToSetupRedirects,
   allowedDevOrigins: allowedDevOrigins(),
   turbopack: {
-    root: path.resolve(__dirname),
+    root: __dirname,
   },
 };
 

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "scripts/with-runtime-env.sh next dev",
-    "build": "scripts/with-runtime-env.sh next build",
+    "build": "scripts/with-runtime-env.sh next build --webpack",
     "start": "scripts/with-runtime-env.sh next start",
     "lint": "npm run check:route-auth && eslint",
     "typecheck": "tsc --noEmit",
