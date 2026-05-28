@@ -91,7 +91,7 @@ describe("GET /api/memory/timeline", () => {
 
   it("excludes superseded entries", async () => {
     const req = new Request(
-      `http://localhost:3000/api/memory/timeline?hiveId=${hiveId}`,
+      `http://localhost:3000/api/memory/timeline?hiveId=${hiveId}&view=full`,
     );
     const res = await getTimeline(req);
     const body = await res.json();
@@ -188,5 +188,17 @@ describe("GET /api/memory/timeline", () => {
     );
     expect(insightEntry).toBeDefined();
     expect(insightEntry.connection_type).toBe("cross_department");
+  });
+
+  it("defaults to metadata-first timeline rows unless full view is requested", async () => {
+    const req = new Request(
+      `http://localhost:3000/api/memory/timeline?hiveId=${hiveId}`,
+    );
+    const res = await getTimeline(req);
+    const body = await res.json();
+
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(body.data.every((entry: { content: string | null; preview: string }) =>
+      entry.content === null && entry.preview.length > 0)).toBe(true);
   });
 });

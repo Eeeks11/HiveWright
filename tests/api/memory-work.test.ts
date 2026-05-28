@@ -63,7 +63,7 @@ beforeEach(async () => {
 describe("GET /api/memory/search", () => {
   it("finds matching entries across memory stores", async () => {
     const req = new Request(
-      `http://localhost:3000/api/memory/search?hiveId=${testHiveId}&q=${encodeURIComponent(TEST_PREFIX)}&limit=20`,
+      `http://localhost:3000/api/memory/search?hiveId=${testHiveId}&q=${encodeURIComponent(TEST_PREFIX)}&limit=20&view=full`,
     );
     const res = await searchMemory(req);
     expect(res.status).toBe(200);
@@ -80,6 +80,19 @@ describe("GET /api/memory/search", () => {
     );
     expect(found).toBeDefined();
     expect(found.store).toBe("hive_memory");
+    expect(found.preview).toContain("peak sales happen in December");
+  });
+
+  it("defaults to metadata-first search results unless full view is requested", async () => {
+    const req = new Request(
+      `http://localhost:3000/api/memory/search?hiveId=${testHiveId}&q=${encodeURIComponent(TEST_PREFIX)}&limit=20`,
+    );
+    const res = await searchMemory(req);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.length).toBeGreaterThanOrEqual(2);
+    expect(body.data.every((entry: { content: string | null; preview: string }) =>
+      entry.content === null && entry.preview.length > 0)).toBe(true);
   });
 
   it("returns 400 when hiveId is missing", async () => {

@@ -5,6 +5,17 @@ import { canAccessHive } from "@/auth/users";
 
 const VALID_STORES = ["role_memory", "hive_memory", "insights"] as const;
 type StoreType = (typeof VALID_STORES)[number];
+const PREVIEW_LIMIT = 160;
+
+function wantsFullView(view: string | null) {
+  return view === "full";
+}
+
+function buildPreview(content: string) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= PREVIEW_LIMIT) return normalized;
+  return `${normalized.slice(0, PREVIEW_LIMIT - 3)}...`;
+}
 
 function buildStoreQuery(store: StoreType, hiveId: string) {
   switch (store) {
@@ -68,6 +79,7 @@ export async function GET(request: Request) {
     const store = params.get("store") as StoreType | null;
     const limit = params.getInt("limit", 50);
     const offset = params.getInt("offset", 0);
+    const includeContent = wantsFullView(params.get("view"));
 
     if (!hiveId) {
       return jsonError("Missing required parameter: hiveId", 400);
@@ -112,7 +124,16 @@ export async function GET(request: Request) {
         LIMIT ${limit} OFFSET ${offset}
       `;
 
-      return jsonPaginated(rows as unknown as Record<string, unknown>[], total, limit, offset);
+      return jsonPaginated(
+        (rows as Array<Record<string, unknown>>).map((entry) => ({
+          ...entry,
+          preview: buildPreview(String(entry.content ?? "")),
+          content: includeContent ? entry.content : null,
+        })),
+        total,
+        limit,
+        offset,
+      );
     }
 
     // Multiple stores — UNION ALL approach
@@ -143,7 +164,16 @@ export async function GET(request: Request) {
 
     const total = countResult[0].total;
 
-    return jsonPaginated(rows as unknown as Record<string, unknown>[], total, limit, offset);
+    return jsonPaginated(
+      (rows as Array<Record<string, unknown>>).map((entry) => ({
+        ...entry,
+        preview: buildPreview(String(entry.content ?? "")),
+        content: includeContent ? entry.content : null,
+      })),
+      total,
+      limit,
+      offset,
+    );
   } catch (err) {
     console.error("Memory timeline error:", err);
     return jsonError("Failed to fetch memory timeline", 500);

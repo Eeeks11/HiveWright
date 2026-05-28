@@ -7,7 +7,8 @@ import { useHiveContext } from "@/components/hive-context";
 type TimelineEntry = {
   id: string;
   store: string;
-  content: string;
+  content: string | null;
+  preview: string;
   confidence: number;
   sensitivity: string;
   role_slug: string | null;
@@ -62,6 +63,7 @@ export default function MemoryTimelinePage() {
         url.searchParams.set("hiveId", selected.id);
         url.searchParams.set("limit", String(PAGE_SIZE));
         url.searchParams.set("offset", String(pageOffset));
+        url.searchParams.set("view", "full");
         if (storeFilter) url.searchParams.set("store", storeFilter);
 
         const res = await fetch(url.toString());
@@ -208,7 +210,7 @@ export default function MemoryTimelinePage() {
 
                 {/* Content */}
                 <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap">
-                  {entry.content}
+                  {entry.content ?? entry.preview}
                 </p>
 
                 {/* Source task link */}

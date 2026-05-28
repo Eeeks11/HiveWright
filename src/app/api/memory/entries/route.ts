@@ -48,6 +48,5 @@ export async function DELETE(request: Request) {
     store: deleted.store,
     status: deleted.status,
     deletedAt: deleted.deletedAt,
-    reason: typeof body.reason === "string" && body.reason.trim().length > 0 ? body.reason.trim() : null,
   });
 }

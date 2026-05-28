@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextResponse } from "next/server";
 
 const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
@@ -73,7 +74,7 @@ describe("DELETE /api/memory/entries", () => {
     const res = await DELETE(new Request("http://localhost/api/memory/entries", {
       method: "DELETE",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id: "memory-1", store: "hive_memory", reason: "No longer needed" }),
+      body: JSON.stringify({ id: "memory-1", store: "hive_memory", reason: "password=super-secret" }),
     }));
     const body = await res.json();
 
@@ -84,6 +85,23 @@ describe("DELETE /api/memory/entries", () => {
       store: "hive_memory",
       status: "soft_deleted",
     });
+    expect(body.data.reason).toBeUndefined();
     expect(JSON.stringify(body.data)).not.toMatch(/content|secret|password/i);
+  });
+
+  it("returns the auth response for unauthorized callers before lookup", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    });
+
+    const res = await DELETE(new Request("http://localhost/api/memory/entries", {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "memory-1", store: "hive_memory" }),
+    }));
+
+    expect(res.status).toBe(401);
+    expect(mocks.getMemoryEntryScope).not.toHaveBeenCalled();
+    expect(mocks.softDeleteMemoryEntry).not.toHaveBeenCalled();
   });
 });

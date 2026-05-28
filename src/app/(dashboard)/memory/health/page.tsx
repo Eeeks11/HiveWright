@@ -15,7 +15,7 @@ type RecentEntry = {
   id: string;
   store: string;
   role_or_dept: string | null;
-  content: string;
+  preview: string;
   updated_at: string;
 };
 
@@ -85,7 +85,7 @@ export default function MemoryHealthPage() {
               id: entry.id,
               store: entry.store,
               role_or_dept: entry.role_slug || entry.department || null,
-              content: entry.content,
+              preview: entry.preview,
               updated_at: entry.updated_at,
             });
           }
@@ -232,7 +232,7 @@ export default function MemoryHealthPage() {
                       </span>
                     </div>
                     <p className="text-sm text-zinc-700 dark:text-zinc-300 line-clamp-2">
-                      {entry.content}
+                      {entry.preview}
                     </p>
                   </div>
                 ))

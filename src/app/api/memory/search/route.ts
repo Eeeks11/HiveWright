@@ -3,12 +3,25 @@ import { jsonOk, jsonError, parseSearchParams } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 
+const PREVIEW_LIMIT = 160;
+
+function wantsFullView(view: string | null) {
+  return view === "full";
+}
+
+function buildPreview(content: string) {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= PREVIEW_LIMIT) return normalized;
+  return `${normalized.slice(0, PREVIEW_LIMIT - 3)}...`;
+}
+
 export async function GET(request: Request) {
   try {
     const params = parseSearchParams(request.url);
     const hiveId = params.get("hiveId");
     const q = params.get("q");
     const limit = params.getInt("limit", 20);
+    const includeContent = wantsFullView(params.get("view"));
 
     if (!hiveId) {
       return jsonError("Missing required parameter: hiveId", 400);
@@ -63,7 +76,12 @@ export async function GET(request: Request) {
 
     const combined = [...roleMem, ...bizMem, ...insightsMem]
       .sort((a, b) => new Date(b.updated_at as string).getTime() - new Date(a.updated_at as string).getTime())
-      .slice(0, limit);
+      .slice(0, limit)
+      .map((entry) => ({
+        ...entry,
+        preview: buildPreview(String(entry.content ?? "")),
+        content: includeContent ? entry.content : null,
+      }));
 
     return jsonOk(combined);
   } catch {

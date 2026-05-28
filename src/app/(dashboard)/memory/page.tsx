@@ -7,7 +7,8 @@ import { RunsTable, type RunsTableBadgeTone, type RunsTableRow } from "@/compone
 type MemoryResult = {
   id: string;
   store: "role_memory" | "hive_memory" | "insights";
-  content: string;
+  content: string | null;
+  preview: string;
   confidence: number | null;
   sensitivity: string | null;
   updated_at: string;
@@ -104,6 +105,7 @@ export default function MemoryPage() {
     try {
       const url = new URL("/api/memory/search", window.location.origin);
       url.searchParams.set("hiveId", selected.id);
+      url.searchParams.set("view", "full");
       if (query.trim()) url.searchParams.set("q", query.trim());
 
       const res = await fetch(url.toString());
@@ -176,7 +178,7 @@ export default function MemoryPage() {
 
   const rows: RunsTableRow[] = results.map((item) => ({
     id: item.id,
-    title: item.content,
+    title: item.content ?? item.preview,
     status: {
       label: item.store.replace("_", " "),
       tone: STORE_TONE[item.store] ?? "neutral",
@@ -207,7 +209,7 @@ export default function MemoryPage() {
       </button>
     ),
     expandedContent: (
-      <p className="text-sm whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{item.content}</p>
+      <p className="text-sm whitespace-pre-wrap text-zinc-700 dark:text-zinc-300">{item.content ?? item.preview}</p>
     ),
   }));
 
