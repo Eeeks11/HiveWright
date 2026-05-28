@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import type { EaMessage } from "./thread-store";
 import { buildHiveContextBlock } from "../../hives/context";
+import { getHiveMemoryGovernanceState } from "../../memory/governance";
 
 /**
  * Build the full prompt sent to the EA's underlying model on each turn.
@@ -205,11 +206,14 @@ export async function buildEaPrompt(
     ORDER BY created_at DESC LIMIT 10
   `;
 
-  const hiveMemory = await sql<{ content: string; category: string }[]>`
-    SELECT content, category FROM hive_memory
-    WHERE hive_id = ${hiveId} AND superseded_by IS NULL
-    ORDER BY updated_at DESC LIMIT 15
-  `;
+  const memoryGovernance = await getHiveMemoryGovernanceState(sql, hiveId);
+  const hiveMemory = memoryGovernance.memoryEnabled
+    ? await sql<{ content: string; category: string }[]>`
+        SELECT content, category FROM hive_memory
+        WHERE hive_id = ${hiveId} AND superseded_by IS NULL
+        ORDER BY updated_at DESC LIMIT 15
+      `
+    : [];
 
   const unresolvableTasks = await sql<{ id: string; title: string; assigned_to: string }[]>`
     SELECT id, title, assigned_to FROM tasks
@@ -247,6 +251,11 @@ export async function buildEaPrompt(
       const attempts = d.ea_attempts > 0 ? ` (attempt ${d.ea_attempts})` : "";
       sections.push(`- ${tag} ${d.title} (\`${d.id.slice(0, 8)}\`)${attempts}`);
     }
+  }
+
+  if (!memoryGovernance.memoryEnabled) {
+    sections.push("\n## Hive Memory Status");
+    sections.push(`- Disabled for runtime reuse${memoryGovernance.reason ? `: ${memoryGovernance.reason}` : ""}`);
   }
 
   if (unresolvableTasks.length > 0) {

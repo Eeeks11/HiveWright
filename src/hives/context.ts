@@ -4,6 +4,7 @@ import type { Sql } from "postgres";
 import { hiveRootPath } from "@/hives/workspace-root";
 import { pathContains } from "@/runtime/paths";
 import { checkPgvectorAvailable, findSimilar, type SimilarityResult } from "@/memory/embeddings";
+import { getHiveMemoryGovernanceState } from "@/memory/governance";
 import { getOperatingProfile, serializeOperatingProfileForPrompt } from "@/hives/operating-profile";
 
 interface HiveRow {
@@ -262,17 +263,20 @@ export async function buildHiveContextBlock(
     LIMIT ${MAX_POLICY_CONTEXT_ITEMS}
   `;
 
-  const policyMemories = await sql<PolicyMemoryRow[]>`
-    SELECT category, content
-    FROM hive_memory
-    WHERE hive_id = ${hiveId}
-      AND superseded_by IS NULL
-      AND sensitivity != 'restricted'
-      AND confidence >= ${POLICY_MEMORY_MIN_CONFIDENCE}
-      AND content ~* ${POLICY_MEMORY_PATTERN}
-    ORDER BY confidence DESC, updated_at DESC, created_at ASC, id ASC
-    LIMIT ${MAX_POLICY_CONTEXT_ITEMS}
-  `;
+  const memoryGovernance = await getHiveMemoryGovernanceState(sql, hiveId);
+  const policyMemories = memoryGovernance.memoryEnabled
+    ? await sql<PolicyMemoryRow[]>`
+        SELECT category, content
+        FROM hive_memory
+        WHERE hive_id = ${hiveId}
+          AND superseded_by IS NULL
+          AND sensitivity != 'restricted'
+          AND confidence >= ${POLICY_MEMORY_MIN_CONFIDENCE}
+          AND content ~* ${POLICY_MEMORY_PATTERN}
+        ORDER BY confidence DESC, updated_at DESC, created_at ASC, id ASC
+        LIMIT ${MAX_POLICY_CONTEXT_ITEMS}
+      `
+    : [];
 
   const referenceDocuments = await loadReferenceDocumentManifest(hive.slug);
   const referenceSnippets = await loadRelevantReferenceSnippets(sql, hiveId, taskBrief);
@@ -349,6 +353,10 @@ export async function buildHiveContextBlock(
     for (const memory of policyMemories) {
       lines.push(`- [hive memory: ${memory.category}] ${capContextItem(memory.content)}`);
     }
+  }
+  if (!memoryGovernance.memoryEnabled) {
+    lines.push("");
+    lines.push(`**Memory Governance:** same-hive policy memories are disabled for this hive${memoryGovernance.reason ? ` (${memoryGovernance.reason})` : ""}.`);
   }
 
   return lines.join("\n");

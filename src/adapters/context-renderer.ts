@@ -91,6 +91,13 @@ function renderGitBackedProjectDiscipline(): string {
 
 function renderMemory(memory: MemoryContext, lean: boolean): string {
   const parts: string[] = [`## Memory [Role Memory: ${memory.capacity}]`];
+  if (memory.governance) {
+    parts.push(memory.governance.statusLabel);
+    parts.push(memory.governance.scopeLabel);
+    if (memory.governance.blockedReason) {
+      parts.push(`Blocked reason: ${memory.governance.blockedReason}`);
+    }
+  }
   if (lean) {
     const selectedRole = memory.roleMemory.slice(0, 2);
     const selectedHive = memory.hiveMemory.slice(0, 2);

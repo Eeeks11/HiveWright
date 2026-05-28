@@ -15,7 +15,11 @@ For each fact, decide:
 - NOOP: Already known in existing memories (provide existingId)
 
 Classify each fact as either "role_memory" (specific to how this role does its job) or "hive_memory" (general hive knowledge).
-For hive_memory, provide a category: market | operations | competitor | customer | financial | seasonal | vendor | general`);
+For hive_memory, provide a category: market | operations | competitor | customer | financial | seasonal | vendor | general
+
+Memory governance label:
+- Scope: same-hive role_memory and hive_memory only.
+- If runtime memory governance blocks writes upstream, treat that block as authoritative and do not invent alternate storage.`);
 
   sections.push(`## Work Product
 Role: ${ctx.roleSlug}

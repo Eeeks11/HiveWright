@@ -9,6 +9,7 @@ import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
 } from "../audit/agent-events";
+import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
 
 /**
  * Deterministic applier for supervisor actions. Mirrors the doctor
@@ -298,6 +299,14 @@ async function applyOne(
     }
 
     case "log_insight": {
+      const memoryWriteDecision = await assertHiveMemoryWriteAllowed(sql, {
+        hiveId,
+        source: "supervisor_log_insight",
+        operation: "write",
+      });
+      if (!memoryWriteDecision.allowed) {
+        return `log_insight(${action.category}): blocked by hive memory governance`;
+      }
       const [row] = await sql<{ id: string }[]>`
         INSERT INTO hive_memory (hive_id, category, content, sensitivity)
         VALUES (${hiveId}, ${action.category}, ${action.content}, 'internal')

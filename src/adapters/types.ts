@@ -42,6 +42,12 @@ export interface MemoryContext {
   hiveMemory: { content: string; category: string; confidence: number }[];
   insights: { content: string; connectionType: string; confidence: number }[];
   capacity: string;
+  governance?: {
+    memoryEnabled: boolean;
+    statusLabel: string;
+    scopeLabel: string;
+    blockedReason?: string | null;
+  };
   provenance?: ContextProvenance;
 }
 

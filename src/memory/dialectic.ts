@@ -51,7 +51,8 @@ Rules:
 - Prefer precise conclusions with evidence and confidence.
 - Do not store secrets, one-off task progress, temporary IDs, or facts likely stale within a week.
 - If a new conclusion corrects an existing one, emit an UPDATE with existingId instead of duplicating it.
-- If the evidence is thin or ambiguous, return no insights.`);
+- If the evidence is thin or ambiguous, return no insights.
+- Scope label: same-hive hive_memory only; upstream memory governance may block writes and must be respected.`);
 
   sections.push(`## Dialectic mode
 ${mode === "cold"

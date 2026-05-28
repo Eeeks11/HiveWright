@@ -17,6 +17,7 @@ import {
   normalizeFinalArtifactsFromEvidenceBundle,
 } from "./final-artifacts";
 import { upsertOwnerOutcomeForCompletion } from "@/outcomes/durable";
+import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
 
 export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
 
@@ -243,32 +244,39 @@ export async function completeGoal(
     const memorySummary = requestedStatus === "achieved"
       ? `Goal "${goal.title}" achieved: ${completionSummary}`
       : `Goal "${goal.title}" status ${requestedStatus}: ${completionSummary}`;
-    const [memory] = await tx<{ id: string }[]>`
-      INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)
-      VALUES (${goal.hive_id}, 'general', ${memorySummary}, 1.0, 'internal')
-      RETURNING id
-    `;
-    await recordAgentAuditEventBestEffort(tx as unknown as Sql, {
-      eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
-      actor: auditActor(createdBy),
-      hiveId: goal.hive_id,
-      goalId,
-      targetType: "hive_memory",
-      targetId: memory.id,
-      outcome: "success",
-      metadata: {
-        source: "goals.complete_goal",
-        actionKind: options.auditActionKind ?? "complete_goal",
-        memoryId: memory.id,
-        goalId,
-        category: "general",
-        sensitivity: "internal",
-        evidenceTaskCount: evidence.taskIds?.length ?? 0,
-        evidenceWorkProductCount: evidence.workProductIds?.length ?? 0,
-        evidenceBundleCount: evidence.bundle?.length ?? 0,
-        completionStatus: requestedStatus,
-      },
+    const memoryWriteDecision = await assertHiveMemoryWriteAllowed(tx as unknown as Sql, {
+      hiveId: goal.hive_id as string,
+      source: "goals_complete_goal",
+      operation: "write",
     });
+    if (memoryWriteDecision.allowed) {
+      const [memory] = await tx<{ id: string }[]>`
+        INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)
+        VALUES (${goal.hive_id}, 'general', ${memorySummary}, 1.0, 'internal')
+        RETURNING id
+      `;
+      await recordAgentAuditEventBestEffort(tx as unknown as Sql, {
+        eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
+        actor: auditActor(createdBy),
+        hiveId: goal.hive_id,
+        goalId,
+        targetType: "hive_memory",
+        targetId: memory.id,
+        outcome: "success",
+        metadata: {
+          source: "goals.complete_goal",
+          actionKind: options.auditActionKind ?? "complete_goal",
+          memoryId: memory.id,
+          goalId,
+          category: "general",
+          sensitivity: "internal",
+          evidenceTaskCount: evidence.taskIds?.length ?? 0,
+          evidenceWorkProductCount: evidence.workProductIds?.length ?? 0,
+          evidenceBundleCount: evidence.bundle?.length ?? 0,
+          completionStatus: requestedStatus,
+        },
+      });
+    }
 
     await normalizeFinalArtifactsFromEvidenceBundle(tx as unknown as Sql, {
       goalId,

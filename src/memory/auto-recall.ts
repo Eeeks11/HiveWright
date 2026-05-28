@@ -34,8 +34,12 @@ export async function buildRecallInjection(
 
   const parts: string[] = [];
 
+  if (memory.governance && !memory.governance.memoryEnabled) {
+    return `**Recall — memory disabled for this hive.**\n${memory.governance.scopeLabel}`;
+  }
+
   if (memory.roleMemory.length > 0) {
-    parts.push("**Recall — relevant knowledge:**");
+    parts.push("**Recall — same-hive relevant knowledge:**");
     for (const m of memory.roleMemory.slice(0, 2)) {
       parts.push(`- ${m.content}`);
     }

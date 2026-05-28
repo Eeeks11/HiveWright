@@ -4,6 +4,12 @@ import { formatWithFreshness } from "./freshness";
 import { findSimilar, type SimilarityResult } from "./embeddings";
 import type { ModelCallerConfig } from "./model-caller";
 import { createTaskContextProvenance } from "../provenance/task-context";
+import {
+  getHiveMemoryGovernanceState,
+  markMemoryUsed,
+  MEMORY_SCOPE_LABEL,
+  recordMemoryBlockedOperation,
+} from "./governance";
 
 export interface InjectionQuery {
   roleSlug: string;
@@ -22,6 +28,29 @@ export async function queryRelevantMemory(
   sql: Sql,
   query: InjectionQuery,
 ): Promise<MemoryContext> {
+  const governance = await getHiveMemoryGovernanceState(sql, query.hiveId);
+  if (!governance.memoryEnabled) {
+    await recordMemoryBlockedOperation(sql, {
+      hiveId: query.hiveId,
+      source: "memory_injection",
+      operation: "read",
+      reason: governance.reason,
+    });
+    return {
+      roleMemory: [],
+      hiveMemory: [],
+      insights: [],
+      capacity: "memory disabled",
+      governance: {
+        memoryEnabled: false,
+        statusLabel: "Status: disabled; same-hive memory reuse is blocked for this hive.",
+        scopeLabel: "Scope: agent/session memory injection is disabled until the hive memory control is re-enabled.",
+        blockedReason: governance.reason,
+      },
+      provenance: createTaskContextProvenance([]),
+    };
+  }
+
   // 1. Get semantic matches if pgvector is available
   let semanticHits: SimilarityResult[] = [];
   if (query.pgvectorEnabled) {
@@ -136,6 +165,9 @@ export async function queryRelevantMemory(
       WHERE id = ANY(${injectedBizIds})
     `;
   }
+  if (injectedRoleIds.length > 0 || injectedBizIds.length > 0 || insightRows.length > 0) {
+    await markMemoryUsed(sql, query.hiveId);
+  }
 
   const provenanceEntries: ContextProvenanceEntry[] = [
     ...scoredRoleMemories.map((memory) => ({
@@ -187,6 +219,15 @@ export async function queryRelevantMemory(
       connectionType: r.connection_type as string,
       confidence: r.confidence as number,
     })),
+    governance: {
+      memoryEnabled: true,
+      statusLabel:
+        scoredRoleMemories.length + scoredHiveMemories.length + insightRows.length > 0
+          ? `Status: enabled; reused ${scoredRoleMemories.length + scoredHiveMemories.length + insightRows.length} same-hive memory item(s) for this task.`
+          : "Status: enabled; no same-hive memories were reused for this task.",
+      scopeLabel: MEMORY_SCOPE_LABEL,
+      blockedReason: null,
+    },
     provenance: createTaskContextProvenance(provenanceEntries),
     capacity: (() => {
       const count = capacityRow?.count ?? 0;

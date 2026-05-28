@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { proposeSkill } from "@/skills/self-creation";
+import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
 import type { LearningGateResult } from "./outcome-records";
 import { LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "./learning-gate-approval";
 
@@ -124,6 +125,13 @@ async function createMemoryFollowup(sql: Sql, input: LearningGateFollowupInput):
     `Rationale: ${rationale}`,
     `Completion summary: ${summary}`,
   ].filter((line): line is string => line !== null).join("\n"), MAX_MEMORY_LENGTH);
+
+  const memoryWriteDecision = await assertHiveMemoryWriteAllowed(sql, {
+    hiveId: input.hiveId,
+    source: "learning_gate_followup",
+    operation: "write",
+  });
+  if (!memoryWriteDecision.allowed) return;
 
   await sql`
     INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)

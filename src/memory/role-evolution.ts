@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { getHiveMemoryGovernanceState } from "./governance";
 
 export interface RoleEvolutionCandidate {
   roleSlug: string;
@@ -15,6 +16,9 @@ export async function findEvolutionCandidates(
   sql: Sql,
   hiveId: string,
 ): Promise<RoleEvolutionCandidate[]> {
+  const governance = await getHiveMemoryGovernanceState(sql, hiveId);
+  if (!governance.memoryEnabled) return [];
+
   // Find role memories with high access_count (indicates repeated relevance)
   // and similar content patterns
   const candidates = await sql`

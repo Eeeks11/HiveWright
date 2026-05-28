@@ -3,6 +3,11 @@ import { jsonOk, jsonError } from "../../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../../_lib/auth";
 import { canMutateHive } from "@/auth/users";
 import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import {
+  assertHiveMemoryWriteAllowed,
+  markMemoryWritten,
+  memoryGovernanceDisabledResponse,
+} from "@/memory/governance";
 
 export async function POST(request: Request) {
   const authz = await requireApiUser();
@@ -23,6 +28,15 @@ export async function POST(request: Request) {
       if (!canMutate) return jsonError("Forbidden: caller cannot manage this hive", 403);
     }
 
+    const writeDecision = await assertHiveMemoryWriteAllowed(sql, {
+      hiveId,
+      source: "memory_hive_api",
+      operation: "write",
+    });
+    if (!writeDecision.allowed) {
+      return memoryGovernanceDisabledResponse(writeDecision.governance);
+    }
+
     const rows = await sql`
       INSERT INTO hive_memory (hive_id, content, category, confidence)
       VALUES (
@@ -35,11 +49,16 @@ export async function POST(request: Request) {
     `;
 
     const row = rows[0] as { id: string };
+    await markMemoryWritten(sql, hiveId);
     await maybeRecordEaHiveSwitch(sql, request, hiveId, {
       type: "hive_memory",
       id: row.id,
     });
-    return jsonOk(rows[0], 201);
+    return jsonOk({
+      ...rows[0],
+      memoryScope: "Scope: selected hive only.",
+      memoryStatus: "enabled",
+    }, 201);
   } catch {
     return jsonError("Failed to insert hive memory", 500);
   }

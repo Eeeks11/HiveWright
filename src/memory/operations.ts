@@ -1,5 +1,10 @@
 import type { Sql } from "postgres";
 import type { MemoryOperation } from "./types";
+import {
+  getHiveMemoryGovernanceState,
+  markMemoryWritten,
+  recordMemoryBlockedOperation,
+} from "./governance";
 
 export interface OperationContext {
   hiveId: string;
@@ -21,6 +26,21 @@ export async function applyMemoryOperations(
   operations: MemoryOperation[],
   ctx: OperationContext,
 ): Promise<OperationResult[]> {
+  const governance = await getHiveMemoryGovernanceState(sql, ctx.hiveId);
+  if (!governance.memoryEnabled) {
+    await recordMemoryBlockedOperation(sql, {
+      hiveId: ctx.hiveId,
+      source: "memory_operations",
+      operation: "write",
+      reason: governance.reason,
+    });
+    return operations.map((operation) => ({
+      operation,
+      applied: false,
+      error: `Hive memory is disabled for this hive: ${governance.reason ?? "no reason recorded"}`,
+    }));
+  }
+
   const results: OperationResult[] = [];
   for (const op of operations) {
     try {
@@ -31,12 +51,12 @@ export async function applyMemoryOperations(
           break;
         }
         case "UPDATE": {
-          const resultId = await applyUpdate(sql, op);
+          const resultId = await applyUpdate(sql, op, ctx);
           results.push({ operation: op, applied: true, resultId });
           break;
         }
         case "DELETE": {
-          await applyDelete(sql, op);
+          await applyDelete(sql, op, ctx);
           results.push({ operation: op, applied: true });
           break;
         }
@@ -65,6 +85,7 @@ async function applyAdd(sql: Sql, op: MemoryOperation, ctx: OperationContext): P
       VALUES (${ctx.hiveId}, ${ctx.roleSlug}, ${op.content}, ${ctx.sourceTaskId}, ${op.confidence ?? 1.0})
       RETURNING id
     `;
+    await markMemoryWritten(sql, ctx.hiveId);
     return row.id;
   } else {
     const [row] = await sql`
@@ -72,11 +93,12 @@ async function applyAdd(sql: Sql, op: MemoryOperation, ctx: OperationContext): P
       VALUES (${ctx.hiveId}, ${op.category ?? "general"}, ${op.content}, ${ctx.sourceTaskId}, ${op.confidence ?? 1.0})
       RETURNING id
     `;
+    await markMemoryWritten(sql, ctx.hiveId);
     return row.id;
   }
 }
 
-async function applyUpdate(sql: Sql, op: MemoryOperation): Promise<string> {
+async function applyUpdate(sql: Sql, op: MemoryOperation, ctx: OperationContext): Promise<string> {
   if (!op.existingId) throw new Error("UPDATE requires existingId");
   if (!op.content) throw new Error("UPDATE requires content");
   if (op.store === "role_memory") {
@@ -90,16 +112,18 @@ async function applyUpdate(sql: Sql, op: MemoryOperation): Promise<string> {
       WHERE id = ${op.existingId}
     `;
   }
+  await markMemoryWritten(sql, ctx.hiveId);
   return op.existingId;
 }
 
-async function applyDelete(sql: Sql, op: MemoryOperation): Promise<void> {
+async function applyDelete(sql: Sql, op: MemoryOperation, ctx: OperationContext): Promise<void> {
   if (!op.existingId) throw new Error("DELETE requires existingId");
   if (op.store === "role_memory") {
     await sql`UPDATE role_memory SET superseded_by = ${DELETED_SENTINEL}, updated_at = NOW() WHERE id = ${op.existingId}`;
   } else {
     await sql`UPDATE hive_memory SET superseded_by = ${DELETED_SENTINEL}, updated_at = NOW() WHERE id = ${op.existingId}`;
   }
+  await markMemoryWritten(sql, ctx.hiveId);
 }
 
 async function applyNoop(sql: Sql, op: MemoryOperation): Promise<void> {

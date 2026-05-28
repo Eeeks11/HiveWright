@@ -73,6 +73,7 @@ import {
 } from "./execution-capsules";
 import { extractAndStore } from "../memory/extractor";
 import { checkPgvectorAvailable, initializeEmbeddings, storeEmbedding } from "../memory/embeddings";
+import { assertHiveMemoryWriteAllowed } from "../memory/governance";
 import { shouldRunSynthesis, runSynthesis } from "../memory/synthesis";
 import { getDefaultConfig as getModelConfig } from "../memory/model-caller";
 import type { ExtractionContext } from "../memory/types";
@@ -1300,40 +1301,50 @@ export class Dispatcher {
 
         // 8b. Extract facts from work product
         try {
-          const existingRole = await this.sql`
-            SELECT id, content, confidence FROM role_memory
-            WHERE role_slug = ${task.assignedTo} AND hive_id = ${task.hiveId}
-              AND superseded_by IS NULL
-            ORDER BY updated_at DESC LIMIT 20
-          `;
-          const existingBiz = await this.sql`
-            SELECT id, content, confidence, category FROM hive_memory
-            WHERE hive_id = ${task.hiveId} AND superseded_by IS NULL
-            ORDER BY updated_at DESC LIMIT 20
-          `;
-
-          const extractionCtx: ExtractionContext = {
-            workProductContent: result.output,
-            roleSlug: task.assignedTo,
+          const memoryWriteDecision = await assertHiveMemoryWriteAllowed(this.sql, {
             hiveId: task.hiveId,
-            department: ctx.roleTemplate.department,
-            taskId: task.id,
-            existingRoleMemories: existingRole.map((r) => ({
-              id: r.id as string,
-              content: r.content as string,
-              confidence: r.confidence as number,
-            })),
-            existingHiveMemories: existingBiz.map((r) => ({
-              id: r.id as string,
-              content: r.content as string,
-              confidence: r.confidence as number,
-              category: r.category as string,
-            })),
-          };
+            source: "dispatcher_fact_extraction",
+            operation: "write",
+          });
 
-          const extraction = await extractAndStore(this.sql, extractionCtx, getModelConfig());
-          if (extraction.operationResults.length > 0) {
-            console.log(`[dispatcher] Extracted ${extraction.operationResults.length} fact(s) from task ${task.id}`);
+          if (memoryWriteDecision.allowed) {
+            const existingRole = await this.sql`
+              SELECT id, content, confidence FROM role_memory
+              WHERE role_slug = ${task.assignedTo} AND hive_id = ${task.hiveId}
+                AND superseded_by IS NULL
+              ORDER BY updated_at DESC LIMIT 20
+            `;
+            const existingBiz = await this.sql`
+              SELECT id, content, confidence, category FROM hive_memory
+              WHERE hive_id = ${task.hiveId} AND superseded_by IS NULL
+              ORDER BY updated_at DESC LIMIT 20
+            `;
+
+            const extractionCtx: ExtractionContext = {
+              workProductContent: result.output,
+              roleSlug: task.assignedTo,
+              hiveId: task.hiveId,
+              department: ctx.roleTemplate.department,
+              taskId: task.id,
+              existingRoleMemories: existingRole.map((r) => ({
+                id: r.id as string,
+                content: r.content as string,
+                confidence: r.confidence as number,
+              })),
+              existingHiveMemories: existingBiz.map((r) => ({
+                id: r.id as string,
+                content: r.content as string,
+                confidence: r.confidence as number,
+                category: r.category as string,
+              })),
+            };
+
+            const extraction = await extractAndStore(this.sql, extractionCtx, getModelConfig());
+            if (extraction.operationResults.length > 0) {
+              console.log(`[dispatcher] Extracted ${extraction.operationResults.length} fact(s) from task ${task.id}`);
+            }
+          } else {
+            console.log(`[dispatcher] Skipped memory fact extraction for task ${task.id}: hive memory disabled`);
           }
 
           // Generate embedding for the work product
@@ -1356,12 +1367,21 @@ export class Dispatcher {
 
         // Also extract entities for graph memory
         try {
-          const { extractAndStoreEntities } = await import("../memory/entity-extractor");
-          const entityResult = await extractAndStoreEntities(
-            this.sql, task.hiveId, result.output, task.id, getModelConfig()
-          );
-          if (entityResult.entitiesStored > 0 || entityResult.relationshipsStored > 0) {
-            console.log(`[dispatcher] Extracted ${entityResult.entitiesStored} entities, ${entityResult.relationshipsStored} relationships from task ${task.id}`);
+          const entityWriteDecision = await assertHiveMemoryWriteAllowed(this.sql, {
+            hiveId: task.hiveId,
+            source: "dispatcher_entity_extraction",
+            operation: "write",
+          });
+          if (entityWriteDecision.allowed) {
+            const { extractAndStoreEntities } = await import("../memory/entity-extractor");
+            const entityResult = await extractAndStoreEntities(
+              this.sql, task.hiveId, result.output, task.id, getModelConfig()
+            );
+            if (entityResult.entitiesStored > 0 || entityResult.relationshipsStored > 0) {
+              console.log(`[dispatcher] Extracted ${entityResult.entitiesStored} entities, ${entityResult.relationshipsStored} relationships from task ${task.id}`);
+            }
+          } else {
+            console.log(`[dispatcher] Skipped entity extraction for task ${task.id}: hive memory disabled`);
           }
         } catch (entityErr) {
           console.error("[dispatcher] Entity extraction error:", entityErr);
