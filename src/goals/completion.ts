@@ -17,7 +17,7 @@ import {
   normalizeFinalArtifactsFromEvidenceBundle,
 } from "./final-artifacts";
 import { upsertOwnerOutcomeForCompletion } from "@/outcomes/durable";
-import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
+import { assertHiveMemoryWriteAllowed, markMemoryWritten } from "@/memory/governance";
 
 export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
 
@@ -255,6 +255,7 @@ export async function completeGoal(
         VALUES (${goal.hive_id}, 'general', ${memorySummary}, 1.0, 'internal')
         RETURNING id
       `;
+      await markMemoryWritten(tx as unknown as Sql, goal.hive_id as string);
       await recordAgentAuditEventBestEffort(tx as unknown as Sql, {
         eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
         actor: auditActor(createdBy),

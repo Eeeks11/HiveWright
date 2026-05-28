@@ -9,7 +9,7 @@ import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
 } from "../audit/agent-events";
-import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
+import { assertHiveMemoryWriteAllowed, markMemoryWritten } from "@/memory/governance";
 
 /**
  * Deterministic applier for supervisor actions. Mirrors the doctor
@@ -312,6 +312,7 @@ async function applyOne(
         VALUES (${hiveId}, ${action.category}, ${action.content}, 'internal')
         RETURNING id
       `;
+      await markMemoryWritten(sql, hiveId);
       await recordAgentAuditEventBestEffort(sql, {
         eventType: AGENT_AUDIT_EVENTS.hiveMemoryWritten,
         actor: {

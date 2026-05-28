@@ -1,6 +1,6 @@
 import type { Sql } from "postgres";
 import { proposeSkill } from "@/skills/self-creation";
-import { assertHiveMemoryWriteAllowed } from "@/memory/governance";
+import { assertHiveMemoryWriteAllowed, markMemoryWritten } from "@/memory/governance";
 import type { LearningGateResult } from "./outcome-records";
 import { LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "./learning-gate-approval";
 
@@ -137,6 +137,7 @@ async function createMemoryFollowup(sql: Sql, input: LearningGateFollowupInput):
     INSERT INTO hive_memory (hive_id, category, content, confidence, sensitivity)
     VALUES (${input.hiveId}, 'learning', ${content}, 0.9, 'internal')
   `;
+  await markMemoryWritten(sql, input.hiveId);
 }
 
 async function createSkillFollowup(sql: Sql, input: LearningGateFollowupInput): Promise<void> {
