@@ -16,7 +16,7 @@ import { applySupervisorActions } from "./apply-actions";
 import { escalateMalformedSupervisorOutput } from "./escalate";
 import { reconcileUnresolvableTasks } from "./unresolvable-triage";
 import type { AppliedOutcome, HiveHealthReport, SupervisorActions } from "./types";
-import { runInitiativeEvaluation } from "@/initiative-engine";
+import { runInitiativeEvaluation, type InitiativeRunResult, type RunInitiativeEvaluationOptions } from "@/initiative-engine";
 import { normalizeBillableUsage } from "@/usage/billable-usage";
 
 export { parseSupervisorActions } from "./parse-actions";
@@ -83,6 +83,8 @@ export interface RunSupervisorOptions {
   enableInitiativeRecovery?: boolean;
   /** Schedule/fire identifier used to trace supervisor-owned initiative recovery runs. */
   initiativeTriggerRef?: string | null;
+  /** Optional test hook/override for the dormant-goal initiative recovery run attached to heartbeat. */
+  initiativeEvaluation?: RunInitiativeEvaluationOptions | false;
 }
 
 export interface RunSupervisorResult {
@@ -100,6 +102,8 @@ export interface RunSupervisorResult {
   deferred?: boolean;
   /** Terminal unresolvable task rows reconciled before the health scan. */
   unresolvableTriaged?: number;
+  /** Dormant-goal initiative recovery run attached to this heartbeat, when applicable. */
+  initiativeRecovery?: InitiativeRunResult;
 }
 
 export interface RunSupervisorDigestResult {
@@ -141,32 +145,28 @@ function toJsonValue(value: unknown): JSONValue {
   return JSON.parse(JSON.stringify(value)) as JSONValue;
 }
 
-function reportHasDormantGoalRecoveryWork(report: HiveHealthReport): boolean {
-  return report.findings.some((finding) => finding.kind === "dormant_goal");
-}
-
 async function runDormantGoalInitiativeRecovery(
   sql: Sql,
   hiveId: string,
-  report: HiveHealthReport,
+  _report: HiveHealthReport,
   triggerRef: string | null | undefined,
-): Promise<void> {
-  if (!reportHasDormantGoalRecoveryWork(report)) return;
-
+  options: RunInitiativeEvaluationOptions = {},
+): Promise<InitiativeRunResult | undefined> {
   try {
-    await runInitiativeEvaluation(sql, {
+    return await runInitiativeEvaluation(sql, {
       hiveId,
       trigger: {
-        kind: "schedule",
-        scheduleId: triggerRef ?? "hive-supervisor-heartbeat",
+        kind: "supervisor_heartbeat",
+        supervisorReportId: triggerRef ?? null,
         targetGoalId: null,
       },
-    });
+    }, options);
   } catch (err) {
     console.error(
       `[supervisor] dormant-goal initiative recovery failed for hive ${hiveId}:`,
       err instanceof Error ? err.message : String(err),
     );
+    return undefined;
   }
 }
 
@@ -186,11 +186,19 @@ export async function runSupervisor(
 ): Promise<RunSupervisorResult> {
   const unresolvableTriage = await reconcileUnresolvableTasks(sql, hiveId);
   const report = await scanHive(sql, hiveId);
-  if (opts.enableInitiativeRecovery) {
-    await runDormantGoalInitiativeRecovery(sql, hiveId, report, opts.initiativeTriggerRef);
-  }
+  const shouldRunInitiativeRecovery =
+    opts.enableInitiativeRecovery || opts.initiativeEvaluation !== undefined;
 
   if (report.findings.length === 0) {
+    const initiativeRecovery = shouldRunInitiativeRecovery && opts.initiativeEvaluation !== false
+      ? await runDormantGoalInitiativeRecovery(
+          sql,
+          hiveId,
+          report,
+          opts.initiativeTriggerRef ?? null,
+          opts.initiativeEvaluation ?? {},
+        )
+      : undefined;
     return {
       skipped: true,
       reportId: null,
@@ -199,6 +207,7 @@ export async function runSupervisor(
       actionsSkipped: 0,
       actionsErrored: 0,
       unresolvableTriaged: unresolvableTriage.touched,
+      initiativeRecovery,
     };
   }
 
@@ -221,6 +230,16 @@ export async function runSupervisor(
   `;
   const reportId = row.id;
 
+  const initiativeRecovery = shouldRunInitiativeRecovery && opts.initiativeEvaluation !== false
+    ? await runDormantGoalInitiativeRecovery(
+        sql,
+        hiveId,
+        report,
+        opts.initiativeTriggerRef ?? reportId,
+        opts.initiativeEvaluation ?? {},
+      )
+    : undefined;
+
   const invokeAgent = opts.invokeAgent ?? defaultInvokeAgent(sql);
   const agentResult = await invokeAgent({ hiveId, reportId, report });
 
@@ -234,6 +253,7 @@ export async function runSupervisor(
       actionsApplied: 0,
       actionsSkipped: 0,
       actionsErrored: 0,
+      initiativeRecovery,
       deferred: true,
       unresolvableTriaged: unresolvableTriage.touched,
     };
@@ -254,6 +274,7 @@ export async function runSupervisor(
       actionsApplied: 0,
       actionsSkipped: 0,
       actionsErrored: 0,
+      initiativeRecovery,
       malformed: true,
       unresolvableTriaged: unresolvableTriage.touched,
     };
@@ -278,6 +299,7 @@ export async function runSupervisor(
     actionsSkipped: countOutcomes(outcomes, "skipped"),
     actionsErrored: countOutcomes(outcomes, "error"),
     unresolvableTriaged: unresolvableTriage.touched,
+    initiativeRecovery,
   };
 }
 

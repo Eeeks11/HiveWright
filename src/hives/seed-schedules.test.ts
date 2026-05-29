@@ -44,10 +44,11 @@ describe("seedDefaultSchedules", () => {
     });
   });
 
-  it("seeds only the supervisor heartbeat regardless of hive kind", async () => {
-    for (const kind of ["business", "personal_project", "personal_assistant", "research", "creative"] as const) {
-      const slug = `seed-kind-${kind}`;
+  it.each(["business", "personal_project", "personal_assistant", "research", "creative"] as const)(
+    "seeds only the supervisor heartbeat for %s hives",
+    async (kind) => {
       await truncateAll(sql);
+      const slug = `seed-kind-${kind}`;
       await sql`
         INSERT INTO hives (id, slug, name, type, description)
         VALUES (${HIVE}, ${slug}, 'Seed Co', 'digital', null)
@@ -65,8 +66,8 @@ describe("seedDefaultSchedules", () => {
         SELECT origin_key FROM schedules WHERE hive_id = ${HIVE}::uuid
       `;
       expect(rows.map((row) => row.origin_key)).toEqual(["hive-supervisor-heartbeat"]);
-    }
-  });
+    },
+  );
 
   it("keeps proactiveEnabled=false from disabling the core heartbeat", async () => {
     const res = await seedDefaultSchedules(

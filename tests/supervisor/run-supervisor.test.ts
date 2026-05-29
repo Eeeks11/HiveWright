@@ -279,6 +279,97 @@ describe.sequential("runSupervisor — no-findings short-circuit", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("runs dormant-goal initiative recovery from the heartbeat path without a separate initiative schedule", async () => {
+    const goalId = "33333333-3333-3333-3333-333333333333";
+    await seedDormantGoal(goalId);
+
+    const result = await runSupervisor(sql, HIVE_ID, {
+      invokeAgent: mockAgentReturning({
+        summary: "Dormant goal detected; initiative recovery handles restart work.",
+        findings_addressed: [],
+        actions: [{ kind: "noop", reasoning: "initiative recovery runs after heartbeat scan" }],
+      }),
+      initiativeEvaluation: {
+        submitWork: async (input) => {
+          const [task] = await sql<Array<{ id: string; title: string }>>`
+            INSERT INTO tasks (
+              hive_id, goal_id, title, brief, status, assigned_to, created_by,
+              acceptance_criteria, priority, qa_required
+            )
+            VALUES (
+              ${input.hiveId}, ${input.goalId ?? null}, 'Restart dormant goal', ${input.input},
+              'pending', 'dev-agent', 'initiative-engine', ${input.acceptanceCriteria},
+              ${input.priority}, false
+            )
+            RETURNING id, title
+          `;
+          return {
+            id: task.id,
+            type: "task" as const,
+            title: task.title,
+            classification: { provider: "test", model: "test", confidence: 1, reasoning: "test", usedFallback: false },
+          };
+        },
+      },
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(result.initiativeRecovery?.tasksCreated).toBe(1);
+
+    const [initiativeRun] = await sql<Array<{ trigger_type: string; trigger_ref: string | null; created_tasks: number }>>`
+      SELECT trigger_type, trigger_ref, created_tasks
+      FROM initiative_runs
+      WHERE hive_id = ${HIVE_ID}
+    `;
+    expect(initiativeRun).toMatchObject({
+      trigger_type: "supervisor_heartbeat",
+      trigger_ref: result.reportId,
+      created_tasks: 1,
+    });
+
+    const [createdTask] = await sql<Array<{ goal_id: string; created_by: string }>>`
+      SELECT goal_id, created_by
+      FROM tasks
+      WHERE hive_id = ${HIVE_ID} AND title = 'Restart dormant goal'
+    `;
+    expect(createdTask).toMatchObject({ goal_id: goalId, created_by: "initiative-engine" });
+  });
+
+  it("dedupes heartbeat initiative recovery against an existing open dormant-goal task", async () => {
+    const goalId = "44444444-4444-4444-4444-444444444444";
+    await seedDormantGoal(goalId);
+    await sql`
+      INSERT INTO tasks (hive_id, goal_id, title, brief, status, assigned_to, created_by)
+      VALUES (${HIVE_ID}, ${goalId}, 'Existing goal work', 'Already recovering.', 'pending', 'dev-agent', 'owner')
+    `;
+
+    const result = await runSupervisor(sql, HIVE_ID, {
+      invokeAgent: mockAgentReturning({
+        summary: "Dormant goal detected; existing work should suppress initiative recovery.",
+        findings_addressed: [],
+        actions: [{ kind: "noop", reasoning: "do not duplicate existing goal work" }],
+      }),
+      initiativeEvaluation: {
+        submitWork: async () => {
+          throw new Error("initiative recovery should not submit duplicate work");
+        },
+      },
+    });
+
+    expect(result.initiativeRecovery).toMatchObject({
+      candidatesEvaluated: 1,
+      tasksCreated: 0,
+      suppressed: 1,
+    });
+
+    const [{ recoveryTasks }] = await sql<Array<{ recoveryTasks: number }>>`
+      SELECT COUNT(*)::int AS "recoveryTasks"
+      FROM tasks
+      WHERE hive_id = ${HIVE_ID} AND created_by = 'initiative-engine'
+    `;
+    expect(recoveryTasks).toBe(0);
+  });
+
   it("skips agent invocation when the material report fingerprint is unchanged", async () => {
     await seedAgingDecision();
     const digest = await runSupervisorDigest(sql, HIVE_ID);
