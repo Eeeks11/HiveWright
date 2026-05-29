@@ -16,6 +16,7 @@ import { applySupervisorActions } from "./apply-actions";
 import { escalateMalformedSupervisorOutput } from "./escalate";
 import { reconcileUnresolvableTasks } from "./unresolvable-triage";
 import type { AppliedOutcome, HiveHealthReport, SupervisorActions } from "./types";
+import { runInitiativeEvaluation } from "@/initiative-engine";
 import { normalizeBillableUsage } from "@/usage/billable-usage";
 
 export { parseSupervisorActions } from "./parse-actions";
@@ -78,6 +79,10 @@ export interface RunSupervisorOptions {
    * task path; the dispatcher's completion hook picks up the output later.
    */
   invokeAgent?: InvokeSupervisorAgent;
+  /** Enables dormant-goal initiative recovery when the heartbeat is fired by the schedule. */
+  enableInitiativeRecovery?: boolean;
+  /** Schedule/fire identifier used to trace supervisor-owned initiative recovery runs. */
+  initiativeTriggerRef?: string | null;
 }
 
 export interface RunSupervisorResult {
@@ -136,6 +141,35 @@ function toJsonValue(value: unknown): JSONValue {
   return JSON.parse(JSON.stringify(value)) as JSONValue;
 }
 
+function reportHasDormantGoalRecoveryWork(report: HiveHealthReport): boolean {
+  return report.findings.some((finding) => finding.kind === "dormant_goal");
+}
+
+async function runDormantGoalInitiativeRecovery(
+  sql: Sql,
+  hiveId: string,
+  report: HiveHealthReport,
+  triggerRef: string | null | undefined,
+): Promise<void> {
+  if (!reportHasDormantGoalRecoveryWork(report)) return;
+
+  try {
+    await runInitiativeEvaluation(sql, {
+      hiveId,
+      trigger: {
+        kind: "schedule",
+        scheduleId: triggerRef ?? "hive-supervisor-heartbeat",
+        targetGoalId: null,
+      },
+    });
+  } catch (err) {
+    console.error(
+      `[supervisor] dormant-goal initiative recovery failed for hive ${hiveId}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
 /**
  * Heartbeat entry point. Short-circuits cheaply when the scan is clean
  * (no row written, no LLM call), otherwise persists an audit row up-front
@@ -152,6 +186,9 @@ export async function runSupervisor(
 ): Promise<RunSupervisorResult> {
   const unresolvableTriage = await reconcileUnresolvableTasks(sql, hiveId);
   const report = await scanHive(sql, hiveId);
+  if (opts.enableInitiativeRecovery) {
+    await runDormantGoalInitiativeRecovery(sql, hiveId, report, opts.initiativeTriggerRef);
+  }
 
   if (report.findings.length === 0) {
     return {

@@ -120,7 +120,10 @@ describe("checkAndFireSchedules — hive-supervisor-heartbeat branch", () => {
 
     expect(created).toBe(1);
     expect(runSupervisorMock).toHaveBeenCalledTimes(1);
-    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-uuid-1");
+    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-uuid-1", {
+      enableInitiativeRecovery: true,
+      initiativeTriggerRef: "sched-1",
+    });
 
     const insertCalls = calls.filter((c) => queryText(c).includes("insert into tasks"));
     expect(insertCalls).toHaveLength(0);
@@ -141,7 +144,10 @@ describe("checkAndFireSchedules — hive-supervisor-heartbeat branch", () => {
 
     await checkAndFireSchedules(sql);
 
-    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-uuid-2");
+    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-uuid-2", {
+      enableInitiativeRecovery: true,
+      initiativeTriggerRef: "sched-2",
+    });
     expect(calls.filter((c) => queryText(c).includes("insert into tasks"))).toHaveLength(0);
   });
 
@@ -267,7 +273,10 @@ describe("checkAndFireSchedules — hive-supervisor-heartbeat branch", () => {
 
     expect(created).toBe(2);
     expect(runSupervisorMock).toHaveBeenCalledTimes(1);
-    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-a");
+    expect(runSupervisorMock).toHaveBeenCalledWith(sql, "hive-a", {
+      enableInitiativeRecovery: true,
+      initiativeTriggerRef: "sched-a",
+    });
     expect(runIdeasDailyReviewMock).not.toHaveBeenCalled();
 
     const insertCalls = calls.filter((c) => queryText(c).includes("insert into tasks"));

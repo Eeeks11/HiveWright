@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { checkAndFireSchedules } from "@/dispatcher/schedule-timer";
-import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const runLlmReleaseScanMock = vi.fn();
@@ -30,30 +29,24 @@ beforeEach(async () => {
   `;
   hiveId = hive.id;
 
-  const seedResult = await seedDefaultSchedules(sql, {
-    id: hiveId,
-    name: "Release Scan Schedule Test",
-    description: null,
-  });
-  expect(seedResult.created).toBeGreaterThan(0);
-
   const [schedule] = await sql<Array<{ id: string }>>`
-    SELECT id
-    FROM schedules
-    WHERE hive_id = ${hiveId}
-      AND task_template ->> 'kind' = 'llm-release-scan'
-    LIMIT 1
+    INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, next_run_at, created_by)
+    VALUES (
+      ${hiveId}::uuid,
+      '0 8 * * 1',
+      ${sql.json({
+        kind: "llm-release-scan",
+        assignedTo: "initiative-engine",
+        title: "Weekly LLM release scan",
+        brief: "(populated at run time)",
+      })},
+      true,
+      NOW() - interval '1 minute',
+      'test'
+    )
+    RETURNING id
   `;
   scheduleId = schedule.id;
-
-  await sql`
-    UPDATE schedules
-    SET next_run_at = CASE
-      WHEN id = ${scheduleId} THEN NOW() - interval '1 minute'
-      ELSE NOW() + interval '1 day'
-    END
-    WHERE hive_id = ${hiveId}
-  `;
 });
 
 describe("checkAndFireSchedules - llm-release-scan", () => {
