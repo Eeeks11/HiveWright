@@ -49,14 +49,25 @@ export async function POST(request: Request) {
 
   const body = await request.json().catch(() => ({})) as { restart?: boolean };
   const restart = body.restart !== false;
-  const status = await getUpdateStatus({ fetch: true });
-  const plan = getUpdatePlan(status, restart);
-
-  if (!plan.allowed) {
-    return jsonError(plan.message, 409);
-  }
 
   if (fs.existsSync(OPERATIONAL_UPDATER)) {
+    let payload: { status: Awaited<ReturnType<typeof getUpdateStatus>>; plan: ReturnType<typeof getUpdatePlan> };
+    try {
+      const { stdout } = await execFileAsync(SUDO, ["-n", OPERATIONAL_UPDATER, "status-json"], {
+        timeout: 60_000,
+        maxBuffer: 1024 * 1024,
+        env: process.env,
+      });
+      payload = JSON.parse(stdout) as typeof payload;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonError(`Operational updater status check failed: ${message}`, 503);
+    }
+
+    if (!payload.plan.allowed) {
+      return jsonError(payload.plan.message, 409);
+    }
+
     try {
       await execFileAsync(SUDO, ["-n", SYSTEMCTL, "--no-block", "start", UPDATE_SERVICE], {
         timeout: 5_000,
@@ -67,14 +78,21 @@ export async function POST(request: Request) {
         started: true,
         service: UPDATE_SERVICE,
         logDirectory: resolveUpdateLogDirectory(),
-        status,
-        plan,
+        status: payload.status,
+        plan: payload.plan,
         warning: "HiveWright may restart while the privileged operational updater runs. Track progress from the update logs.",
       }, 202);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return jsonError(`Failed to start operational updater service: ${message}`, 503);
     }
+  }
+
+  const status = await getUpdateStatus({ fetch: true });
+  const plan = getUpdatePlan(status, restart);
+
+  if (!plan.allowed) {
+    return jsonError(plan.message, 409);
   }
 
   const logPath = updateLogPath();
