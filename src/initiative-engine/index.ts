@@ -20,8 +20,9 @@ import {
 } from "./constants";
 
 export interface InitiativeTrigger {
-  kind: "schedule";
+  kind: "schedule" | "supervisor_heartbeat";
   scheduleId?: string | null;
+  supervisorReportId?: string | null;
   targetGoalId?: string | null;
 }
 
@@ -90,6 +91,9 @@ export async function runInitiativeEvaluation(
   options: RunInitiativeEvaluationOptions = {},
 ): Promise<InitiativeRunResult> {
   const triggerType = input.trigger.kind;
+  const triggerRef = input.trigger.kind === "supervisor_heartbeat"
+    ? input.trigger.supervisorReportId ?? null
+    : input.trigger.scheduleId ?? null;
   const submitWork = options.submitWork ?? submitInitiativeWorkViaApi;
   const scopedDormantGoalContext = input.trigger.targetGoalId
     ? await loadScopedDormantGoalContext(sql, input.hiveId, input.trigger.targetGoalId)
@@ -98,7 +102,7 @@ export async function runInitiativeEvaluation(
     hiveId: input.hiveId,
     trigger: {
       type: triggerType,
-      ref: input.trigger.scheduleId ?? null,
+      ref: triggerRef,
     },
     guardrailConfig: {
       cooldownHours: INITIATIVE_COOLDOWN_HOURS,
