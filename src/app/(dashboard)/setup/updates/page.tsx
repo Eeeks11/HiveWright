@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type UpdateStatus = {
   currentVersion: string;
@@ -26,9 +26,17 @@ type UpdateResponse = {
     plan: UpdatePlan;
     started?: boolean;
     logPath?: string;
+    logDirectory?: string;
     warning?: string;
   };
   error?: string;
+};
+
+type UpdateMonitor = {
+  running: boolean;
+  startedFromCommit: string | null;
+  targetCommit: string | null;
+  logHint: string | null;
 };
 
 const panelClass =
@@ -42,29 +50,57 @@ function shortSha(sha: string | null) {
   return sha ? sha.slice(0, 12) : "unknown";
 }
 
+function describeLogHint(data: UpdateResponse["data"]) {
+  if (!data) return null;
+  if (data.logPath) return `Log: ${data.logPath}`;
+  if (data.logDirectory) return `Logs: ${data.logDirectory}`;
+  return null;
+}
+
+function isUpdateComplete(status: UpdateStatus, monitor: UpdateMonitor) {
+  if (!monitor.running) return false;
+  if (status.updateAvailable) return false;
+  if (monitor.targetCommit && status.currentCommit === monitor.targetCommit) return true;
+  return Boolean(monitor.startedFromCommit && status.currentCommit && status.currentCommit !== monitor.startedFromCommit);
+}
+
 export default function UpdatesPage() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [plan, setPlan] = useState<UpdatePlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [monitor, setMonitor] = useState<UpdateMonitor>({
+    running: false,
+    startedFromCommit: null,
+    targetCommit: null,
+    logHint: null,
+  });
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadStatus() {
-    setLoading(true);
-    setError(null);
+  const loadStatus = useCallback(async (options: { silent?: boolean } = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setLoading(true);
+    if (!silent) setError(null);
     try {
       const res = await fetch("/api/system/update", { cache: "no-store" });
       const body = await res.json() as UpdateResponse;
       if (!res.ok || !body.data) throw new Error(body.error ?? "Failed to load update status");
       setStatus(body.data.status);
       setPlan(body.data.plan);
+      return body.data;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      if (silent) {
+        setResult("Update is still running or the dashboard is restarting. Checking again automatically…");
+      } else {
+        setError(message);
+      }
+      return null;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }
+  }, []);
 
   async function startUpdate() {
     setStarting(true);
@@ -78,13 +114,20 @@ export default function UpdatesPage() {
       });
       const body = await res.json() as UpdateResponse;
       if (!res.ok || !body.data) throw new Error(body.error ?? "Failed to start update");
+      const logHint = describeLogHint(body.data);
       setResult(
-        body.data.logPath
-          ? `Update started. Log: ${body.data.logPath}`
-          : "Update started.",
+        logHint
+          ? `Update started. This page will keep checking until it completes. ${logHint}`
+          : "Update started. This page will keep checking until it completes.",
       );
       setStatus(body.data.status);
       setPlan(body.data.plan);
+      setMonitor({
+        running: true,
+        startedFromCommit: body.data.status.currentCommit,
+        targetCommit: body.data.status.upstreamCommit,
+        logHint,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -94,7 +137,39 @@ export default function UpdatesPage() {
 
   useEffect(() => {
     void loadStatus();
-  }, []);
+  }, [loadStatus]);
+
+  useEffect(() => {
+    if (!monitor.running) return;
+
+    let cancelled = false;
+
+    async function poll() {
+      const data = await loadStatus({ silent: true });
+      if (cancelled || !data) return;
+      if (isUpdateComplete(data.status, monitor)) {
+        setMonitor((current) => ({ ...current, running: false }));
+        setResult(`Update complete. Installed commit is now ${shortSha(data.status.currentCommit)}.`);
+        setError(null);
+      } else {
+        setResult(
+          monitor.logHint
+            ? `Update is running. Current installed commit is ${shortSha(data.status.currentCommit)}. ${monitor.logHint}`
+            : `Update is running. Current installed commit is ${shortSha(data.status.currentCommit)}.`,
+        );
+      }
+    }
+
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 5_000);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [loadStatus, monitor]);
 
   return (
     <div className="space-y-6">
@@ -113,7 +188,7 @@ export default function UpdatesPage() {
               Updates use fast-forward Git pulls only. Local changes block automatic updates.
             </p>
           </div>
-          <button className={secondaryButtonClass} onClick={loadStatus} disabled={loading || starting}>
+          <button className={secondaryButtonClass} onClick={() => void loadStatus()} disabled={loading || starting}>
             {loading ? "Checking…" : "Check for updates"}
           </button>
         </div>
@@ -165,9 +240,9 @@ export default function UpdatesPage() {
         <button
           className={`${primaryButtonClass} mt-4`}
           onClick={startUpdate}
-          disabled={starting || loading || !plan?.allowed || !status?.updateAvailable}
+          disabled={starting || monitor.running || loading || !plan?.allowed || !status?.updateAvailable}
         >
-          {starting ? "Starting update…" : "Update HiveWright"}
+          {starting ? "Starting update…" : monitor.running ? "Update running…" : "Update HiveWright"}
         </button>
       </section>
     </div>
