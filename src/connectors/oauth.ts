@@ -26,8 +26,8 @@ export interface OAuthClientInfo {
 export function resolveOAuthClient(
   oauth: OAuth2Config,
 ): OAuthClientInfo | null {
-  const clientId = process.env[oauth.clientIdEnv];
-  const clientSecret = process.env[oauth.clientSecretEnv];
+  const clientId = process.env[oauth.clientIdEnv] ?? process.env[providerClientEnv(oauth.clientIdEnv)];
+  const clientSecret = process.env[oauth.clientSecretEnv] ?? process.env[providerClientEnv(oauth.clientSecretEnv)];
   const baseUrl =
     process.env.PUBLIC_BASE_URL ??
     `http://localhost:${process.env.PORT ?? 3002}`;
@@ -40,6 +40,23 @@ export function resolveOAuthClient(
   };
 }
 
+function providerClientEnv(envName: string): string {
+  // Google-family connectors can share one platform OAuth client. Keep the
+  // per-connector envs as the strongest override, but do not force operators
+  // to duplicate the same Google client for Gmail, Calendar, Drive, etc.
+  if (envName.startsWith("GMAIL_")) return envName.replace(/^GMAIL_/, "GOOGLE_");
+  return envName;
+}
+
+export function missingOAuthClientMessage(slug: string, oauth: OAuth2Config): string {
+  const fallbackIdEnv = providerClientEnv(oauth.clientIdEnv);
+  const fallbackSecretEnv = providerClientEnv(oauth.clientSecretEnv);
+  const suffix = fallbackIdEnv !== oauth.clientIdEnv || fallbackSecretEnv !== oauth.clientSecretEnv
+    ? ` or shared ${fallbackIdEnv}/${fallbackSecretEnv}`
+    : "";
+  return `${slug} OAuth is not ready yet. The HiveWright platform OAuth client is missing (${oauth.clientIdEnv}/${oauth.clientSecretEnv}${suffix}). An owner must configure the platform OAuth app before hive users can connect their account.`;
+}
+
 export function buildAuthorizeUrl(
   def: ConnectorDefinition,
   state: string,
@@ -47,9 +64,7 @@ export function buildAuthorizeUrl(
   if (!def.oauth) throw new Error(`Connector ${def.slug} has no oauth config`);
   const client = resolveOAuthClient(def.oauth);
   if (!client)
-    throw new Error(
-      `OAuth client env missing for ${def.slug}: ${def.oauth.clientIdEnv} / ${def.oauth.clientSecretEnv}`,
-    );
+    throw new Error(missingOAuthClientMessage(def.slug, def.oauth));
   const params = new URLSearchParams({
     client_id: client.clientId,
     redirect_uri: client.redirectUri,

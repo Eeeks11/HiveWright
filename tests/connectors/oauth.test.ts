@@ -4,7 +4,9 @@ import {
   buildAuthorizeUrl,
   consumeState,
   exchangeCodeForTokens,
+  missingOAuthClientMessage,
   refreshAccessToken,
+  resolveOAuthClient,
   storeState,
 } from "@/connectors/oauth";
 import type { ConnectorDefinition } from "@/connectors/registry";
@@ -43,6 +45,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  delete process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_SECRET;
   vi.restoreAllMocks();
 });
 
@@ -57,6 +61,35 @@ describe("buildAuthorizeUrl", () => {
     expect(url.searchParams.get("scope")).toBe("read write");
     expect(url.searchParams.get("state")).toBe("s-123");
     expect(url.searchParams.get("access_type")).toBe("offline");
+  });
+
+  it("allows Google-family connectors to use shared GOOGLE_* app credentials", () => {
+    delete process.env.FAKE_OAUTH_CLIENT_ID;
+    delete process.env.FAKE_OAUTH_CLIENT_SECRET;
+    process.env.GOOGLE_CLIENT_ID = "google-cid";
+    process.env.GOOGLE_CLIENT_SECRET = "google-sec";
+
+    const client = resolveOAuthClient({
+      ...fakeOauthDef.oauth!,
+      clientIdEnv: "GMAIL_CLIENT_ID",
+      clientSecretEnv: "GMAIL_CLIENT_SECRET",
+    });
+
+    expect(client?.clientId).toBe("google-cid");
+    expect(client?.clientSecret).toBe("google-sec");
+  });
+
+  it("describes missing platform OAuth setup without exposing secrets", () => {
+    const message = missingOAuthClientMessage("gmail", {
+      ...fakeOauthDef.oauth!,
+      clientIdEnv: "GMAIL_CLIENT_ID",
+      clientSecretEnv: "GMAIL_CLIENT_SECRET",
+    });
+
+    expect(message).toContain("platform OAuth client is missing");
+    expect(message).toContain("GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET");
+    expect(message).toContain("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET");
+    expect(message).not.toContain("sec");
   });
 });
 
