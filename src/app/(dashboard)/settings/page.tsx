@@ -68,6 +68,18 @@ type SetupHealth = {
   restartMessage?: string;
 };
 
+type OAuthProviderConfig = {
+  provider: "google";
+  configured: boolean;
+  clientIdPresent: boolean;
+  clientSecretPresent: boolean;
+  clientIdPreview: string | null;
+  redirectUri: string;
+  envFilePath: string;
+  restartRequired: boolean;
+  message?: string;
+};
+
 type RoleQualityRow = {
   roleSlug: string;
   qualityScore: number;
@@ -174,6 +186,12 @@ export default function SettingsPage() {
   const [workspaceRootSaving, setWorkspaceRootSaving] = useState(false);
   const [workspaceRootSaved, setWorkspaceRootSaved] = useState(false);
   const [workspaceRootError, setWorkspaceRootError] = useState<string | null>(null);
+  const [oauthProvider, setOauthProvider] = useState<OAuthProviderConfig | null>(null);
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
+  const [oauthSaving, setOauthSaving] = useState(false);
+  const [oauthSaved, setOauthSaved] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   const loadModelEfficiencySettings = useCallback(async () => {
     try {
@@ -286,6 +304,58 @@ export default function SettingsPage() {
         setWorkspaceRootError("Could not load setup health.");
       });
   }, []);
+
+  const loadOAuthProviderConfig = useCallback(async () => {
+    try {
+      const res = await fetch("/api/oauth/provider-config");
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not load OAuth provider config.");
+      setOauthProvider(body.data);
+      setOauthClientId(body.data?.clientIdPresent ? "" : "");
+      setOauthClientSecret("");
+      setOauthError(null);
+    } catch (err) {
+      setOauthError(err instanceof Error ? err.message : "Could not load OAuth provider config.");
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOAuthProviderConfig();
+  }, [loadOAuthProviderConfig]);
+
+  const saveOAuthProviderConfig = async () => {
+    const clientId = oauthClientId.trim();
+    const clientSecret = oauthClientSecret.trim();
+    if (!clientId) {
+      setOauthError("Google OAuth Client ID is required.");
+      return;
+    }
+    if (!clientSecret) {
+      setOauthError("Google OAuth Client Secret is required.");
+      return;
+    }
+
+    setOauthSaving(true);
+    setOauthSaved(false);
+    setOauthError(null);
+    try {
+      const res = await fetch("/api/oauth/provider-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google", clientId, clientSecret }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Failed to save Google OAuth provider.");
+      setOauthProvider(body.data);
+      setOauthClientId("");
+      setOauthClientSecret("");
+      setOauthSaved(true);
+    } catch (err) {
+      setOauthError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setOauthSaving(false);
+    }
+  };
 
   const saveWorkspaceRoot = async () => {
     const nextRoot = workspaceRootDraft.trim();
@@ -724,6 +794,80 @@ export default function SettingsPage() {
           {workspaceRootSaved && (
             <p className="text-sm text-amber-700 dark:text-amber-300">
               {setupHealth?.restartMessage ?? "Restart the dispatcher and app for the new workspace root to take effect."}
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Connector OAuth providers</h2>
+          <p className="text-sm text-zinc-500">
+            Global OAuth app settings used by connector setup flows. Hive users still connect their own accounts; these values identify this HiveWright installation to Google.
+          </p>
+        </div>
+
+        <div className={`${panelClass} space-y-4`}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="font-medium">Google Workspace / Gmail</p>
+              <p className="text-xs text-zinc-500">
+                Status: {oauthProvider?.configured ? "Configured" : "Not configured"}
+                {oauthProvider?.clientIdPreview ? ` · Client ID ${oauthProvider.clientIdPreview}` : ""}
+              </p>
+            </div>
+            <span className={`w-fit rounded px-2 py-1 text-xs ${oauthProvider?.configured ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200" : "bg-amber-100 text-amber-900 dark:bg-amber-950/50 dark:text-amber-200"}`}>
+              {oauthProvider?.configured ? "Ready for Gmail connector" : "Setup required"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="space-y-1">
+              <label className="block text-xs text-zinc-500">Google OAuth Client ID</label>
+              <input
+                value={oauthClientId}
+                onChange={(e) => setOauthClientId(e.target.value)}
+                placeholder={oauthProvider?.clientIdPresent ? "Leave blank until replacing existing Client ID" : "123...apps.googleusercontent.com"}
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-xs text-zinc-500">Google OAuth Client Secret</label>
+              <input
+                type="password"
+                value={oauthClientSecret}
+                onChange={(e) => setOauthClientSecret(e.target.value)}
+                placeholder={oauthProvider?.clientSecretPresent ? "Leave blank until replacing existing secret" : "Client secret"}
+                className={`${inputClass} font-mono`}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1 text-xs text-zinc-500">
+            <p>
+              Authorized redirect URI in Google Cloud must be: <code className="font-mono">{oauthProvider?.redirectUri ?? "Loading..."}</code>
+            </p>
+            <p>
+              Values are persisted to <code className="font-mono">{oauthProvider?.envFilePath ?? ".env"}</code> and are never displayed after saving.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={saveOAuthProviderConfig}
+              disabled={oauthSaving || !oauthClientId.trim() || !oauthClientSecret.trim()}
+              className={primaryButtonClass}
+            >
+              {oauthSaving ? "Saving..." : "Save Google OAuth provider"}
+            </button>
+            <button onClick={loadOAuthProviderConfig} className={secondaryButtonClass} type="button">
+              Refresh status
+            </button>
+          </div>
+          {oauthError && <p className="text-sm text-red-500">{oauthError}</p>}
+          {oauthSaved && (
+            <p className="text-sm text-emerald-700 dark:text-emerald-300">
+              Google OAuth provider saved. Now go to Connectors and click Gmail.
             </p>
           )}
         </div>
