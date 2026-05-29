@@ -56,7 +56,7 @@ status_json() {
   configure_root_git
   git -C "$INSTALL_DIR" fetch --tags --prune origin >/dev/null 2>&1 || true
 
-  local version branch current upstream remote dirty state update_available message
+  local version branch current upstream remote dirty state update_available message relation plan_allowed plan_message
   version="$(node -e "console.log(require('$INSTALL_DIR/package.json').version || '0.0.0')")"
   branch="$(git -C "$INSTALL_DIR" branch --show-current 2>/dev/null || true)"
   current="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
@@ -64,6 +64,18 @@ status_json() {
   remote="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null | sed -E 's#(https?://)[^/@:]+:[^/@]+@#\1#' || true)"
   dirty="false"
   [ "$(repo_dirty_count)" = "0" ] || dirty="true"
+  relation="unknown"
+  if [ -n "$current" ] && [ -n "$upstream" ]; then
+    if [ "$current" = "$upstream" ]; then
+      relation="current"
+    elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$current" "$upstream"; then
+      relation="behind"
+    elif git -C "$INSTALL_DIR" merge-base --is-ancestor "$upstream" "$current"; then
+      relation="ahead"
+    else
+      relation="diverged"
+    fi
+  fi
 
   if [ -z "$remote" ] || [ -z "$branch" ] || [ -z "$current" ]; then
     state="not-configured"; update_available="false"; message="This install is not connected to a Git remote/upstream."
@@ -71,14 +83,27 @@ status_json() {
     state="blocked-dirty-worktree"; update_available="false"; [ -n "$upstream" ] && [ "$upstream" != "$current" ] && update_available="true"; message="Local changes are present. Commit, stash, or discard them before running an automatic update."
   elif [ -z "$upstream" ]; then
     state="unknown"; update_available="false"; message="HiveWright could not resolve the upstream commit for this branch."
-  elif [ "$upstream" != "$current" ]; then
+  elif [ "$relation" = "diverged" ]; then
+    state="blocked-diverged"; update_available="true"; message="This install and the configured Git remote have diverged. Automatic fast-forward update is blocked until the local commits are reconciled."
+  elif [ "$relation" = "ahead" ]; then
+    state="blocked-local-ahead"; update_available="false"; message="This install has local commits that are not on the configured Git remote. Publish or reset them before using automatic updates."
+  elif [ "$relation" = "behind" ]; then
     state="update-available"; update_available="true"; message="A newer HiveWright commit is available from the configured Git remote."
   else
     state="current"; update_available="false"; message="HiveWright is current with the configured Git remote."
   fi
 
+  plan_allowed="false"
+  plan_message="No privileged update is currently available."
+  if [ "$state" = "update-available" ]; then
+    plan_allowed="true"
+    plan_message="Update can be applied by the privileged operational updater."
+  elif [ "$state" = "blocked-diverged" ] || [ "$state" = "blocked-local-ahead" ] || [ "$state" = "blocked-dirty-worktree" ]; then
+    plan_message="$message"
+  fi
+
   cat <<JSON
-{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":$(json_escape "$upstream"),"remoteUrl":$(json_escape "$remote"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":$update_available,"state":$(json_escape "$state"),"message":$(json_escape "$message")},"plan":{"allowed":$([ "$state" = "update-available" ] && echo true || echo false),"commands":["systemctl start hivewright-update.service"],"message":$(json_escape "$([ "$state" = "update-available" ] && echo "Update can be applied by the privileged operational updater." || echo "No privileged update is currently available.")")}}
+{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":$(json_escape "$upstream"),"remoteUrl":$(json_escape "$remote"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":$update_available,"state":$(json_escape "$state"),"message":$(json_escape "$message")},"plan":{"allowed":$plan_allowed,"commands":["systemctl start hivewright-update.service"],"message":$(json_escape "$plan_message")}}
 JSON
 }
 
@@ -116,8 +141,14 @@ apply_update() {
     echo "upstream=$upstream"
     if [ "$before" = "$upstream" ]; then
       echo "Already current; continuing verification and relock."
-    else
+    elif git merge-base --is-ancestor "$before" "$upstream"; then
       git pull --ff-only
+    elif git merge-base --is-ancestor "$upstream" "$before"; then
+      echo "Refusing update: local checkout is ahead of upstream. Publish or reset local commits first." >&2
+      exit 11
+    else
+      echo "Refusing update: local checkout and upstream have diverged. Reconcile local commits before automatic update." >&2
+      exit 12
     fi
 
     echo

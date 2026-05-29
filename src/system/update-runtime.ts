@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import {
   buildUpdatePlan,
   parseUpdateStatus,
+  type GitRelation,
   type UpdatePlan,
   type UpdateStatus,
 } from "./update";
@@ -58,6 +59,25 @@ async function optionalGit(cwd: string, args: string[]) {
   }
 }
 
+async function isAncestor(cwd: string, ancestor: string, descendant: string) {
+  try {
+    await runGit(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRelation(cwd: string, currentCommit: string | null, upstreamCommit: string | null): Promise<GitRelation> {
+  if (!currentCommit || !upstreamCommit) return "unknown";
+  if (currentCommit === upstreamCommit) return "current";
+  const currentIsAncestor = await isAncestor(cwd, currentCommit, upstreamCommit);
+  if (currentIsAncestor) return "behind";
+  const upstreamIsAncestor = await isAncestor(cwd, upstreamCommit, currentCommit);
+  if (upstreamIsAncestor) return "ahead";
+  return "diverged";
+}
+
 export async function getUpdateStatus(options: UpdateRuntimeOptions = {}): Promise<UpdateStatus> {
   const cwd = options.cwd ?? process.cwd();
   const packageVersion = await readPackageVersion(cwd);
@@ -78,6 +98,8 @@ export async function getUpdateStatus(options: UpdateRuntimeOptions = {}): Promi
     ? await optionalGit(cwd, ["rev-parse", upstreamRef])
     : null;
 
+  const relation = await resolveRelation(cwd, currentCommit, upstreamCommit);
+
   return parseUpdateStatus({
     packageVersion,
     currentCommit,
@@ -85,6 +107,7 @@ export async function getUpdateStatus(options: UpdateRuntimeOptions = {}): Promi
     remoteUrl: safeRemoteUrl(remoteUrl),
     branch,
     dirty: Boolean(dirtyOutput),
+    relation,
   });
 }
 

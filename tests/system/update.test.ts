@@ -15,6 +15,7 @@ describe("HiveWright update system", () => {
       remoteUrl: "https://github.com/example/hivewright-v2.git",
       branch: "main",
       dirty: false,
+      relation: "behind",
     });
 
     expect(status.currentVersion).toBe("1.2.3");
@@ -30,6 +31,7 @@ describe("HiveWright update system", () => {
       remoteUrl: "https://github.com/example/hivewright-v2.git",
       branch: "main",
       dirty: false,
+      relation: "current",
     });
 
     expect(status.updateAvailable).toBe(false);
@@ -54,6 +56,40 @@ describe("HiveWright update system", () => {
     expect(plan.commands).toEqual([]);
   });
 
+  it("blocks automatic update when the install is ahead of upstream", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "def5678",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "ahead",
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.state).toBe("blocked-local-ahead");
+    expect(status.updateAvailable).toBe(false);
+    expect(plan.allowed).toBe(false);
+  });
+
+  it("blocks automatic update when the install has diverged from upstream", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "def5678",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "diverged",
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.state).toBe("blocked-diverged");
+    expect(status.updateAvailable).toBe(true);
+    expect(plan.allowed).toBe(false);
+  });
+
   it("builds a normal self-hosted update command plan", () => {
     const status = parseUpdateStatus({
       packageVersion: "1.2.3",
@@ -62,6 +98,7 @@ describe("HiveWright update system", () => {
       remoteUrl: "https://github.com/example/hivewright-v2.git",
       branch: "main",
       dirty: false,
+      relation: "behind",
     });
 
     const plan = buildUpdatePlan(status, { apply: true, restart: true });
