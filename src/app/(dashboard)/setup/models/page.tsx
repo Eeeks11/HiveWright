@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useHiveContext } from "@/components/hive-context";
 
 type HealthStatus = "healthy" | "unknown" | "unhealthy";
+type ModelFilter = "all" | "enabled" | "routeable" | "needs_attention" | "disabled" | "local" | "cloud";
 
 interface SetupCredential {
   id: string;
@@ -128,10 +129,33 @@ export default function ModelSetupPage() {
   const [previewAcceptanceCriteria, setPreviewAcceptanceCriteria] = useState("Tests pass and the error path is handled.");
   const [previewRoleSlug, setPreviewRoleSlug] = useState("dev-agent");
   const [previewRoute, setPreviewRoute] = useState<PreviewRoute | null>(null);
+  const [modelFilter, setModelFilter] = useState<ModelFilter>("all");
+  const [modelSearch, setModelSearch] = useState("");
 
   const routingByKey = useMemo(() => {
     return new Map(routingModels.map((model) => [model.routeKey, model]));
   }, [routingModels]);
+
+  const modelSummary = useMemo(() => {
+    return summarizeModels(models, routingByKey);
+  }, [models, routingByKey]);
+
+  const filteredModels = useMemo(() => {
+    const search = modelSearch.trim().toLowerCase();
+    return models.filter((model) => {
+      const routing = routingByKey.get(model.routeKey);
+      if (!matchesModelFilter(model, routing, modelFilter)) return false;
+      if (!search) return true;
+      return [
+        model.displayName,
+        model.modelId,
+        model.provider,
+        model.adapterType,
+        model.family ?? "",
+        ...(model.capabilities ?? []),
+      ].some((value) => value.toLowerCase().includes(search));
+    });
+  }, [models, modelFilter, modelSearch, routingByKey]);
 
   const load = async () => {
     if (!selectedHive?.id) return;
@@ -501,12 +525,46 @@ export default function ModelSetupPage() {
       </section>
 
       <section className="rounded-lg border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex items-center justify-between gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800">
-          <div>
-            <h2 className="text-sm font-semibold">Models</h2>
-            <p className="text-xs text-zinc-500">
-              {loading ? "Loading models..." : `${models.length} model${models.length === 1 ? "" : "s"} available`}
-            </p>
+        <div className="space-y-4 border-b border-zinc-200 p-4 dark:border-zinc-800">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Models</h2>
+              <p className="text-xs text-zinc-500">
+                {loading
+                  ? "Loading models..."
+                  : `${filteredModels.length} shown · ${models.length} total · ${modelSummary.routeable} routeable`}
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[220px_180px]">
+              <input
+                aria-label="Search models"
+                value={modelSearch}
+                onChange={(event) => setModelSearch(event.target.value)}
+                placeholder="Search model, provider, capability..."
+                className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-900"
+              />
+              <select
+                aria-label="Filter models"
+                value={modelFilter}
+                onChange={(event) => setModelFilter(event.target.value as ModelFilter)}
+                className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-800 dark:bg-zinc-900"
+              >
+                <option value="all">All models</option>
+                <option value="enabled">Enabled only</option>
+                <option value="routeable">Routeable now</option>
+                <option value="needs_attention">Needs attention</option>
+                <option value="disabled">Disabled/catalog only</option>
+                <option value="local">Local only</option>
+                <option value="cloud">Cloud only</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-5">
+            <ModelSummaryCard label="Enabled" value={modelSummary.enabled} detail={`${modelSummary.disabled} disabled`} />
+            <ModelSummaryCard label="Routeable" value={modelSummary.routeable} detail="enabled + healthy + routing on" />
+            <ModelSummaryCard label="Attention" value={modelSummary.needsAttention} detail="unhealthy, stale, or deprecated" />
+            <ModelSummaryCard label="Healthy" value={modelSummary.healthy} detail={`${modelSummary.unhealthy} unhealthy`} />
+            <ModelSummaryCard label="Local" value={modelSummary.local} detail={`${modelSummary.cloud} cloud`} />
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -525,8 +583,9 @@ export default function ModelSetupPage() {
               </tr>
             </thead>
             <tbody>
-              {models.map((model) => {
+              {filteredModels.map((model) => {
                 const routing = routingByKey.get(model.routeKey);
+                const eligibility = modelEligibility(model, routing);
                 return (
                   <tr key={modelKey(model)} className="border-t border-zinc-200 dark:border-zinc-800">
                     <td className="px-3 py-2">
@@ -539,7 +598,10 @@ export default function ModelSetupPage() {
                       />
                     </td>
                     <td className="px-3 py-2">
-                      <div className="font-medium text-zinc-900 dark:text-zinc-100">{model.displayName}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-medium text-zinc-900 dark:text-zinc-100">{model.displayName}</div>
+                        <ModelBadge>{eligibility.label}</ModelBadge>
+                      </div>
                       <div className="font-mono text-[11px] text-zinc-500">{model.modelId}</div>
                       <div className="mt-1 flex max-w-sm flex-wrap gap-1">
                         {model.ownerDisabledAt && (
@@ -564,7 +626,7 @@ export default function ModelSetupPage() {
                           <ModelBadge>last seen {formatDate(model.lastSeenAt)}</ModelBadge>
                         )}
                       </div>
-                      <BenchmarkDetails scores={model.capabilityScores ?? []} />
+                      <BenchmarkDetails scores={model.capabilityScores ?? []} qualityScore={model.benchmarkQualityScore} />
                     </td>
                     <td className="px-3 py-2">
                       <div className="font-mono">{model.adapterType}</div>
@@ -627,6 +689,13 @@ export default function ModelSetupPage() {
                   </td>
                 </tr>
               )}
+              {models.length > 0 && filteredModels.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-3 py-8 text-center text-zinc-500">
+                    No models match the current filter/search.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -681,39 +750,111 @@ function modelKey(model: SetupModel) {
   return model.modelCatalogId ?? model.hiveModelId ?? model.routeKey;
 }
 
-function BenchmarkDetails({ scores }: { scores: CapabilityScore[] }) {
+function modelEligibility(model: SetupModel, routing: RoutingModel | undefined) {
+  if (!model.hiveEnabled) return { key: "disabled", label: "Disabled" };
+  if (model.status !== "healthy") return { key: "blocked", label: "Enabled · not healthy" };
+  if (model.staleSince || model.deprecatedAt) return { key: "attention", label: "Needs review" };
+  if (routing?.routingEnabled === false) return { key: "disabled", label: "Routing off" };
+  return { key: "routeable", label: "Routeable" };
+}
+
+function matchesModelFilter(model: SetupModel, routing: RoutingModel | undefined, filter: ModelFilter) {
+  const eligibility = modelEligibility(model, routing);
+  switch (filter) {
+    case "enabled":
+      return model.hiveEnabled;
+    case "routeable":
+      return eligibility.key === "routeable";
+    case "needs_attention":
+      return model.hiveEnabled && eligibility.key !== "routeable";
+    case "disabled":
+      return !model.hiveEnabled;
+    case "local":
+      return model.local;
+    case "cloud":
+      return !model.local;
+    default:
+      return true;
+  }
+}
+
+function summarizeModels(models: SetupModel[], routingByKey: Map<string, RoutingModel>) {
+  return models.reduce((summary, model) => {
+    const routing = routingByKey.get(model.routeKey);
+    const eligibility = modelEligibility(model, routing);
+    summary.enabled += model.hiveEnabled ? 1 : 0;
+    summary.disabled += model.hiveEnabled ? 0 : 1;
+    summary.routeable += eligibility.key === "routeable" ? 1 : 0;
+    summary.needsAttention += model.hiveEnabled && eligibility.key !== "routeable" ? 1 : 0;
+    summary.healthy += model.status === "healthy" ? 1 : 0;
+    summary.unhealthy += model.status === "unhealthy" ? 1 : 0;
+    summary.local += model.local ? 1 : 0;
+    summary.cloud += model.local ? 0 : 1;
+    return summary;
+  }, {
+    enabled: 0,
+    disabled: 0,
+    routeable: 0,
+    needsAttention: 0,
+    healthy: 0,
+    unhealthy: 0,
+    local: 0,
+    cloud: 0,
+  });
+}
+
+function ModelSummaryCard({ label, value, detail }: { label: string; value: number; detail: string }) {
   return (
-    <div className="mt-3 max-w-xl border-t border-zinc-100 pt-2 dark:border-zinc-900">
-      <div className="mb-1 text-[10px] font-semibold uppercase text-zinc-500">Benchmarks</div>
-      {scores.length === 0 ? (
-        <div className="text-[11px] text-zinc-400">No detailed benchmark data</div>
-      ) : (
-        <div className="grid gap-1">
-          {scores.map((score) => (
-            <div
-              key={`${score.axis}:${score.source}:${score.benchmarkName}:${score.modelVersionMatched}`}
-              className="grid grid-cols-[76px_48px_minmax(120px,1fr)] items-center gap-2 rounded border border-zinc-100 px-2 py-1 text-[11px] dark:border-zinc-900"
-            >
-              <span className="font-medium text-zinc-700 dark:text-zinc-200">{formatAxis(score.axis)}</span>
-              <span className="font-mono text-zinc-900 dark:text-zinc-100">{formatScore(score.score)}</span>
-              <span className="min-w-0 text-zinc-500">
-                <BenchmarkSource score={score} />
-                <span className="mx-1 text-zinc-300">/</span>
-                <span>{score.benchmarkName}</span>
-                <span className="mx-1 text-zinc-300">/</span>
-                <span>{score.confidence}</span>
-                {score.modelVersionMatched && (
-                  <>
-                    <span className="mx-1 text-zinc-300">/</span>
-                    <span className="font-mono">{score.modelVersionMatched}</span>
-                  </>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="rounded border border-zinc-200 px-3 py-2 dark:border-zinc-800">
+      <div className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100">{value}</div>
+      <div className="text-[11px] text-zinc-500">{detail}</div>
     </div>
+  );
+}
+
+function BenchmarkDetails({ scores, qualityScore }: { scores: CapabilityScore[]; qualityScore: number | null }) {
+  const topScores = [...scores].sort((a, b) => b.score - a.score).slice(0, 3);
+  const summary = scores.length === 0
+    ? `Quality ${formatScore(qualityScore)}`
+    : `${scores.length} score${scores.length === 1 ? "" : "s"} · ${topScores.map((score) => `${formatAxis(score.axis)} ${formatScore(score.score)}`).join(" · ")}`;
+
+  return (
+    <details className="mt-2 max-w-xl rounded border border-zinc-100 px-2 py-1 dark:border-zinc-900">
+      <summary className="cursor-pointer text-[11px] font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100">
+        Benchmarks: <span className="font-normal text-zinc-500">{summary}</span>
+      </summary>
+      <div className="mt-2 border-t border-zinc-100 pt-2 dark:border-zinc-900">
+        {scores.length === 0 ? (
+          <div className="text-[11px] text-zinc-400">No detailed benchmark data</div>
+        ) : (
+          <div className="grid gap-1">
+            {scores.map((score) => (
+              <div
+                key={`${score.axis}:${score.source}:${score.benchmarkName}:${score.modelVersionMatched}`}
+                className="grid grid-cols-[76px_48px_minmax(120px,1fr)] items-center gap-2 rounded border border-zinc-100 px-2 py-1 text-[11px] dark:border-zinc-900"
+              >
+                <span className="font-medium text-zinc-700 dark:text-zinc-200">{formatAxis(score.axis)}</span>
+                <span className="font-mono text-zinc-900 dark:text-zinc-100">{formatScore(score.score)}</span>
+                <span className="min-w-0 text-zinc-500">
+                  <BenchmarkSource score={score} />
+                  <span className="mx-1 text-zinc-300">/</span>
+                  <span>{score.benchmarkName}</span>
+                  <span className="mx-1 text-zinc-300">/</span>
+                  <span>{score.confidence}</span>
+                  {score.modelVersionMatched && (
+                    <>
+                      <span className="mx-1 text-zinc-300">/</span>
+                      <span className="font-mono">{score.modelVersionMatched}</span>
+                    </>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 
