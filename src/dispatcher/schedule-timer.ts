@@ -95,7 +95,10 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
       // its schedule to refire on every tick.
       try {
         const { runSupervisor } = await import("../supervisor");
-        await runSupervisor(sql, schedule.hive_id);
+        await runSupervisor(sql, schedule.hive_id, {
+          enableInitiativeRecovery: true,
+          initiativeTriggerRef: schedule.id,
+        });
       } catch (err) {
         console.error(
           `[schedule-timer] runSupervisor failed for hive ${schedule.hive_id}:`,
