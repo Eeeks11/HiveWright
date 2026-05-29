@@ -40,7 +40,7 @@ UNIT
 chmod 0644 "$SERVICE_PATH"
 
 cat > "$SUDOERS_PATH" <<'SUDOERS'
-trent ALL=(root) NOPASSWD: /usr/bin/systemctl start hivewright-update.service
+trent ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start hivewright-update.service
 trent ALL=(root) NOPASSWD: /usr/local/sbin/hivewright-operational-update status-json
 SUDOERS
 chmod 0440 "$SUDOERS_PATH"

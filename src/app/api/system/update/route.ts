@@ -58,8 +58,8 @@ export async function POST(request: Request) {
 
   if (fs.existsSync(OPERATIONAL_UPDATER)) {
     try {
-      await execFileAsync(SUDO, ["-n", SYSTEMCTL, "start", UPDATE_SERVICE], {
-        timeout: 15_000,
+      await execFileAsync(SUDO, ["-n", SYSTEMCTL, "--no-block", "start", UPDATE_SERVICE], {
+        timeout: 5_000,
         maxBuffer: 256 * 1024,
         env: process.env,
       });
