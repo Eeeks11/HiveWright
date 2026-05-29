@@ -2,8 +2,12 @@ export type UpdateState =
   | "current"
   | "update-available"
   | "blocked-dirty-worktree"
+  | "blocked-local-ahead"
+  | "blocked-diverged"
   | "not-configured"
   | "unknown";
+
+export type GitRelation = "current" | "behind" | "ahead" | "diverged" | "unknown";
 
 export type GitUpdateSnapshot = {
   packageVersion: string;
@@ -12,6 +16,7 @@ export type GitUpdateSnapshot = {
   remoteUrl: string | null;
   branch: string | null;
   dirty: boolean;
+  relation?: GitRelation;
 };
 
 export type UpdateStatus = {
@@ -82,7 +87,35 @@ export function parseUpdateStatus(snapshot: GitUpdateSnapshot): UpdateStatus {
     };
   }
 
-  const updateAvailable = snapshot.upstreamCommit !== snapshot.currentCommit;
+  const relation = snapshot.relation ?? (snapshot.upstreamCommit === snapshot.currentCommit ? "current" : "behind");
+  if (relation === "ahead") {
+    return {
+      currentVersion: snapshot.packageVersion,
+      currentCommit: snapshot.currentCommit,
+      upstreamCommit: snapshot.upstreamCommit,
+      remoteUrl: snapshot.remoteUrl,
+      branch: snapshot.branch,
+      dirty: snapshot.dirty,
+      updateAvailable: false,
+      state: "blocked-local-ahead",
+      message: "This install has local commits that are not on the configured Git remote. Publish or reset them before using automatic updates.",
+    };
+  }
+  if (relation === "diverged") {
+    return {
+      currentVersion: snapshot.packageVersion,
+      currentCommit: snapshot.currentCommit,
+      upstreamCommit: snapshot.upstreamCommit,
+      remoteUrl: snapshot.remoteUrl,
+      branch: snapshot.branch,
+      dirty: snapshot.dirty,
+      updateAvailable: true,
+      state: "blocked-diverged",
+      message: "This install and the configured Git remote have diverged. Automatic fast-forward update is blocked until the local commits are reconciled.",
+    };
+  }
+
+  const updateAvailable = relation === "behind" || snapshot.upstreamCommit !== snapshot.currentCommit;
   return {
     currentVersion: snapshot.packageVersion,
     currentCommit: snapshot.currentCommit,
@@ -111,7 +144,7 @@ export function buildUpdatePlan(status: UpdateStatus, options: UpdatePlanOptions
     return { allowed: false, commands: [], message: status.message };
   }
 
-  if (status.dirty) {
+  if (status.dirty || status.state === "blocked-local-ahead" || status.state === "blocked-diverged") {
     return { allowed: false, commands: [], message: status.message };
   }
 
