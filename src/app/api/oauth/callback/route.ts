@@ -77,9 +77,19 @@ function redirectBack(
   target: string | null,
   errorMessage: string | null,
 ): Response {
-  const base = target && target.startsWith("/") ? target : "/setup/connectors";
-  const dest = new URL(base, url.origin);
+  const base = target && target.startsWith("/") && !target.startsWith("//") ? target : "/setup/connectors";
+  const dest = new URL(base, publicBaseOrigin() ?? url.origin);
   if (errorMessage) dest.searchParams.set("oauth_error", errorMessage);
   else dest.searchParams.set("oauth_installed", "1");
   return NextResponse.redirect(dest, 302);
+}
+
+function publicBaseOrigin(): string | null {
+  const configured = process.env.PUBLIC_BASE_URL?.trim();
+  if (!configured) return null;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return configured.replace(/\/$/, "");
+  }
 }

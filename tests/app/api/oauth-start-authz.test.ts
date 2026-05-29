@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const sql = Object.assign(vi.fn(), { json: vi.fn() });
@@ -40,6 +40,7 @@ vi.mock("@/connectors/oauth", () => ({
 import { GET } from "@/app/api/oauth/[slug]/start/route";
 
 const ctx = { params: Promise.resolve({ slug: "google-calendar" }) };
+const originalPublicBaseUrl = process.env.PUBLIC_BASE_URL;
 
 function startRequest(hiveId = "hive-a"): Request {
   return new Request(
@@ -50,6 +51,7 @@ function startRequest(hiveId = "hive-a"): Request {
 describe("GET /api/oauth/:slug/start authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.PUBLIC_BASE_URL;
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
@@ -74,6 +76,14 @@ describe("GET /api/oauth/:slug/start authorization", () => {
     mocks.missingOAuthClientMessage.mockReturnValue(
       "google-calendar OAuth is not ready yet. The HiveWright platform OAuth client is missing (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET). An owner must configure the platform OAuth app before hive users can connect their account.",
     );
+  });
+
+  afterEach(() => {
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.PUBLIC_BASE_URL;
+    } else {
+      process.env.PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
   });
 
   it("refuses unauthorized hive state creation", async () => {
@@ -131,4 +141,22 @@ describe("GET /api/oauth/:slug/start authorization", () => {
     expect(location.searchParams.get("oauth_error")).toContain("platform OAuth client is missing");
     expect(mocks.storeState).not.toHaveBeenCalled();
   });
+
+  it("uses PUBLIC_BASE_URL for browser setup-error redirects behind a proxy", async () => {
+    process.env.PUBLIC_BASE_URL = "https://hivewright.tailnet.example";
+    mocks.resolveOAuthClient.mockReturnValueOnce(null);
+    const req = new Request(
+      "http://127.0.0.1:3002/api/oauth/google-calendar/start?hiveId=hive-a&displayName=Calendar&redirectTo=/setup/connectors",
+      { headers: { accept: "text/html" } },
+    );
+
+    const res = await GET(req, ctx);
+    const location = new URL(res.headers.get("location") ?? "");
+
+    expect(res.status).toBe(302);
+    expect(location.origin).toBe("https://hivewright.tailnet.example");
+    expect(location.pathname).toBe("/setup/connectors");
+    expect(location.searchParams.get("oauth_setup_required")).toBe("google-calendar");
+  });
+
 });

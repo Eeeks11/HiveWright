@@ -49,9 +49,11 @@ const oauthDefinition: ConnectorDefinition = {
 
 describe("GET /api/oauth/callback", () => {
   const originalEncryptionKey = process.env.ENCRYPTION_KEY;
+  const originalPublicBaseUrl = process.env.PUBLIC_BASE_URL;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.PUBLIC_BASE_URL;
     mocks.consumeState.mockResolvedValue({
       hiveId: "11111111-1111-4111-8111-111111111111",
       connectorSlug: "fake-oauth",
@@ -73,6 +75,11 @@ describe("GET /api/oauth/callback", () => {
       delete process.env.ENCRYPTION_KEY;
     } else {
       process.env.ENCRYPTION_KEY = originalEncryptionKey;
+    }
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.PUBLIC_BASE_URL;
+    } else {
+      process.env.PUBLIC_BASE_URL = originalPublicBaseUrl;
     }
   });
 
@@ -118,4 +125,20 @@ describe("GET /api/oauth/callback", () => {
     );
     expect(mocks.sql).toHaveBeenCalledOnce();
   });
+
+  it("redirects back to PUBLIC_BASE_URL after callback when the request origin is internal", async () => {
+    process.env.ENCRYPTION_KEY = "oauth-callback-test-key";
+    process.env.PUBLIC_BASE_URL = "https://hivewright.tailnet.example";
+
+    const response = await GET(
+      new Request("http://127.0.0.1:3002/api/oauth/callback?code=abc&state=state-1"),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      "https://hivewright.tailnet.example/setup/connectors?oauth_installed=1",
+    );
+    expect(mocks.exchangeCodeForTokens).toHaveBeenCalledWith(oauthDefinition, "abc");
+  });
+
 });
