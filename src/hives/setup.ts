@@ -9,6 +9,7 @@ import { defaultInitialGoalForHiveKind, isHiveKind, type HiveKind } from "@/hive
 import { deriveOperatingProfileDefaults, upsertOperatingProfile } from "@/hives/operating-profile";
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { hiveProjectsPath, hiveRootPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
+import { saveHiveRoleOverride } from "@/roles/hive-overrides";
 
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -507,29 +508,18 @@ async function installConnector(tx: SqlExecutor, hiveId: string, connector: Conn
   };
 }
 
-async function saveRoleOverrides(tx: SqlExecutor, roleOverrides: Record<string, RoleOverride>) {
+async function saveRoleOverrides(tx: SqlExecutor, hiveId: string, roleOverrides: Record<string, RoleOverride>) {
   for (const [roleSlug, override] of Object.entries(roleOverrides)) {
-    const updates: string[] = [];
-    const values: unknown[] = [];
-    let idx = 1;
-    if (override.adapterType !== undefined) {
-      updates.push(`adapter_type = $${idx++}`);
-      values.push(override.adapterType);
-    }
-    if (override.recommendedModel !== undefined) {
-      updates.push(`recommended_model = $${idx++}`);
-      values.push(override.recommendedModel);
-    }
-    if (updates.length === 0) continue;
-
-    values.push(roleSlug);
-    const rows = await tx.unsafe(
-      `UPDATE role_templates SET ${updates.join(", ")} WHERE slug = $${idx} RETURNING slug`,
-      values as string[],
-    );
-    if (rows.length === 0) {
+    const [role] = await tx<{ slug: string }[]>`
+      SELECT slug FROM role_templates WHERE slug = ${roleSlug} LIMIT 1
+    `;
+    if (!role) {
       throw new HiveSetupError("A selected role could not be updated. Please review the runtime choices and try again.");
     }
+    await saveHiveRoleOverride(tx, hiveId, roleSlug, {
+      adapterType: override.adapterType,
+      recommendedModel: override.recommendedModel,
+    });
   }
 }
 
@@ -617,7 +607,7 @@ export async function runHiveSetup(
         setupPreset: operatingPreferences.memorySearch ? "ready" : "off",
       }, hiveId);
 
-      await saveRoleOverrides(tx, body.roleOverrides ?? {});
+      await saveRoleOverrides(tx, hiveId, body.roleOverrides ?? {});
       maybeFailSetup("role-overrides", options);
 
       await seedSafetyPolicies(tx, hiveId, body.safetyPreset ?? "owner_review_first");
