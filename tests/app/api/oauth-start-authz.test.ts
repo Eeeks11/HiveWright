@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     resolveOAuthClient: vi.fn(),
     storeState: vi.fn(),
     buildAuthorizeUrl: vi.fn(),
+    missingOAuthClientMessage: vi.fn(),
   };
 });
 
@@ -33,6 +34,7 @@ vi.mock("@/connectors/oauth", () => ({
   buildAuthorizeUrl: mocks.buildAuthorizeUrl,
   resolveOAuthClient: mocks.resolveOAuthClient,
   storeState: mocks.storeState,
+  missingOAuthClientMessage: mocks.missingOAuthClientMessage,
 }));
 
 import { GET } from "@/app/api/oauth/[slug]/start/route";
@@ -69,6 +71,9 @@ describe("GET /api/oauth/:slug/start authorization", () => {
     });
     mocks.storeState.mockResolvedValue("state-1");
     mocks.buildAuthorizeUrl.mockReturnValue("https://provider.local/auth?state=state-1");
+    mocks.missingOAuthClientMessage.mockReturnValue(
+      "google-calendar OAuth is not ready yet. The HiveWright platform OAuth client is missing (GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET). An owner must configure the platform OAuth app before hive users can connect their account.",
+    );
   });
 
   it("refuses unauthorized hive state creation", async () => {
@@ -96,5 +101,34 @@ describe("GET /api/oauth/:slug/start authorization", () => {
       displayName: "Calendar",
       redirectTo: "/setup/connectors",
     });
+  });
+
+  it("returns API-safe setup status when the platform OAuth client is missing", async () => {
+    mocks.resolveOAuthClient.mockReturnValueOnce(null);
+
+    const res = await GET(startRequest("hive-a"), ctx);
+    const body = await res.json();
+
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("oauth_client_not_configured");
+    expect(body.error).toContain("platform OAuth client is missing");
+    expect(mocks.storeState).not.toHaveBeenCalled();
+  });
+
+  it("redirects browser users back to connectors instead of leaving them on a JSON error page", async () => {
+    mocks.resolveOAuthClient.mockReturnValueOnce(null);
+    const req = new Request(
+      "http://localhost/api/oauth/google-calendar/start?hiveId=hive-a&displayName=Calendar&redirectTo=/setup/connectors",
+      { headers: { accept: "text/html" } },
+    );
+
+    const res = await GET(req, ctx);
+    const location = new URL(res.headers.get("location") ?? "");
+
+    expect(res.status).toBe(302);
+    expect(location.pathname).toBe("/setup/connectors");
+    expect(location.searchParams.get("oauth_setup_required")).toBe("google-calendar");
+    expect(location.searchParams.get("oauth_error")).toContain("platform OAuth client is missing");
+    expect(mocks.storeState).not.toHaveBeenCalled();
   });
 });

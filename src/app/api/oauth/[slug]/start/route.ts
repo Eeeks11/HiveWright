@@ -4,7 +4,12 @@ import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { jsonError } from "../../../_lib/responses";
 import { getConnectorDefinition } from "@/connectors/registry";
-import { buildAuthorizeUrl, resolveOAuthClient, storeState } from "@/connectors/oauth";
+import {
+  buildAuthorizeUrl,
+  missingOAuthClientMessage,
+  resolveOAuthClient,
+  storeState,
+} from "@/connectors/oauth";
 
 /**
  * GET /api/oauth/:slug/start?hiveId=…&displayName=…&redirectTo=…
@@ -36,9 +41,16 @@ export async function GET(
   if (!def || !def.oauth) return jsonError(`${slug} is not an oauth connector`, 400);
 
   if (!resolveOAuthClient(def.oauth)) {
-    return jsonError(
-      `OAuth client env missing for ${slug}: set ${def.oauth.clientIdEnv} and ${def.oauth.clientSecretEnv}`,
-      500,
+    const message = missingOAuthClientMessage(slug, def.oauth);
+    if (request.headers.get("accept")?.includes("text/html")) {
+      const failureUrl = safeRedirectUrl(request.url, redirectTo);
+      failureUrl.searchParams.set("oauth_error", message);
+      failureUrl.searchParams.set("oauth_setup_required", slug);
+      return NextResponse.redirect(failureUrl, 302);
+    }
+    return NextResponse.json(
+      { error: message, code: "oauth_client_not_configured" },
+      { status: 503 },
     );
   }
 
@@ -51,4 +63,12 @@ export async function GET(
 
   const authorizeUrl = buildAuthorizeUrl(def, state);
   return NextResponse.redirect(authorizeUrl, 302);
+}
+
+function safeRedirectUrl(requestUrl: string, redirectTo: string): URL {
+  const origin = new URL(requestUrl).origin;
+  if (!redirectTo.startsWith("/") || redirectTo.startsWith("//")) {
+    return new URL("/setup/connectors", origin);
+  }
+  return new URL(redirectTo, origin);
 }
