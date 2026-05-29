@@ -66,9 +66,19 @@ export async function GET(
 }
 
 function safeRedirectUrl(requestUrl: string, redirectTo: string): URL {
-  const origin = new URL(requestUrl).origin;
+  const origin = publicBaseOrigin() ?? new URL(requestUrl).origin;
   if (!redirectTo.startsWith("/") || redirectTo.startsWith("//")) {
     return new URL("/setup/connectors", origin);
   }
   return new URL(redirectTo, origin);
+}
+
+function publicBaseOrigin(): string | null {
+  const configured = process.env.PUBLIC_BASE_URL?.trim();
+  if (!configured) return null;
+  try {
+    return new URL(configured).origin;
+  } catch {
+    return configured.replace(/\/$/, "");
+  }
 }
