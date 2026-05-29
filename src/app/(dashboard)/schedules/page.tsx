@@ -37,7 +37,7 @@ export default function SchedulesPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Schedules</h1>
         <button
-          onClick={() => router.push("/work-intake")}
+          onClick={() => router.push("/intake")}
           className="rounded-md border px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           Request a schedule →
@@ -54,7 +54,7 @@ export default function SchedulesPage() {
         onEdit={setEditingSchedule}
         onToggle={toggle}
         onDelete={deleteSchedule}
-        onRequestSchedule={() => router.push("/work-intake")}
+        onRequestSchedule={() => router.push("/intake")}
       />
 
       {editingSchedule ? (
