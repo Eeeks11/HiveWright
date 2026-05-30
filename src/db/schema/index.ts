@@ -23,6 +23,7 @@ export * from "./credentials";
 export * from "./role-memory";
 export * from "./hive-memory";
 export * from "./hive-reference-documents";
+export * from "./reference-document-reviews";
 export * from "./insights";
 export * from "./work-products";
 export * from "./memory-embeddings";

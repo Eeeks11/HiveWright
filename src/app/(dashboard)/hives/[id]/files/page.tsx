@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { Download, ExternalLink, FileText, FolderOpen } from "lucide-react";
+import { Check, Download, ExternalLink, FileText, FolderOpen, RotateCw, X } from "lucide-react";
 import { HiveSectionNav } from "@/components/hive-section-nav";
 
 const CATEGORIES = [
@@ -33,6 +33,27 @@ type FileItem = {
   downloadable: boolean;
   previewUrl: string | null;
   downloadUrl: string | null;
+};
+
+type ReviewProposal = {
+  id: string;
+  title: string;
+  summary: string | null;
+  proposedCategory: string;
+  proposedRecordType: string;
+  confidence: number | null;
+  sourceExcerpt: string | null;
+  suggestedStatus: string;
+  decision: string;
+};
+
+type ReviewJob = {
+  id: string;
+  documentId: string;
+  status: string;
+  error: string | null;
+  document: { filename: string; relativePath: string };
+  proposals: ReviewProposal[];
 };
 
 type PreviewState =
@@ -85,6 +106,8 @@ export default function HiveFilesPage() {
   const [items, setItems] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reviews, setReviews] = useState<ReviewJob[]>([]);
+  const [reviewAction, setReviewAction] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewState>({
     status: "idle",
     item: null,
@@ -114,6 +137,19 @@ export default function HiveFilesPage() {
       }
     }
     loadFiles();
+    if (activeCategory === "reference-documents") {
+      fetch(`/api/hives/${hiveId}/reference-document-reviews`)
+        .then(async (res) => {
+          const body = await res.json();
+          if (!res.ok) throw new Error(body.error || "Failed to load document reviews.");
+          if (!cancelled) setReviews(body.data?.reviews ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setReviews([]);
+        });
+    } else {
+      setReviews([]);
+    }
     return () => {
       cancelled = true;
     };
@@ -123,6 +159,35 @@ export default function HiveFilesPage() {
     () => CATEGORIES.find((category) => category.id === activeCategory) ?? CATEGORIES[0],
     [activeCategory],
   );
+
+  async function decideProposal(proposal: ReviewProposal, decision: "accepted" | "edited" | "rejected" | "needs_confirmation") {
+    const edits: Record<string, string> = {};
+    if (decision === "edited") {
+      const title = window.prompt("Record title", proposal.title);
+      if (title === null) return;
+      const summary = window.prompt("Record summary", proposal.summary ?? "");
+      if (summary === null) return;
+      edits.title = title;
+      edits.summary = summary;
+    }
+    setReviewAction(proposal.id);
+    try {
+      const res = await fetch(`/api/hives/${hiveId}/reference-document-reviews/proposals/${proposal.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision, edits }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Review action failed.");
+      const refreshed = await fetch(`/api/hives/${hiveId}/reference-document-reviews`);
+      const refreshedBody = await refreshed.json();
+      setReviews(refreshedBody.data?.reviews ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Review action failed.");
+    } finally {
+      setReviewAction(null);
+    }
+  }
 
   async function openPreview(item: FileItem) {
     if (!item.previewUrl) return;
@@ -200,6 +265,58 @@ export default function HiveFilesPage() {
         {!loading && !error && items.length === 0 && (
           <div className="rounded-md border border-dashed border-amber-200/80 p-6 text-sm text-zinc-500 dark:border-white/[0.08] dark:text-zinc-400">
             No files found for this category.
+          </div>
+        )}
+
+
+
+        {activeCategory === "reference-documents" && reviews.length > 0 && (
+          <div className="space-y-3 rounded-md border border-amber-200/70 bg-white/70 p-4 dark:border-white/[0.08] dark:bg-zinc-950/50">
+            <div>
+              <h3 className="text-sm font-semibold text-amber-950 dark:text-amber-100">Reference document review</h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">AI-extracted proposals are untrusted until accepted here.</p>
+            </div>
+            {reviews.map((review) => (
+              <div key={review.id} className="space-y-2 rounded-md border border-amber-100 p-3 dark:border-white/[0.08]">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-950 dark:text-zinc-100">{review.document.filename}</p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">Status: {review.status.replaceAll("_", " ")}</p>
+                  </div>
+                  {review.status === "processing" && <RotateCw className="size-4 animate-spin text-amber-500" aria-hidden="true" />}
+                </div>
+                {review.error && <p className="text-xs text-red-600 dark:text-red-300">{review.error}</p>}
+                {review.proposals.length === 0 && !review.error && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">No proposals yet.</p>
+                )}
+                {review.proposals.map((proposal) => (
+                  <div key={proposal.id} className="space-y-2 rounded-md bg-amber-50/70 p-3 text-sm dark:bg-white/[0.03]">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="font-medium text-zinc-950 dark:text-zinc-100">{proposal.title}</p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">{proposal.proposedCategory} · {proposal.suggestedStatus.replaceAll("_", " ")} · decision: {proposal.decision}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" disabled={reviewAction === proposal.id || proposal.decision !== "pending"} onClick={() => decideProposal(proposal, "accepted")} className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+                          <Check className="size-3" aria-hidden="true" /> Accept
+                        </button>
+                        <button type="button" disabled={reviewAction === proposal.id || proposal.decision !== "pending"} onClick={() => decideProposal(proposal, "edited")} className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+                          Edit then accept
+                        </button>
+                        <button type="button" disabled={reviewAction === proposal.id || proposal.decision !== "pending"} onClick={() => decideProposal(proposal, "needs_confirmation")} className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+                          Mark needs confirmation
+                        </button>
+                        <button type="button" disabled={reviewAction === proposal.id || proposal.decision !== "pending"} onClick={() => decideProposal(proposal, "rejected")} className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+                          <X className="size-3" aria-hidden="true" /> Reject
+                        </button>
+                      </div>
+                    </div>
+                    {proposal.summary && <p className="text-zinc-700 dark:text-zinc-300">{proposal.summary}</p>}
+                    {proposal.sourceExcerpt && <blockquote className="border-l-2 border-amber-300 pl-3 text-xs text-zinc-500 dark:text-zinc-400">{proposal.sourceExcerpt}</blockquote>}
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         )}
 

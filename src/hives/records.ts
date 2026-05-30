@@ -143,6 +143,19 @@ export const MAX_CSV_IMPORT_BYTES = 250_000;
 export const MAX_CSV_IMPORT_ROWS = 200;
 export const MAX_EMAIL_IMPORT_MESSAGES = 100;
 
+const COMMON_REFERENCE_RECORD_TYPES = (family: string): RecordTypeDefinition[] => [
+  { value: "system", label: "System", family },
+  { value: "policy", label: "Policy", family },
+  { value: "procedure", label: "Procedure", family },
+  { value: "vendor_contact", label: "Vendor / contact", family },
+  { value: "report", label: "Report", family },
+  { value: "fee_rate", label: "Fee / rate", family },
+  { value: "obligation_compliance", label: "Obligation / compliance", family },
+  { value: "decision_context", label: "Decision / context", family },
+  { value: "task_suggestion", label: "Task suggestion", family },
+  { value: "document_context", label: "Document context", family },
+];
+
 const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
   business: {
     heading: "Hive records",
@@ -154,6 +167,7 @@ const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
       { value: "note", label: "Note" },
     ],
     types: [
+      ...COMMON_REFERENCE_RECORD_TYPES("operations"),
       { value: "sale", label: "Sale / revenue", family: "finance" },
       { value: "expense", label: "Expense", family: "finance" },
       { value: "customer_event", label: "Customer event", family: "relationship" },
@@ -172,6 +186,7 @@ const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
       { value: "note", label: "Note" },
     ],
     types: [
+      ...COMMON_REFERENCE_RECORD_TYPES("planning"),
       { value: "milestone", label: "Milestone", family: "progress" },
       { value: "task_update", label: "Task update", family: "progress" },
       { value: "blocker", label: "Blocker", family: "planning" },
@@ -190,6 +205,7 @@ const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
       { value: "note", label: "Note" },
     ],
     types: [
+      ...COMMON_REFERENCE_RECORD_TYPES("coordination"),
       { value: "task", label: "Task", family: "coordination" },
       { value: "appointment", label: "Appointment", family: "schedule" },
       { value: "purchase", label: "Purchase", family: "finance" },
@@ -208,6 +224,7 @@ const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
       { value: "note", label: "Note" },
     ],
     types: [
+      ...COMMON_REFERENCE_RECORD_TYPES("evidence"),
       { value: "source", label: "Source", family: "evidence" },
       { value: "email_thread", label: "Email thread", family: "evidence" },
       { value: "finding", label: "Finding", family: "synthesis" },
@@ -226,6 +243,7 @@ const RECORD_DEFINITIONS: Record<HiveKind, RecordKindDefinition> = {
       { value: "note", label: "Note" },
     ],
     types: [
+      ...COMMON_REFERENCE_RECORD_TYPES("production"),
       { value: "draft", label: "Draft", family: "production" },
       { value: "asset", label: "Asset", family: "production" },
       { value: "publication", label: "Publication", family: "publishing" },
