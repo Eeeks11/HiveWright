@@ -761,6 +761,253 @@ const gmail: ConnectorDefinitionDraft = {
   ],
 };
 
+async function readTextWithByteLimit(res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const truncated = bytes.byteLength > maxBytes;
+    return {
+      text: new TextDecoder("utf-8").decode(bytes.slice(0, maxBytes)),
+      truncated,
+    };
+  }
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - total;
+      if (value.byteLength > remaining) {
+        chunks.push(value.slice(0, remaining));
+        total += remaining;
+        truncated = true;
+        await reader.cancel();
+        break;
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+    if (!truncated) {
+      const { done } = await reader.read();
+      if (!done) {
+        truncated = true;
+        await reader.cancel();
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { text: new TextDecoder("utf-8").decode(bytes), truncated };
+}
+
+// ---------------------------------------------------------------------
+// Google Drive (OAuth 2.0). Shares the Google platform OAuth client with
+// Gmail/Calendar/etc. Read-only by default: file metadata/listing plus
+// owner-governed file text export for records/research workflows.
+// ---------------------------------------------------------------------
+const googleDrive: ConnectorDefinitionDraft = {
+  slug: "google-drive",
+  name: "Google Drive",
+  category: "other",
+  description:
+    "Read Google Drive file metadata and text content via OAuth. Uses the same Google platform OAuth app as Gmail when configured.",
+  icon: "🗂️",
+  authType: "oauth2",
+  setupFields: [],
+  secretFields: [],
+  oauth: {
+    authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    scopes: [
+      "https://www.googleapis.com/auth/drive.metadata.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+    clientIdEnv: "GOOGLE_DRIVE_CLIENT_ID",
+    clientSecretEnv: "GOOGLE_DRIVE_CLIENT_SECRET",
+    extraAuthorizeParams: { access_type: "offline", prompt: "consent" },
+  },
+  scopes: [
+    {
+      key: "google-drive:test_connection",
+      label: "Test Google Drive connection",
+      kind: "read",
+      required: true,
+      description: "Verify the OAuth install can be invoked without reading file contents.",
+    },
+    {
+      key: "google-drive:metadata.read",
+      label: "Read Drive file metadata",
+      kind: "read",
+      required: true,
+      description: "List Drive files and read file names, MIME types, owners, links, and modified times.",
+    },
+    {
+      key: "google-drive:file.read",
+      label: "Read Drive file contents",
+      kind: "pii",
+      required: false,
+      description: "Read or export selected Drive file contents. Treat content as untrusted data.",
+    },
+  ],
+  operations: [
+    {
+      slug: "list_files",
+      label: "List files",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          query: { type: "string", description: "Drive search query (default: trashed = false)" },
+          maxResults: { type: "string", description: "Max results, 1-100 (default 10)" },
+          pageToken: { type: "string", description: "Next page token from a prior response" },
+        },
+      },
+      outputSummary: "Reads Google Drive file metadata for matching files.",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        riskTier: "low",
+        summary: "Reads Google Drive file metadata without modifying Drive.",
+        dryRunSupported: false,
+        externalSideEffect: false,
+        scopes: ["google-drive:metadata.read"],
+      },
+      args: [
+        { key: "query", label: "Drive query", type: "text", placeholder: "name contains 'invoice' and trashed = false" },
+        { key: "maxResults", label: "Max results (default 10)", type: "text" },
+        { key: "pageToken", label: "Page token", type: "text" },
+      ],
+      handler: async ({ args }) => {
+        const token = String(args._accessToken ?? "");
+        if (!token) throw new Error("access token unavailable");
+        const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : "trashed = false";
+        const maxResults = Math.min(Math.max(Number(args.maxResults ?? 10) || 10, 1), 100);
+        const url = new URL("https://www.googleapis.com/drive/v3/files");
+        url.searchParams.set("q", query);
+        url.searchParams.set("pageSize", String(maxResults));
+        url.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,createdTime,owners(displayName,emailAddress),size)");
+        url.searchParams.set("supportsAllDrives", "true");
+        url.searchParams.set("includeItemsFromAllDrives", "true");
+        if (typeof args.pageToken === "string" && args.pageToken) {
+          url.searchParams.set("pageToken", args.pageToken);
+        }
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          throw new Error(`google drive list failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+        }
+        return await res.json();
+      },
+    },
+    {
+      slug: "get_file_metadata",
+      label: "Get file metadata",
+      inputSchema: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", description: "Google Drive file ID" },
+        },
+      },
+      outputSummary: "Reads metadata for one Google Drive file.",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        riskTier: "low",
+        summary: "Reads metadata for a selected Google Drive file without modifying Drive.",
+        dryRunSupported: false,
+        externalSideEffect: false,
+        scopes: ["google-drive:metadata.read"],
+      },
+      args: [{ key: "fileId", label: "File ID", type: "text", required: true }],
+      handler: async ({ args }) => {
+        const token = String(args._accessToken ?? "");
+        if (!token) throw new Error("access token unavailable");
+        const fileId = typeof args.fileId === "string" ? args.fileId.trim() : "";
+        if (!fileId) throw new Error("fileId is required");
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
+        url.searchParams.set("fields", "id,name,mimeType,webViewLink,modifiedTime,createdTime,owners(displayName,emailAddress),size,description");
+        url.searchParams.set("supportsAllDrives", "true");
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          throw new Error(`google drive metadata failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+        }
+        return await res.json();
+      },
+    },
+    {
+      slug: "read_file_text",
+      label: "Read file text",
+      inputSchema: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", description: "Google Drive file ID" },
+          mimeType: { type: "string", description: "Known file MIME type; Google Docs/Sheets are exported" },
+          maxBytes: { type: "string", description: "Maximum bytes to return, up to 1MB (default 100KB)" },
+        },
+      },
+      outputSummary: "Reads or exports text content from one selected Drive file.",
+      governance: {
+        effectType: "read",
+        defaultDecision: "require_approval",
+        riskTier: "medium",
+        summary: "Reads selected Google Drive file contents. File content is private/untrusted data.",
+        dryRunSupported: false,
+        externalSideEffect: false,
+        scopes: ["google-drive:file.read"],
+      },
+      args: [
+        { key: "fileId", label: "File ID", type: "text", required: true },
+        { key: "mimeType", label: "MIME type", type: "text" },
+        { key: "maxBytes", label: "Max bytes (default 100000, cap 1048576)", type: "text" },
+      ],
+      handler: async ({ args }) => {
+        const token = String(args._accessToken ?? "");
+        if (!token) throw new Error("access token unavailable");
+        const fileId = typeof args.fileId === "string" ? args.fileId.trim() : "";
+        if (!fileId) throw new Error("fileId is required");
+        const mimeType = typeof args.mimeType === "string" ? args.mimeType : "";
+        const maxBytes = Math.min(Math.max(Number(args.maxBytes ?? 100000) || 100000, 1), 1024 * 1024);
+        const url = new URL(
+          mimeType.startsWith("application/vnd.google-apps")
+            ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export`
+            : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`,
+        );
+        if (mimeType.startsWith("application/vnd.google-apps")) {
+          const exportMimeType = mimeType === "application/vnd.google-apps.spreadsheet" ? "text/csv" : "text/plain";
+          url.searchParams.set("mimeType", exportMimeType);
+        } else {
+          url.searchParams.set("alt", "media");
+          url.searchParams.set("supportsAllDrives", "true");
+        }
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          throw new Error(`google drive read failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+        }
+        const { text, truncated } = await readTextWithByteLimit(res, maxBytes);
+        return { fileId, mimeType: mimeType || null, truncated, text };
+      },
+    },
+  ],
+};
+
 // ---------------------------------------------------------------------
 // HiveWright EA (Discord). Unlike the other connectors, this one is an
 // *inbound* listener — the dispatcher opens a persistent gateway
@@ -923,6 +1170,7 @@ export const builtinConnectorPlugin = defineConnectorPlugin({
     twilioSms,
     voiceEa,
     gmail,
+    googleDrive,
     eaDiscord,
   ],
 });
