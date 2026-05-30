@@ -4,18 +4,23 @@ const mocks = vi.hoisted(() => {
   const sql = Object.assign(vi.fn(), { unsafe: vi.fn() });
   return {
     sql,
-    requireApiAuth: vi.fn(),
+    requireApiUser: vi.fn(),
     requireSystemOwner: vi.fn(),
+    canAccessHive: vi.fn(),
     provisionerFor: vi.fn(),
   };
 });
+
+vi.mock("@/auth/users", () => ({
+  canAccessHive: mocks.canAccessHive,
+}));
 
 vi.mock("../_lib/db", () => ({
   sql: mocks.sql,
 }));
 
 vi.mock("../_lib/auth", () => ({
-  requireApiAuth: mocks.requireApiAuth,
+  requireApiUser: mocks.requireApiUser,
   requireSystemOwner: mocks.requireSystemOwner,
 }));
 
@@ -33,7 +38,10 @@ import { GET, POST } from "./route";
 describe("GET /api/roles read behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.requireApiAuth.mockResolvedValue(null);
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.canAccessHive.mockResolvedValue(true);
     mocks.sql.mockResolvedValue([]);
   });
 
@@ -46,6 +54,28 @@ describe("GET /api/roles read behavior", () => {
     const fragmentQuery = Array.from(mocks.sql.mock.calls[0][0] as TemplateStringsArray).join(" ");
     expect(fragmentQuery).toContain("rt.active");
     expect(fragmentQuery).toContain("WHERE rt.active = true");
+  });
+
+  it("checks hive access before applying hive-scoped role overrides for non-owner callers", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "user-1", email: "member@example.com", isSystemOwner: false },
+    });
+
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=hive-1"));
+
+    expect(res.status).toBe(200);
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+  });
+
+  it("rejects hive-scoped role reads when the caller cannot access the hive", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "user-1", email: "member@example.com", isSystemOwner: false },
+    });
+    mocks.canAccessHive.mockResolvedValueOnce(false);
+
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=hive-1"));
+
+    expect(res.status).toBe(403);
   });
 });
 
