@@ -63,7 +63,11 @@ describe("buildAuthorizeUrl", () => {
     expect(url.searchParams.get("access_type")).toBe("offline");
   });
 
-  it("allows Google-family connectors to use shared GOOGLE_* app credentials", () => {
+  it.each([
+    ["GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET"],
+    ["GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET"],
+    ["GOOGLE_CALENDAR_CLIENT_ID", "GOOGLE_CALENDAR_CLIENT_SECRET"],
+  ])("allows Google-family connector envs %s/%s to use shared GOOGLE_* app credentials", (clientIdEnv, clientSecretEnv) => {
     delete process.env.FAKE_OAUTH_CLIENT_ID;
     delete process.env.FAKE_OAUTH_CLIENT_SECRET;
     process.env.GOOGLE_CLIENT_ID = "google-cid";
@@ -71,8 +75,8 @@ describe("buildAuthorizeUrl", () => {
 
     const client = resolveOAuthClient({
       ...fakeOauthDef.oauth!,
-      clientIdEnv: "GMAIL_CLIENT_ID",
-      clientSecretEnv: "GMAIL_CLIENT_SECRET",
+      clientIdEnv,
+      clientSecretEnv,
     });
 
     expect(client?.clientId).toBe("google-cid");

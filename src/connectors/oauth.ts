@@ -44,7 +44,9 @@ function providerClientEnv(envName: string): string {
   // Google-family connectors can share one platform OAuth client. Keep the
   // per-connector envs as the strongest override, but do not force operators
   // to duplicate the same Google client for Gmail, Calendar, Drive, etc.
-  if (envName.startsWith("GMAIL_")) return envName.replace(/^GMAIL_/, "GOOGLE_");
+  if (/^(GMAIL|GOOGLE_DRIVE|GOOGLE_CALENDAR|GOOGLE_DOCS|GOOGLE_SHEETS)_/.test(envName)) {
+    return envName.replace(/^(GMAIL|GOOGLE_DRIVE|GOOGLE_CALENDAR|GOOGLE_DOCS|GOOGLE_SHEETS)_/, "GOOGLE_");
+  }
   return envName;
 }
 
