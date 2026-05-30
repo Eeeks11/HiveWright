@@ -16,6 +16,7 @@ import { MCP_CATALOG } from "../tools/mcp-catalog";
 import { loadStandingInstructions } from "../standing-instructions/manager";
 import { buildHiveContextBlock } from "../hives/context";
 import { parseCustomRoleMetadata } from "../roles/custom-roles";
+import { applyHiveRoleOverride, loadHiveRoleOverride } from "../roles/hive-overrides";
 import path from "path";
 
 type ToolsConfig = { mcps?: string[]; allowedTools?: string[]; customRole?: unknown };
@@ -32,7 +33,7 @@ export async function buildSessionContext(
   task: ClaimedTask,
 ): Promise<SessionContext> {
   // 1. Load role template
-  const [role] = await sql`
+  let [role] = await sql`
     SELECT slug, name, department, type, role_md, soul_md, tools_md,
            recommended_model, fallback_model,
            adapter_type, fallback_adapter_type, tools_config
@@ -40,6 +41,7 @@ export async function buildSessionContext(
     WHERE slug = ${task.assignedTo} AND active = true
   `;
   if (!role) throw new Error(`Role template not found: ${task.assignedTo}`);
+  role = applyHiveRoleOverride(role, await loadHiveRoleOverride(sql, task.hiveId, role.slug));
 
   const customRoleMetadata = parseCustomRoleMetadata(role.tools_config);
   if (customRoleMetadata && customRoleMetadata.hiveId !== task.hiveId) {

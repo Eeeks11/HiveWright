@@ -90,8 +90,16 @@ export default function RolesPage() {
   const [observabilityLoading, setObservabilityLoading] = useState(false);
   const [observabilityError, setObservabilityError] = useState<string | null>(null);
 
+  const rolesApiPath = (includeInactive = false) => {
+    const params = new URLSearchParams();
+    if (includeInactive) params.set("includeInactive", "true");
+    if (selectedHive?.id) params.set("hiveId", selectedHive.id);
+    const query = params.toString();
+    return query ? `/api/roles?${query}` : "/api/roles";
+  };
+
   useEffect(() => {
-    fetch("/api/roles")
+    fetch(rolesApiPath())
       .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
       .then(b => setRoles(b.data || []))
       .catch(err => console.error("Failed to load roles:", err));
@@ -111,7 +119,7 @@ export default function RolesPage() {
       .then(r => r.json())
       .then(b => { if (Array.isArray(b.data)) setMcpCatalog(b.data); })
       .catch(() => {});
-  }, []);
+  }, [selectedHive?.id]);
 
   useEffect(() => {
     if (!selectedHive?.id) {
@@ -187,6 +195,7 @@ export default function RolesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slug,
+          hiveId: selectedHive?.id,
           toolsConfig: mcps === null ? null : { mcps },
         }),
       });
@@ -234,6 +243,7 @@ export default function RolesPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         slug,
+        hiveId: selectedHive?.id,
         recommendedModel: edit.model,
         adapterType: edit.adapter,
         fallbackModel: edit.fallback,
@@ -248,13 +258,13 @@ export default function RolesPage() {
   };
 
   const refreshRoles = async () => {
-    const res = await fetch("/api/roles");
+    const res = await fetch(rolesApiPath());
     const body = await res.json();
     setRoles(body.data || []);
   };
 
   const refreshDisabledRoles = async () => {
-    const res = await fetch("/api/roles?includeInactive=true");
+    const res = await fetch(rolesApiPath(true));
     const body = await res.json();
     const all: Role[] = body.data || [];
     setDisabledRoles(all.filter((r) => !r.active));

@@ -5,6 +5,7 @@ import {
   type ModelRoutingPolicy,
   type ResolvedModelRoute,
 } from "@/model-routing/selector";
+import { applyHiveRoleOverride, loadHiveRoleOverride } from "@/roles/hive-overrides";
 
 export type SupervisorBackend = "codex" | "openclaw";
 
@@ -77,14 +78,16 @@ export async function resolveGoalSupervisorRuntime(
     throw new Error(`Goal ${goalId} not found`);
   }
 
-  const [role] = await sql<{
+  let [role] = await sql<{
+    slug: string;
     adapter_type: string | null;
     recommended_model: string | null;
   }[]>`
-    SELECT adapter_type, recommended_model
+    SELECT slug, adapter_type, recommended_model
     FROM role_templates
     WHERE slug = 'goal-supervisor'
   `;
+  role = role ? applyHiveRoleOverride(role, await loadHiveRoleOverride(sql, goal.hive_id, role.slug)) : role;
 
   const { policy } = await loadModelRoutingView(sql, goal.hive_id);
   const runtime = resolveGoalSupervisorRouteFromConfig({

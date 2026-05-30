@@ -130,6 +130,9 @@ describe("POST /api/hives/setup", () => {
           kind_profile: values[11],
         }];
       }
+      if (query.includes("SELECT slug FROM role_templates")) {
+        return values[0] === "ghost-role" ? [] : [{ slug: values[0] }];
+      }
       if (query.includes("INSERT INTO connector_installs")) {
         return [{ id: "install-1", connectorSlug: "discord-webhook", displayName: "Discord" }];
       }
@@ -189,9 +192,16 @@ describe("POST /api/hives/setup", () => {
     expect(mocks.tx.json).toHaveBeenCalledWith(expect.arrayContaining([
       "Owner approval required before publishing, spending money, or making external commitments.",
     ]));
-    expect(mocks.tx.unsafe).toHaveBeenCalledWith(
-      "UPDATE role_templates SET adapter_type = $1, recommended_model = $2 WHERE slug = $3 RETURNING slug",
-      ["codex", "openai-codex/gpt-5.5", "dev-agent"],
+    expect(mocks.tx).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining("INSERT INTO adapter_config")]),
+      "hive-1",
+      "hive-role-overrides",
+      expect.objectContaining({
+        "dev-agent": expect.objectContaining({
+          adapterType: "codex",
+          recommendedModel: "openai-codex/gpt-5.5",
+        }),
+      }),
     );
     expect(mocks.storeCredential).toHaveBeenCalledWith(
       mocks.tx,
@@ -273,8 +283,6 @@ describe("POST /api/hives/setup", () => {
   });
 
   it("fails the whole setup when a role override targets a missing role", async () => {
-    mocks.tx.unsafe.mockResolvedValueOnce([]);
-
     const res = await POST(setupRequest({
       hive: { name: "Test Hive", slug: "test-hive", type: "digital", kind: "business" },
       roleOverrides: {
