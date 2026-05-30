@@ -14,6 +14,7 @@ vi.mock("../../../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/memory/embeddings", () => ({
@@ -21,17 +22,26 @@ vi.mock("@/memory/embeddings", () => ({
   storeEmbedding: vi.fn(),
 }));
 
+vi.mock("@/hives/reference-document-review", () => ({
+  createReferenceDocumentReviewJob: vi.fn(),
+  processReferenceDocumentReviewJob: vi.fn(),
+}));
+
 import { GET, POST } from "./route";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
+import { createReferenceDocumentReviewJob, processReferenceDocumentReviewJob } from "@/hives/reference-document-review";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockCheckPgvectorAvailable = checkPgvectorAvailable as unknown as ReturnType<typeof vi.fn>;
 const mockStoreEmbedding = storeEmbedding as unknown as ReturnType<typeof vi.fn>;
+const mockCreateReferenceDocumentReviewJob = createReferenceDocumentReviewJob as unknown as ReturnType<typeof vi.fn>;
+const mockProcessReferenceDocumentReviewJob = processReferenceDocumentReviewJob as unknown as ReturnType<typeof vi.fn>;
 const params = { params: Promise.resolve({ id: "hive-1" }) };
 
 let tempRoot = "";
@@ -59,6 +69,8 @@ describe("GET /api/hives/[id]/files", () => {
     });
     mockCheckPgvectorAvailable.mockResolvedValue(false);
     mockStoreEmbedding.mockResolvedValue(["embedding-1"]);
+    mockCreateReferenceDocumentReviewJob.mockResolvedValue({ id: "review-1", status: "pending" });
+    mockProcessReferenceDocumentReviewJob.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -223,6 +235,7 @@ describe("GET /api/hives/[id]/files", () => {
     expect(body.data.item.name).toBe("Cancellation policy.md");
     expect(body.data.item.id).toBe("11111111-1111-4111-8111-111111111111");
     expect(body.data.item.indexedChunks).toBe(1);
+    expect(body.data.item.review).toEqual({ id: "review-1", status: "pending" });
     await expect(fsp.readFile(path.join(tempRoot, "test-hive", "reference-documents", "Cancellation policy.md"), "utf8"))
       .resolves.toBe("Refunds require 48 hours notice\napi_key=SECRET_VALUE");
     expect(mockCheckPgvectorAvailable).toHaveBeenCalled();
@@ -234,6 +247,41 @@ describe("GET /api/hives/[id]/files", () => {
       text: expect.stringContaining("Refunds require 48 hours notice"),
     }));
     expect(mockStoreEmbedding.mock.calls[0][1].text).toContain("api_key=[REDACTED]");
+    expect(mockCreateReferenceDocumentReviewJob).toHaveBeenCalledWith(mockSql, {
+      hiveId: "hive-1",
+      documentId: "11111111-1111-4111-8111-111111111111",
+    });
+    await vi.waitFor(() => expect(mockProcessReferenceDocumentReviewJob).toHaveBeenCalledWith(mockSql, expect.objectContaining({
+      hiveId: "hive-1",
+      documentId: "11111111-1111-4111-8111-111111111111",
+      reviewJobId: "review-1",
+      documentText: expect.stringContaining("Refunds require 48 hours notice"),
+    })));
+  });
+
+  it("rejects reference document uploads for read-only hive members", async () => {
+    mockRequireApiUser.mockResolvedValueOnce({
+      user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
+    });
+    mockHive();
+    mockCanAccessHive.mockResolvedValueOnce(true);
+    mockCanMutateHive.mockResolvedValueOnce(false);
+    const form = new FormData();
+    form.append("file", new File(["Read-only members should not upload"], "policy.md", { type: "text/markdown" }));
+
+    const res = await POST(new Request("http://localhost/api/hives/hive-1/files?category=reference-documents", {
+      method: "POST",
+      body: form,
+    }), params);
+    if (!res) {
+      throw new Error("Expected reference document upload response");
+    }
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toBe("Forbidden: hive mutation access required");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
+    expect(mockCreateReferenceDocumentReviewJob).not.toHaveBeenCalled();
   });
 
   it("rejects reference document uploads when the reference folder escapes the hive workspace", async () => {

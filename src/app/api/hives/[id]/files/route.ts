@@ -4,11 +4,12 @@ import path from "node:path";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { jsonError, jsonOk } from "../../../_lib/responses";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { hiveRootPath } from "@/hives/workspace-root";
 import { pathContains } from "@/runtime/paths";
 import { sanitizeAuditString } from "@/actions/redaction";
 import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
+import { createReferenceDocumentReviewJob, processReferenceDocumentReviewJob } from "@/hives/reference-document-review";
 
 const FILE_BROWSER_CATEGORIES = [
   "projects",
@@ -689,6 +690,22 @@ async function recordReferenceDocumentUpload(input: {
   }
 }
 
+function queueReferenceDocumentReview(input: {
+  hiveId: string;
+  documentId: string;
+  reviewJobId: string;
+  documentText: string | null;
+}) {
+  const run = async () => {
+    try {
+      await processReferenceDocumentReviewJob(sql, input);
+    } catch (err) {
+      console.warn("[reference-documents] Failed to process reference document review:", err);
+    }
+  };
+  setTimeout(() => void run(), 0);
+}
+
 async function ensureHiveAccess(id: string) {
   const authz = await requireApiUser();
   if ("response" in authz) return { authz, response: authz.response } as const;
@@ -720,6 +737,10 @@ export async function POST(
     }
     const access = await ensureHiveAccess(id);
     if ("response" in access) return access.response;
+    if (!access.authz.user.isSystemOwner) {
+      const canMutate = await canMutateHive(sql, access.authz.user.id, id);
+      if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
+    }
 
     const form = await request.formData();
     const file = form.get("file");
@@ -760,6 +781,17 @@ export async function POST(
       indexText,
     });
 
+    const reviewJob = await createReferenceDocumentReviewJob(sql, {
+      hiveId: id,
+      documentId: indexing.documentId,
+    });
+    queueReferenceDocumentReview({
+      hiveId: id,
+      documentId: indexing.documentId,
+      reviewJobId: reviewJob.id,
+      documentText: indexText,
+    });
+
     return jsonOk({
       item: {
         id: indexing.documentId,
@@ -768,6 +800,10 @@ export async function POST(
         location: `reference-documents/${relativePath}`,
         sizeBytes: bytes.length,
         indexedChunks: indexing.indexedChunks,
+        review: {
+          id: reviewJob.id,
+          status: reviewJob.status,
+        },
         previewUrl: isTextLike(targetPath, mimeType) && bytes.length <= INLINE_PREVIEW_BYTES
           ? buildFsUrl(id, "reference-documents", "preview", relativePath)
           : null,

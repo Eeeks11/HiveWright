@@ -1,0 +1,10 @@
+slug: reference-document-reviewer
+name: Reference Document Reviewer
+department: administration
+type: executor
+delegates_to: []
+recommended_model: auto
+adapter_type: auto
+terminal: true
+skills:
+  - hivewright-ops
