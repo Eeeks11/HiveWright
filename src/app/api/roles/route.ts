@@ -1,6 +1,7 @@
+import { canAccessHive } from "@/auth/users";
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError } from "../_lib/responses";
-import { requireApiAuth, requireSystemOwner } from "../_lib/auth";
+import { requireApiUser, requireSystemOwner } from "../_lib/auth";
 import { provisionerFor } from "../../../provisioning";
 import type { ProvisionStatus } from "../../../provisioning";
 import { getCachedStatus, setCachedStatus } from "../../../provisioning/status-cache";
@@ -34,12 +35,17 @@ async function checkRole(adapterType: string, slug: string, recommendedModel: st
 }
 
 export async function GET(request: Request) {
-  const unauth = await requireApiAuth();
-  if (unauth) return unauth;
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
   try {
     const searchParams = new URL(request.url).searchParams;
     const includeInactive = searchParams.get("includeInactive") === "true";
     const hiveId = searchParams.get("hiveId");
+
+    if (hiveId && !authz.user.isSystemOwner) {
+      const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
+      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+    }
 
     const rows = await sql`
       SELECT
