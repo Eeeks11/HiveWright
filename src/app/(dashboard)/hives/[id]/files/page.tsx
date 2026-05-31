@@ -189,6 +189,26 @@ export default function HiveFilesPage() {
     }
   }
 
+  async function retryReview(review: ReviewJob) {
+    setReviewAction(review.id);
+    try {
+      const res = await fetch(`/api/hives/${hiveId}/reference-document-reviews`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retry", reviewJobId: review.id }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Review retry failed.");
+      const refreshed = await fetch(`/api/hives/${hiveId}/reference-document-reviews`);
+      const refreshedBody = await refreshed.json();
+      setReviews(refreshedBody.data?.reviews ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Review retry failed.");
+    } finally {
+      setReviewAction(null);
+    }
+  }
+
   async function openPreview(item: FileItem) {
     if (!item.previewUrl) return;
     setPreview({ status: "loading", item, content: "", contentType: "", error: "" });
@@ -283,7 +303,12 @@ export default function HiveFilesPage() {
                     <p className="text-sm font-medium text-zinc-950 dark:text-zinc-100">{review.document.filename}</p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">Status: {review.status.replaceAll("_", " ")}</p>
                   </div>
-                  {review.status === "processing" && <RotateCw className="size-4 animate-spin text-amber-500" aria-hidden="true" />}
+                  {review.status === "processing" || review.status === "extracting" ? <RotateCw className="size-4 animate-spin text-amber-500" aria-hidden="true" /> : null}
+                  {review.status === "failed" && (
+                    <button type="button" disabled={reviewAction === review.id} onClick={() => retryReview(review)} className="inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50">
+                      <RotateCw className="size-3" aria-hidden="true" /> Retry
+                    </button>
+                  )}
                 </div>
                 {review.error && <p className="text-xs text-red-600 dark:text-red-300">{review.error}</p>}
                 {review.proposals.length === 0 && !review.error && (

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
 import { sanitizeAuditString } from "@/actions/redaction";
 import { loadCredentials } from "@/credentials/manager";
@@ -7,11 +8,15 @@ import { getChatProvider, type ChatProvider, type ProviderId } from "@/llm";
 import { loadModelRoutingView } from "@/model-routing/registry";
 import { AUTO_MODEL_ROUTE, resolveConfiguredModelRoute } from "@/model-routing/selector";
 import { applyHiveRoleOverride, loadHiveRoleOverride } from "@/roles/hive-overrides";
+import { hiveRootPath } from "@/hives/workspace-root";
+import { extractReferenceDocumentText } from "@/documents/extract-text";
+import { runCodexReferenceDocumentReview } from "@/hives/reference-document-codex-reviewer";
 
 export type ReferenceDocumentReviewSql = Sql | TransactionSql;
 
 export type ReferenceDocumentReviewStatus =
   | "pending"
+  | "extracting"
   | "processing"
   | "needs_review"
   | "approved"
@@ -245,37 +250,39 @@ export async function processReferenceDocumentReviewJob(
   `;
   if (!job) throw new Error("reference document review job does not match hive/document");
 
-  const text = boundedDocumentText(input.documentText);
-  if (!text) {
-    await failReferenceDocumentReviewJob(sql, {
-      hiveId: input.hiveId,
-      reviewJobId: input.reviewJobId,
-      error: "Reference document review currently supports text-like uploads only. PDF/docx extraction is not enabled.",
-    });
-    return [];
-  }
-
-  await sql`
-    UPDATE hive_reference_document_review_jobs
-    SET status = 'processing', error = NULL, updated_at = NOW()
-    WHERE id = ${input.reviewJobId}::uuid AND hive_id = ${input.hiveId}::uuid
-  `;
-
   try {
+    const text = await loadReviewDocumentText(sql, input);
+
+    await sql`
+      UPDATE hive_reference_document_review_jobs
+      SET status = 'processing', error = NULL, updated_at = NOW()
+      WHERE id = ${input.reviewJobId}::uuid AND hive_id = ${input.hiveId}::uuid
+    `;
+
     const runtime = input.provider
       ? null
       : await loadReferenceReviewRuntime(sql, input.hiveId);
-    const provider = input.provider ?? runtime?.provider;
-    if (!provider) throw new Error("reference review provider could not be initialized");
-    const response = await provider.chat({
-      system: referenceReviewSystemPrompt(),
-      user: referenceReviewUserPrompt(text),
-      model: input.model ?? runtime?.model ?? process.env.HIVEWRIGHT_REFERENCE_REVIEW_MODEL ?? "openai/gpt-4o-mini",
-      temperature: 0,
-      maxTokens: 4_000,
-      timeoutMs: 90_000,
-    });
-    const proposals = parseReferenceReviewExtraction(response.text);
+    let proposals: ExtractedReferenceRecordProposal[];
+    if (!input.provider && runtime?.backend === "codex-cli") {
+      proposals = await runCodexReferenceDocumentReview({
+        hiveId: input.hiveId,
+        reviewJobId: input.reviewJobId,
+        documentId: input.documentId,
+        documentText: text,
+      });
+    } else {
+      const provider = input.provider ?? runtime?.provider;
+      if (!provider) throw new Error("reference review provider could not be initialized");
+      const response = await provider.chat({
+        system: referenceReviewSystemPrompt(),
+        user: referenceReviewUserPrompt(text),
+        model: input.model ?? runtime?.model ?? process.env.HIVEWRIGHT_REFERENCE_REVIEW_MODEL ?? "openai/gpt-4o-mini",
+        temperature: 0,
+        maxTokens: 4_000,
+        timeoutMs: 90_000,
+      });
+      proposals = parseReferenceReviewExtraction(response.text);
+    }
     return storeExtractedReferenceDocumentProposals(sql, { ...input, proposals });
   } catch (error) {
     await failReferenceDocumentReviewJob(sql, {
@@ -285,6 +292,37 @@ export async function processReferenceDocumentReviewJob(
     });
     return [];
   }
+}
+
+async function loadReviewDocumentText(
+  sql: ReferenceDocumentReviewSql,
+  input: { hiveId: string; documentId: string; reviewJobId: string; documentText: string | null },
+): Promise<string> {
+  await sql`
+    UPDATE hive_reference_document_review_jobs
+    SET status = 'extracting', error = NULL, updated_at = NOW()
+    WHERE id = ${input.reviewJobId}::uuid AND hive_id = ${input.hiveId}::uuid
+  `;
+
+  const [document] = await sql<{ slug: string; relative_path: string }[]>`
+    SELECT h.slug, d.relative_path
+    FROM hive_reference_documents d
+    JOIN hives h ON h.id = d.hive_id
+    WHERE d.id = ${input.documentId}::uuid
+      AND d.hive_id = ${input.hiveId}::uuid
+    LIMIT 1
+  `;
+  if (document?.slug && document.relative_path) {
+    const extracted = await extractReferenceDocumentText({
+      rootDir: path.join(hiveRootPath(document.slug), "reference-documents"),
+      relativePath: document.relative_path,
+    });
+    return extracted.text;
+  }
+
+  const fallback = boundedDocumentText(input.documentText);
+  if (fallback) return fallback;
+  throw new Error("Reference document could not be located for text extraction");
 }
 
 export async function decideReferenceDocumentProposal(
@@ -405,14 +443,15 @@ interface ReferenceReviewRoleRow {
 }
 
 interface ReferenceReviewRuntime {
-  provider: ChatProvider;
-  providerId: ProviderId;
+  backend: "chat" | "codex-cli";
+  provider?: ChatProvider;
+  providerId: ProviderId | "codex-cli";
   model: string;
   source: "env" | "role" | "auto_policy";
 }
 
 export interface ResolvedReferenceReviewRoute {
-  providerId: ProviderId;
+  providerId: ProviderId | "codex-cli";
   model: string;
 }
 
@@ -423,6 +462,13 @@ export function resolveReferenceReviewRouteFromRole(
   const adapterType = (row.adapterType ?? row.adapter_type ?? "").trim().toLowerCase();
   const rawModel = (row.model ?? row.modelId ?? row.model_id ?? "").trim();
   if (!rawModel || rawModel === AUTO_MODEL_ROUTE || adapterType === AUTO_MODEL_ROUTE) return null;
+
+  if (adapterType === "codex-cli") {
+    return { providerId: "codex-cli", model: rawModel };
+  }
+  if (adapterType === "codex" || rawModel.startsWith("openai-codex/")) {
+    return null;
+  }
 
   if (rawModel.startsWith("ollama/")) {
     return { providerId: "ollama", model: rawModel.slice("ollama/".length) };
@@ -457,6 +503,7 @@ async function loadReferenceReviewRuntime(
   if (envProviderId) {
     const model = envModel || (envProviderId === "ollama" ? "qwen3.5:27b" : "openai/gpt-4o-mini");
     return {
+      backend: "chat",
       provider: await loadReferenceReviewProvider(sql, hiveId, envProviderId),
       providerId: envProviderId,
       model,
@@ -499,11 +546,21 @@ async function loadReferenceReviewRuntime(
   });
   if (!resolved) {
     throw new Error(
-      `reference document review role could not resolve a chat model (${route.reason}); select an ollama or OpenRouter-compatible model for ${REFERENCE_DOCUMENT_REVIEWER_ROLE}`,
+      `reference document review role could not resolve a supported runtime (${route.reason}); select codex-cli, ollama, or an OpenRouter-compatible model for ${REFERENCE_DOCUMENT_REVIEWER_ROLE}`,
     );
   }
 
+  if (resolved.providerId === "codex-cli") {
+    return {
+      backend: "codex-cli",
+      providerId: "codex-cli",
+      model: resolved.model,
+      source: route.source === "manual_role" ? "role" : "auto_policy",
+    };
+  }
+
   return {
+    backend: "chat",
     provider: await loadReferenceReviewProvider(sql, hiveId, resolved.providerId),
     providerId: resolved.providerId,
     model: resolved.model,
