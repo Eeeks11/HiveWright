@@ -26,11 +26,21 @@ export async function POST(
   } catch {
     return jsonError("invalid JSON", 400);
   }
-  if (body.action !== "process") return jsonError("unsupported action", 400);
+  if (body.action !== "process" && body.action !== "retry") return jsonError("unsupported action", 400);
   const reviewJobId = typeof body.reviewJobId === "string" ? body.reviewJobId : "";
-  const documentId = typeof body.documentId === "string" ? body.documentId : "";
+  let documentId = typeof body.documentId === "string" ? body.documentId : "";
   const documentText = typeof body.documentText === "string" ? body.documentText : null;
-  if (!reviewJobId || !documentId) return jsonError("reviewJobId and documentId are required", 400);
+  if (!reviewJobId) return jsonError("reviewJobId is required", 400);
+  if (!documentId) {
+    const [job] = await sql<{ document_id: string }[]>`
+      SELECT document_id
+      FROM hive_reference_document_review_jobs
+      WHERE id = ${reviewJobId}::uuid AND hive_id = ${access.hive.id}::uuid
+      LIMIT 1
+    `;
+    documentId = job?.document_id ?? "";
+  }
+  if (!documentId) return jsonError("documentId is required", 400);
   const proposals = await processReferenceDocumentReviewJob(sql, {
     hiveId: access.hive.id,
     documentId,
