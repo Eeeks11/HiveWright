@@ -9,7 +9,7 @@ import { hiveRootPath } from "@/hives/workspace-root";
 import { pathContains } from "@/runtime/paths";
 import { sanitizeAuditString } from "@/actions/redaction";
 import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
-import { createReferenceDocumentReviewJob, processReferenceDocumentReviewJob } from "@/hives/reference-document-review";
+import { createReferenceDocumentReviewJob } from "@/hives/reference-document-review";
 
 const FILE_BROWSER_CATEGORIES = [
   "projects",
@@ -690,22 +690,6 @@ async function recordReferenceDocumentUpload(input: {
   }
 }
 
-function queueReferenceDocumentReview(input: {
-  hiveId: string;
-  documentId: string;
-  reviewJobId: string;
-  documentText: string | null;
-}) {
-  const run = async () => {
-    try {
-      await processReferenceDocumentReviewJob(sql, input);
-    } catch (err) {
-      console.warn("[reference-documents] Failed to process reference document review:", err);
-    }
-  };
-  setTimeout(() => void run(), 0);
-}
-
 async function ensureHiveAccess(id: string) {
   const authz = await requireApiUser();
   if ("response" in authz) return { authz, response: authz.response } as const;
@@ -785,13 +769,6 @@ export async function POST(
       hiveId: id,
       documentId: indexing.documentId,
     });
-    queueReferenceDocumentReview({
-      hiveId: id,
-      documentId: indexing.documentId,
-      reviewJobId: reviewJob.id,
-      documentText: indexText,
-    });
-
     return jsonOk({
       item: {
         id: indexing.documentId,

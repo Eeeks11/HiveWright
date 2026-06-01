@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { deflateRawSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { extractReferenceDocumentText } from "./extract-text";
 
 let root = "";
@@ -114,12 +114,36 @@ describe("extractReferenceDocumentText", () => {
   });
 
   it("extracts PDF text with pdftotext when selectable text is available", async () => {
+    const binDir = path.join(root, "bin");
+    await fs.mkdir(binDir);
+    await fs.writeFile(path.join(binDir, "pdftotext"), "#!/usr/bin/env bash\nprintf 'Quiet hours start at 10pm\\n'\n", { mode: 0o755 });
+    vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
     await fs.writeFile(path.join(root, "rules.pdf"), simpleTextPdf("Quiet hours start at 10pm"));
 
-    const extracted = await extractReferenceDocumentText({ rootDir: root, relativePath: "rules.pdf" });
+    try {
+      const extracted = await extractReferenceDocumentText({ rootDir: root, relativePath: "rules.pdf" });
 
-    expect(extracted.extractor).toBe("pdftotext");
-    expect(extracted.text).toContain("Quiet hours start at 10pm");
+      expect(extracted.extractor).toBe("pdftotext");
+      expect(extracted.text).toContain("Quiet hours start at 10pm");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("fails closed for legacy .doc LibreOffice extraction in production unless explicitly enabled", async () => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("HIVEWRIGHT_ENABLE_LIBREOFFICE_DOC_EXTRACTION", "");
+    const { extractReferenceDocumentText: extractReferenceDocumentTextInProduction } = await import("./extract-text");
+    await fs.writeFile(path.join(root, "legacy.doc"), "not really a binary doc");
+
+    try {
+      await expect(extractReferenceDocumentTextInProduction({ rootDir: root, relativePath: "legacy.doc", timeoutMs: 50 }))
+        .rejects.toThrow("Legacy .doc extraction is not available");
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
   });
 
   it("rejects symlink traversal out of the reference document root", async () => {
