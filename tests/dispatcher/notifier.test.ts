@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeCredential } from "@/credentials/manager";
 import {
+  discoverOutboundNotificationEvents,
   getNotifierConfig,
   isDiscordSnowflake,
   OutboundNotifier,
@@ -96,7 +97,7 @@ describe("outbound notifier", () => {
     expect(rows[0].notified_at).toBeTruthy();
   });
 
-  it("does not notify the owner for supervisor EA-review decisions until EA escalates them", async () => {
+  it("does not notify the owner for supervisor decisions without a real owner-action decision", async () => {
     await insertSupervisorEaReviewDecision();
 
     const sent: { channelId: string; content: string }[] = [];
@@ -121,9 +122,12 @@ describe("outbound notifier", () => {
     await notifier.scanAndQueue();
     await notifier.flushAll();
 
-    expect(sent).toHaveLength(1);
-    expect(sent[0].channelId).toBe(DECISION_CHANNEL);
-    expect(sent[0].content).toContain("Decision needs you");
+    expect(sent).toHaveLength(0);
+    const after = await sql`
+      SELECT id FROM outbound_notifications
+      WHERE source_id = ${"00000000-0000-4000-8000-000000000301"}::uuid
+    `;
+    expect(after).toHaveLength(0);
   });
 
   it("does not recurse by notifying on Discord send approval decisions", async () => {
@@ -143,16 +147,39 @@ describe("outbound notifier", () => {
     expect(rows).toHaveLength(0);
   });
 
+  it("does not notify the owner for internal quality, learning gate, or QA routing decisions", async () => {
+    await insertInternalNoiseDecisions();
+
+    const sent: { channelId: string; content: string }[] = [];
+    const notifier = new OutboundNotifier(sql, testConfig(), captureSender(sent));
+
+    await notifier.scanAndQueue();
+    await notifier.flushAll();
+
+    expect(sent).toHaveLength(0);
+    const rows = await sql`
+      SELECT source_id FROM outbound_notifications
+      WHERE source_id IN ${sql([
+        "00000000-0000-4000-8000-000000000303",
+        "00000000-0000-4000-8000-000000000304",
+        "00000000-0000-4000-8000-000000000305",
+      ])}
+    `;
+    expect(rows).toHaveLength(0);
+  });
+
   it("discovers owner decisions but skips notification-approval decisions in the legacy path", async () => {
     await insertPendingDecision("decision-1");
     await insertExternalActionApprovalDecision();
+    await insertInternalNoiseDecisions();
 
-    const events = await import("@/dispatcher/notifier").then((mod) =>
-      mod.discoverOutboundNotificationEvents(sql, testConfig()),
-    );
+    const events = await discoverOutboundNotificationEvents(sql, testConfig());
 
     expect(events.map((event) => event.entityId)).toContain("00000000-0000-4000-8000-000000000001");
     expect(events.map((event) => event.entityId)).not.toContain("00000000-0000-4000-8000-000000000302");
+    expect(events.map((event) => event.entityId)).not.toContain("00000000-0000-4000-8000-000000000303");
+    expect(events.map((event) => event.entityId)).not.toContain("00000000-0000-4000-8000-000000000304");
+    expect(events.map((event) => event.entityId)).not.toContain("00000000-0000-4000-8000-000000000305");
   });
 
   it("dry-run mode records the payload without hitting Discord", async () => {
@@ -283,6 +310,56 @@ async function insertExternalActionApprovalDecision() {
       'external_action_approval',
       ${sql.json({ connectorSlug: "ea-discord", operation: "send_channel" })}
     )
+  `;
+}
+
+async function insertInternalNoiseDecisions() {
+  const [qaTask] = await sql<{ id: string }[]>`
+    INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief)
+    VALUES (${HIVE_ID}::uuid, 'qa', 'pipeline', 'Internal QA recheck', 'Review output internally.')
+    RETURNING id
+  `;
+  await sql`
+    INSERT INTO decisions (
+      id, hive_id, task_id, title, context, recommendation, status, priority, kind, options
+    )
+    VALUES
+      (
+        ${"00000000-0000-4000-8000-000000000303"}::uuid,
+        ${HIVE_ID}::uuid,
+        NULL,
+        'Rate task quality',
+        'Internal task quality feedback prompt.',
+        'Use this for sampler training only.',
+        'pending',
+        'normal',
+        'task_quality_feedback',
+        ${sql.json({ kind: "task_quality_feedback", lane: "owner" })}
+      ),
+      (
+        ${"00000000-0000-4000-8000-000000000304"}::uuid,
+        ${HIVE_ID}::uuid,
+        NULL,
+        'Learning gate follow-up',
+        'Supervisor learning gate follow-up should remain internal.',
+        'Record the learning internally.',
+        'pending',
+        'normal',
+        'learning_gate_followup',
+        ${sql.json({ source: "learning_gate_followup" })}
+      ),
+      (
+        ${"00000000-0000-4000-8000-000000000305"}::uuid,
+        ${HIVE_ID}::uuid,
+        ${qaTask.id}::uuid,
+        'QA recheck routing decision',
+        'QA needs to route this back for rework.',
+        'Keep this out of owner notifications.',
+        'pending',
+        'normal',
+        'decision',
+        ${sql.json({})}
+      )
   `;
 }
 

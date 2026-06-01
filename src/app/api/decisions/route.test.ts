@@ -57,7 +57,7 @@ describe("GET /api/decisions", () => {
     mocks.recordTaskLifecycleTransitionBestEffort.mockResolvedValue(undefined);
   });
 
-  it("lists task quality feedback only when explicitly included", async () => {
+  it("lists task quality feedback only when explicitly included with internal-system opt-in", async () => {
     mocks.sql.unsafe
       .mockResolvedValueOnce([{ total: "1" }])
       .mockResolvedValueOnce([
@@ -89,7 +89,7 @@ describe("GET /api/decisions", () => {
       ]);
 
     const res = await GET(new Request(
-      "http://localhost/api/decisions?hiveId=hive-1&status=pending&includeKinds=task_quality_feedback",
+      "http://localhost/api/decisions?hiveId=hive-1&status=pending&includeKinds=task_quality_feedback&includeInternalSystem=true",
     ));
     const body = await res.json();
 
@@ -103,7 +103,7 @@ describe("GET /api/decisions", () => {
     });
     expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.kind = ANY");
     expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.is_qa_fixture = false");
-    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("COALESCE(d.options #>> '{lane}', 'owner') = 'owner'");
+    expect(mocks.sql.unsafe.mock.calls[0][0]).not.toContain("COALESCE(d.options #>> '{lane}', 'owner') = 'owner'");
     expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual([
       "hive-1",
       "pending",

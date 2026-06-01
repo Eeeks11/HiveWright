@@ -123,14 +123,19 @@ describe("owner outcome queries", () => {
     expect(query).toContain("jsonb_array_elements_text");
     expect(query).toContain("WITH ORDINALITY");
     expect(query).toContain("JOIN work_products wp ON wp.id::text = evidence_ids.id");
+    expect(query).toContain("JOIN tasks source_task ON source_task.id = wp.task_id");
     expect(query).toContain("ORDER BY oo.created_at DESC");
     expect(query).toContain("wp.hive_id = oo.hive_id");
-    expect(query).toContain("EXISTS");
-    expect(query).toContain("t.goal_id = oo.goal_id");
+    expect(query).toContain("source_task.goal_id = oo.goal_id");
     expect(query).not.toContain("wp.source_url");
     expect(query).toContain("wp.public_url ~* '^https?://'");
     expect(query).toContain("wp.artifact_kind = 'final_artifact'");
-    expect(query).toContain("qa|review|compliance|signoff|audit|rework|notes|checklist|report");
+    expect(query).toContain("WHEN wp.artifact_kind = 'landing_page' THEN 1");
+    expect(query).toContain("WHEN wp.artifact_kind = 'image' THEN 2");
+    expect(query).toContain("WHEN wp.artifact_kind = 'document' THEN 3");
+    expect(query).toContain("WHEN wp.artifact_kind = 'report' THEN 4");
+    expect(query).toContain("doctor|supervisor|peer[- ]?review");
+    expect(query).not.toContain("checklist|report)");
   });
 
   it("counts owner outcomes independently from the latest-outcomes limit", async () => {

@@ -39,10 +39,21 @@ describe("deliverable query helpers", () => {
   });
 
   it("maps list query rows to summaries", async () => {
-    const sql = vi.fn().mockResolvedValue([baseRow]);
+    let query = "";
+    const sql = vi.fn((strings: TemplateStringsArray) => {
+      query = strings.join("?");
+      return Promise.resolve([baseRow]);
+    });
     const summaries = await listDeliverables(sql, { hiveId: "hive-1" });
     expect(summaries).toHaveLength(1);
     expect(summaries[0]).not.toHaveProperty("content");
     expect(sql).toHaveBeenCalledOnce();
+    expect(query).toContain("WHEN wp.artifact_kind = 'landing_page' THEN 1");
+    expect(query).toContain("WHEN wp.artifact_kind = 'image' THEN 2");
+    expect(query).toContain("WHEN wp.artifact_kind = 'document' THEN 3");
+    expect(query).toContain("WHEN wp.artifact_kind = 'report' THEN 4");
+    expect(query.indexOf("WHEN wp.artifact_kind = 'final_artifact' THEN 0")).toBeLessThan(
+      query.indexOf("wp.created_at DESC"),
+    );
   });
 });

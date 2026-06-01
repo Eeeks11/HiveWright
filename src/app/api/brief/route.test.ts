@@ -26,10 +26,17 @@ vi.mock("../initiative-runs/queries", () => ({
 
 import { createBriefGetHandler } from "./get-handler";
 
+function renderQuery(strings: TemplateStringsArray, values: unknown[]): string {
+  return strings.reduce((acc, part, index) => {
+    const value = values[index];
+    return `${acc}${part}${typeof value === "string" ? value : index < values.length ? "?" : ""}`;
+  }, "");
+}
+
 function createDb() {
-  const db = vi.fn((strings: TemplateStringsArray) => {
-    const query = strings.join("?");
-    if (query.includes("FROM decisions") && query.includes("kind = 'decision'") && query.includes("LIMIT 10")) {
+  const db = vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = renderQuery(strings, values);
+    if (query.includes("FROM decisions") && query.includes("LIMIT 10")) {
       return Promise.resolve([
         {
           id: "decision-1",
@@ -139,7 +146,7 @@ describe("GET /api/brief", () => {
     expect(res.status).toBe(200);
     expect(body.data.flags.pendingDecisions).toBe(1);
     expect(body.data.flags.totalPendingDecisions).toBe(1);
-    expect(body.data.flags.pendingQualityFeedback).toBe(5);
+    expect(body.data.flags.pendingQualityFeedback).toBe(0);
     expect(body.data.flags.unreadOutcomes).toBe(11);
     expect(body.data.latestOutcomes).toEqual([
       {
@@ -154,13 +161,17 @@ describe("GET /api/brief", () => {
     expect(body.data.pendingDecisions).toHaveLength(1);
     expect(body.data.operationLock.resumeReadiness.status).toBe("blocked");
     expect(body.data.operationLock.resumeReadiness.blockers[0].code).toBe("no_enabled_models");
-    const queries = db.mock.calls.map((call) => call[0].join("?"));
-    expect(queries.find((query) => query.includes("kind = 'decision'") && query.includes("LIMIT 10")))
-      .toContain("is_qa_fixture = false");
-    expect(queries.find((query) => query.includes("pending_quality_feedback")))
-      .toContain("is_qa_fixture = false");
-    expect(queries.find((query) => query.includes("pending_quality_feedback")))
-      .toContain("COALESCE(options #>> '{lane}', 'owner') = 'owner'");
+    const queries = db.mock.calls.map((call) => renderQuery(call[0], call.slice(1)));
+    const pendingDecisionQuery = queries.find((query) => query.includes("FROM decisions") && query.includes("LIMIT 10"));
+    expect(pendingDecisionQuery).toContain("FROM decisions d");
+    expect(pendingDecisionQuery).toContain("JOIN hives h ON h.id = d.hive_id");
+    expect(pendingDecisionQuery).toContain("LEFT JOIN tasks t ON t.id = d.task_id");
+    expect(pendingDecisionQuery).toContain("is_qa_fixture = false");
+    expect(pendingDecisionQuery).toContain("ownerActionRequired");
+    expect(queries.find((query) => query.includes("pending_quality_feedback"))).toBeUndefined();
+    const goalQuery = queries.find((query) => query.includes("FROM goals g"));
+    expect(goalQuery).toContain("JOIN hives h ON h.id = d.hive_id");
+    expect(goalQuery).toContain("LEFT JOIN tasks t ON t.id = d.task_id");
   });
 
   it("excludes already triaged unresolvable tasks from active dashboard flags", async () => {
@@ -172,7 +183,7 @@ describe("GET /api/brief", () => {
     ));
     await res.json();
 
-    const queries = db.mock.calls.map((call) => call[0].join("?"));
+    const queries = db.mock.calls.map((call) => renderQuery(call[0], call.slice(1)));
     const activityQuery = queries.find((query) => query.includes("tasks_completed_24h"));
     expect(activityQuery).toContain("status = 'unresolvable'");
     expect(activityQuery).toContain("NOT EXISTS");

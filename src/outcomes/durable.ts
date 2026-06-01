@@ -102,19 +102,28 @@ async function selectPrimaryWorkProduct(
       COALESCE(NULLIF(BTRIM(wp.title), ''), NULLIF(BTRIM(wp.filename), ''), 'Deliverable') AS title,
       wp.render_mode
     FROM work_products wp
+    JOIN tasks source_task ON source_task.id = wp.task_id
     WHERE wp.id = ANY(${ids}::uuid[])
       AND wp.hive_id = ${input.hiveId}
-      AND EXISTS (
-        SELECT 1
-        FROM tasks t
-        WHERE t.id = wp.task_id
-          AND t.goal_id = ${input.goalId}
-      )
+      AND source_task.goal_id = ${input.goalId}
     ORDER BY
       CASE
         WHEN wp.artifact_kind = 'final_artifact' THEN 0
-        WHEN COALESCE(wp.title, wp.filename, wp.file_path, '') ~* '(qa|review|compliance|signoff|audit|rework|notes|checklist|report)' THEN 2
-        ELSE 1
+        WHEN CONCAT_WS(
+          ' ',
+          wp.title,
+          wp.filename,
+          wp.file_path,
+          wp.artifact_kind,
+          source_task.assigned_to,
+          source_task.created_by
+        ) ~* '(qa|review|compliance|signoff|audit|rework|notes|checklist|doctor|supervisor|peer[- ]?review)' THEN 7
+        WHEN wp.artifact_kind = 'landing_page' THEN 1
+        WHEN wp.artifact_kind = 'image' THEN 2
+        WHEN wp.artifact_kind = 'document' THEN 3
+        WHEN wp.artifact_kind = 'report' THEN 4
+        WHEN wp.artifact_kind IN ('business_output', 'deliverable', 'asset', 'publication') THEN 5
+        ELSE 6
       END,
       CASE wp.render_mode
         WHEN 'external_url' THEN 0

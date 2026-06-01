@@ -1,22 +1,34 @@
 const INTERNAL_ROLES = [
   "doctor",
+  "goal-supervisor",
   "hive-supervisor",
+  "qa",
+  "quality-doctor",
   "quality-reviewer",
   "system-health-auditor",
 ] as const;
 
 const INTERNAL_TASK_CREATORS = [
   "dispatcher",
+  "doctor",
+  "goal-supervisor",
+  "hive-supervisor",
+  "outbound-notifier",
   "pipeline",
+  "qa",
   "qa-fixture",
+  "quality-doctor",
+  "quality-reviewer",
   "system",
   "system:seed-default-schedules",
   "watchdog",
 ] as const;
 
 const INTERNAL_KINDS = [
+  "learning_gate_followup",
   "system_error",
   "supervisor_flagged",
+  "task_quality_feedback",
   "quality_doctor_recommendation",
   "unresolvable_task_triage",
 ] as const;
@@ -27,6 +39,9 @@ export const INTERNAL_DECISION_SQL = `(
   OR d.kind IN (${INTERNAL_KINDS.map((kind) => `'${kind}'`).join(", ")})
   OR COALESCE(d.options #>> '{lane}', 'owner') = 'ai_peer'
   OR COALESCE(d.options #>> '{provenance}', '') IN ('ai_peer_feedback_sampler')
+  OR COALESCE(d.options #>> '{source}', '') IN ('learning_gate_followup', 'quality_doctor', 'owner_feedback_sampler')
+  OR COALESCE(d.route_metadata #>> '{connectorSlug}', '') = 'ea-discord'
+     AND COALESCE(d.route_metadata #>> '{operation}', '') = 'send_channel'
   OR COALESCE(d.options #>> '{ownerActionRequired}', 'true') = 'false'
   OR COALESCE(d.options #>> '{internal}', 'false') = 'true'
   OR COALESCE(d.options #>> '{system}', 'false') = 'true'
@@ -34,8 +49,21 @@ export const INTERNAL_DECISION_SQL = `(
   OR COALESCE(t.assigned_to, '') IN (${INTERNAL_ROLES.map((role) => `'${role}'`).join(", ")})
   OR COALESCE(t.created_by, '') IN (${INTERNAL_TASK_CREATORS.map((creator) => `'${creator}'`).join(", ")})
   OR LOWER(d.title) LIKE 'ai peer quality review:%'
+  OR LOWER(d.title) LIKE '%task quality%'
+  OR LOWER(d.title) LIKE '%quality feedback%'
+  OR LOWER(d.title) LIKE '%learning gate follow-up%'
+  OR LOWER(d.title) LIKE '%qa recheck%'
+  OR LOWER(d.title) LIKE '%doctor%'
+  OR LOWER(d.title) LIKE '%hive supervisor%'
+  OR LOWER(d.title) LIKE '%outbound notifier%'
+  OR LOWER(d.title) LIKE '%send discord channel message%'
   OR LOWER(d.title) LIKE '%heartbeat%'
   OR LOWER(d.title) LIKE '%watchdog%'
+  OR LOWER(d.context) LIKE '%internal quality feedback%'
+  OR LOWER(d.context) LIKE '%learning gate follow-up%'
+  OR LOWER(d.context) LIKE '%qa recheck%'
+  OR LOWER(d.context) LIKE '%quality doctor%'
+  OR LOWER(d.context) LIKE '%outbound notifier%'
   OR LOWER(d.context) LIKE '%hive supervisor heartbeat%'
   OR LOWER(d.context) LIKE '%watchdog%'
 )`;
@@ -53,6 +81,9 @@ export const INTERNAL_DECISION_REASON_SQL = `
     WHEN d.kind IN (${INTERNAL_KINDS.map((kind) => `'${kind}'`).join(", ")}) THEN 'internal_kind'
     WHEN COALESCE(d.options #>> '{lane}', 'owner') = 'ai_peer' THEN 'ai_peer_lane'
     WHEN COALESCE(d.options #>> '{provenance}', '') IN ('ai_peer_feedback_sampler') THEN 'internal_provenance'
+    WHEN COALESCE(d.options #>> '{source}', '') IN ('learning_gate_followup', 'quality_doctor', 'owner_feedback_sampler') THEN 'internal_source'
+    WHEN COALESCE(d.route_metadata #>> '{connectorSlug}', '') = 'ea-discord'
+      AND COALESCE(d.route_metadata #>> '{operation}', '') = 'send_channel' THEN 'recursive_notification_approval'
     WHEN COALESCE(d.options #>> '{ownerActionRequired}', 'true') = 'false' THEN 'owner_action_not_required'
     WHEN COALESCE(d.options #>> '{internal}', 'false') = 'true'
       OR COALESCE(d.options #>> '{system}', 'false') = 'true'
@@ -60,6 +91,19 @@ export const INTERNAL_DECISION_REASON_SQL = `
     WHEN COALESCE(t.assigned_to, '') IN (${INTERNAL_ROLES.map((role) => `'${role}'`).join(", ")}) THEN 'internal_task_role'
     WHEN COALESCE(t.created_by, '') IN (${INTERNAL_TASK_CREATORS.map((creator) => `'${creator}'`).join(", ")}) THEN 'internal_task_creator'
     WHEN LOWER(d.title) LIKE 'ai peer quality review:%' THEN 'legacy_ai_peer_title'
+    WHEN LOWER(d.title) LIKE '%task quality%'
+      OR LOWER(d.title) LIKE '%quality feedback%'
+      OR LOWER(d.title) LIKE '%learning gate follow-up%'
+      OR LOWER(d.title) LIKE '%qa recheck%'
+      OR LOWER(d.title) LIKE '%doctor%'
+      OR LOWER(d.title) LIKE '%hive supervisor%'
+      OR LOWER(d.title) LIKE '%outbound notifier%'
+      OR LOWER(d.title) LIKE '%send discord channel message%'
+      OR LOWER(d.context) LIKE '%internal quality feedback%'
+      OR LOWER(d.context) LIKE '%learning gate follow-up%'
+      OR LOWER(d.context) LIKE '%qa recheck%'
+      OR LOWER(d.context) LIKE '%quality doctor%'
+      OR LOWER(d.context) LIKE '%outbound notifier%' THEN 'legacy_internal_text'
     WHEN LOWER(d.title) LIKE '%heartbeat%'
       OR LOWER(d.title) LIKE '%watchdog%'
       OR LOWER(d.context) LIKE '%hive supervisor heartbeat%'
