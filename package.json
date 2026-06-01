@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "scripts/with-runtime-env.sh next dev",
-    "build": "scripts/with-runtime-env.sh next build",
+    "build": "next build",
+    "build:runtime": "scripts/with-runtime-env.sh next build",
     "start": "scripts/with-runtime-env.sh next start",
     "lint": "npm run check:route-auth && eslint",
     "typecheck": "tsc --noEmit",
@@ -30,7 +31,7 @@
     "check:migrations": "tsx scripts/check-drizzle-journal.ts",
     "security:scan:daily": "bash scripts/run-security-scan.sh daily",
     "security:scan:weekly": "bash scripts/run-security-scan.sh weekly",
-    "test": "npm run check:migrations && vitest run --maxWorkers=1",
+    "test": "npm run check:migrations && HIVEWRIGHT_SKIP_LOCAL_DB_MIGRATIONS=1 scripts/with-runtime-env.sh vitest run --maxWorkers=1",
     "test:reembed": "vitest run tests/memory/reembed.test.ts",
     "test:watch": "vitest",
     "test:setup-db": "tsx scripts/setup-test-db.ts",

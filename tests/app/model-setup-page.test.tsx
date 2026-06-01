@@ -361,7 +361,7 @@ describe("ModelSetupPage", () => {
 
     render(<ModelSetupPage />);
 
-    expect(await screen.findByText("Benchmarks")).toBeTruthy();
+    expect(await screen.findByText(/Benchmarks/)).toBeTruthy();
     expect(screen.getAllByText("Coding").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Writing").length).toBeGreaterThan(0);
     expect(screen.getByText("53.10")).toBeTruthy();

@@ -71,7 +71,7 @@ export const DEFAULT_SCHEDULE_REGISTRY = ALL_DEFAULT_SCHEDULE_DEFINITIONS.map((d
   tier: definition.tier,
 }));
 
-function defaultScheduleDefinitionsForHive(_hive: HiveSeedContext): DefaultScheduleDefinition[] {
+function defaultScheduleDefinitionsForHive(): DefaultScheduleDefinition[] {
   return COMMON_DEFAULT_SCHEDULE_DEFINITIONS;
 }
 
@@ -161,7 +161,7 @@ export async function seedDefaultSchedules(
 ): Promise<SeedResult> {
   const result: SeedResult = { created: 0, skipped: 0 };
 
-  for (const definition of defaultScheduleDefinitionsForHive(hive)) {
+  for (const definition of defaultScheduleDefinitionsForHive()) {
     if (await hasScheduleWithOrigin(sql, hive.id, definition.key)) {
       result.skipped++;
       continue;

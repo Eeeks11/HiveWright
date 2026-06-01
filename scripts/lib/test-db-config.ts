@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import postgres from "postgres";
+import { resolveLocalPostgresConfig } from "./local-postgres";
 
 export type TestDatabaseConfig = {
   adminUrl: string;
@@ -111,11 +112,23 @@ function adminUrlFor(host: string, port: string, user: string, env: TestDatabase
   return parsed.toString();
 }
 
+function managedLocalCandidate(env: TestDatabaseEnv = process.env): TestDatabaseConfig {
+  const config = resolveLocalPostgresConfig(env);
+  const adminUrl = withDatabase(config.url, "postgres");
+  return {
+    adminUrl,
+    testUrl: withDatabase(adminUrl, TEST_DB_NAME_PREFIX),
+    databaseName: TEST_DB_NAME_PREFIX,
+    source: "auto",
+  };
+}
+
 export function defaultLocalCandidates(env: TestDatabaseEnv = process.env): TestDatabaseConfig[] {
   const ports = Array.from(new Set([env.PGPORT, "5432", "5433"].filter(Boolean))) as string[];
   const users = Array.from(new Set([env.PGUSER, env.USER, "postgres"].filter(Boolean))) as string[];
+  const managed = managedLocalCandidate(env);
 
-  return ports.flatMap((port) => users.map((user) => {
+  const conventionalCandidates: TestDatabaseConfig[] = ports.flatMap((port) => users.map((user) => {
     const adminUrl = adminUrlFor("localhost", port, user, env);
     return {
       adminUrl,
@@ -124,6 +137,7 @@ export function defaultLocalCandidates(env: TestDatabaseEnv = process.env): Test
       source: "auto" as const,
     };
   }));
+  return [...conventionalCandidates, managed];
 }
 
 async function canConnect(adminUrl: string) {

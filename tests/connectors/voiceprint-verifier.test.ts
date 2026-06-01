@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { supportsPgvector, testSql as sql, truncateAll } from "../_lib/test-db";
 import { VoiceprintVerifier } from "@/connectors/voice/voiceprint-verifier";
 
 /**
@@ -20,6 +20,8 @@ import { VoiceprintVerifier } from "@/connectors/voice/voiceprint-verifier";
  */
 
 const HIVE_ID = "00000000-0000-0000-0000-000000000001";
+const pgvectorAvailable = await supportsPgvector(sql);
+const vectorIt = pgvectorAvailable ? it : it.skip;
 
 async function seedHive() {
   await truncateAll(sql);
@@ -80,7 +82,7 @@ describe("VoiceprintVerifier", () => {
     expect(onFail).not.toHaveBeenCalled();
   });
 
-  it("does not fail when similarity stays above threshold", async () => {
+  vectorIt("does not fail when similarity stays above threshold", async () => {
     const embedding = new Array(192).fill(0).map((_, i) => (i < 96 ? 1 : 0));
     const vecLiteral = `[${embedding.join(",")}]`;
     await sql`
@@ -115,7 +117,7 @@ describe("VoiceprintVerifier", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
-  it("calls onFail after 3 consecutive mismatched windows", async () => {
+  vectorIt("calls onFail after 3 consecutive mismatched windows", async () => {
     const enrolled = new Array(192).fill(0).map((_, i) => (i < 96 ? 1 : 0));
     // Opposite-direction vector → cosine similarity = -0.5 → below 0.55
     // threshold → every window counts as a fail.

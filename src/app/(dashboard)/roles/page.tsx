@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ProvisionBadge } from "../../../components/provision-badge";
 import type { ProvisionStatus } from "../../../provisioning/types";
 import { RunsTable, type RunsTableRow } from "@/components/runs-table";
@@ -90,13 +90,13 @@ export default function RolesPage() {
   const [observabilityLoading, setObservabilityLoading] = useState(false);
   const [observabilityError, setObservabilityError] = useState<string | null>(null);
 
-  const rolesApiPath = (includeInactive = false) => {
+  const rolesApiPath = useCallback((includeInactive = false) => {
     const params = new URLSearchParams();
     if (includeInactive) params.set("includeInactive", "true");
     if (selectedHive?.id) params.set("hiveId", selectedHive.id);
     const query = params.toString();
     return query ? `/api/roles?${query}` : "/api/roles";
-  };
+  }, [selectedHive?.id]);
 
   useEffect(() => {
     fetch(rolesApiPath())
@@ -119,7 +119,7 @@ export default function RolesPage() {
       .then(r => r.json())
       .then(b => { if (Array.isArray(b.data)) setMcpCatalog(b.data); })
       .catch(() => {});
-  }, [selectedHive?.id]);
+  }, [rolesApiPath]);
 
   useEffect(() => {
     if (!selectedHive?.id) {
@@ -238,23 +238,36 @@ export default function RolesPage() {
     if (!edit) return;
     setSaving(slug);
 
-    await fetch("/api/roles", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        slug,
-        hiveId: selectedHive?.id,
-        recommendedModel: edit.model,
-        adapterType: edit.adapter,
-        fallbackModel: edit.fallback,
-        fallbackAdapterType: edit.fallbackAdapter,
-        concurrencyLimit: edit.concurrencyLimit,
-      }),
-    });
+    try {
+      const res = await fetch("/api/roles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slug,
+          hiveId: selectedHive?.id,
+          recommendedModel: edit.model,
+          adapterType: edit.adapter,
+          fallbackModel: edit.fallback,
+          fallbackAdapterType: edit.fallbackAdapter,
+          concurrencyLimit: edit.concurrencyLimit,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
 
-    setSaving(null);
-    setEdits(prev => { const n = { ...prev }; delete n[slug]; return n; });
-    await refreshRoles();
+      setErrors((prev) => ({ ...prev, [slug]: "" }));
+      setEdits(prev => { const n = { ...prev }; delete n[slug]; return n; });
+      await refreshRoles();
+    } catch (err) {
+      setErrors((prev) => ({
+        ...prev,
+        [slug]: `Role save failed: ${(err as Error).message}`,
+      }));
+    } finally {
+      setSaving(null);
+    }
   };
 
   const refreshRoles = async () => {

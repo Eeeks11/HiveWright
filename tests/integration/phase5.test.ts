@@ -180,7 +180,7 @@ describe("Phase 5 Integration: Interfaces", () => {
 
     // Search memory and verify it's found
     const searchReq = new Request(
-      `${BASE}/api/memory/search?hiveId=${bizId}&q=p5-int-directive`,
+      `${BASE}/api/memory/search?hiveId=${bizId}&q=p5-int-directive&view=full`,
     );
     const searchRes = await searchMemory(searchReq);
     expect(searchRes.status).toBe(200);
@@ -188,8 +188,8 @@ describe("Phase 5 Integration: Interfaces", () => {
     const searchBody = await searchRes.json();
     const results = searchBody.data;
     expect(Array.isArray(results)).toBe(true);
-    const match = results.find((r: { content: string }) =>
-      r.content.includes("p5-int-directive"),
+    const match = results.find((r: { content: string | null }) =>
+      typeof r.content === "string" && r.content.includes("p5-int-directive"),
     );
     expect(match).toBeDefined();
   });
