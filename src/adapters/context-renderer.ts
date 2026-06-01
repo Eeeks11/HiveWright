@@ -153,7 +153,12 @@ function renderMemory(memory: MemoryContext, lean: boolean): string {
 }
 
 function renderSkills(skills: string[], lean: boolean): string {
-  const parts = ["## Relevant Skills"];
+  const parts = [
+    "## Preloaded Skill References",
+    "The skill reference text below is already loaded into this prompt. In lean context it may be compact, but the named skills are still available guidance for this task.",
+    "Do not try to call a separate skill loader or claim a named skill is unavailable because it is not tool-callable.",
+    "Use these references silently while doing the task. Do not announce skill usage unless it is necessary owner-facing evidence.",
+  ];
   for (const skill of lean ? skills.slice(0, 4) : skills) {
     parts.push(lean ? compactSkill(skill) : skill);
   }
