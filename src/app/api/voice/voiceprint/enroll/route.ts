@@ -75,13 +75,6 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
   }
 
-  if (!(await ownerVoiceprintsAvailable())) {
-    return NextResponse.json(
-      { error: "voiceprint enrollment unavailable: pgvector/owner_voiceprints is not installed for this database" },
-      { status: 503 },
-    );
-  }
-
   const audioBuf = Buffer.from(await sample.arrayBuffer());
   if (audioBuf.length > MAX_SAMPLE_BYTES) {
     return NextResponse.json(
@@ -140,6 +133,13 @@ export async function POST(req: Request): Promise<NextResponse> {
     return NextResponse.json(
       { error: "voice services returned malformed embedding" },
       { status: 502 },
+    );
+  }
+
+  if (!(await ownerVoiceprintsAvailable())) {
+    return NextResponse.json(
+      { error: "voiceprint enrollment unavailable: pgvector/owner_voiceprints is not installed for this database" },
+      { status: 503 },
     );
   }
 

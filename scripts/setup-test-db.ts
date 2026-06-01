@@ -2,16 +2,11 @@
  * Ensures the `hivewright_test` database exists, has pgvector enabled,
  * and is fully migrated. Idempotent — safe to run repeatedly.
  *
- * Refuses to run against any database name other than `hivewright_test`
+ * Refuses to run against any database name outside the test prefix
  * as a safety net so we never accidentally migrate or truncate prod.
  *
- * Pre-requisite: pgvector must be installable by the connecting user. Our
- * `hivewright` role may not be a Postgres superuser, so pgvector may need to be
- * pre-enabled in `hivewright_test` by a one-time superuser command:
- *   sudo -u postgres psql -d hivewright_test \
- *     -c "CREATE EXTENSION IF NOT EXISTS vector;"
- * After that, this script's CREATE EXTENSION IF NOT EXISTS is a no-op for
- * the test DB and stays idempotent.
+ * pgvector is optional. Tests that need vector-backed tables should skip when
+ * the local Postgres binary cannot provide the extension.
  */
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -70,15 +65,14 @@ async function main() {
       const msg = err instanceof Error ? err.message : String(err);
       if (code === "42501" || msg.includes("permission denied") || msg.includes("superuser")) {
         throw new Error(
-          `[setup-test-db] cannot install pgvector: ${msg}\n\n` +
-            `pgvector requires superuser to install. Run this once and re-try:\n` +
-            `  sudo -u postgres psql -d ${config.databaseName} \\\n` +
-            `    -c "CREATE EXTENSION IF NOT EXISTS vector;"\n\n` +
-            `Or grant the hivewright role superuser in a local-only test database:\n` +
-            `  sudo -u postgres psql -c "ALTER ROLE hivewright SUPERUSER;"`,
+          `[setup-test-db] cannot install pgvector: ${msg}`,
         );
       }
-      throw err;
+      if (code === "0A000" || msg.includes("extension \"vector\" is not available")) {
+        console.log(`[setup-test-db] pgvector unavailable; vector-backed optional tables will be skipped`);
+      } else {
+        throw err;
+      }
     }
 
     const db = drizzle(sql);

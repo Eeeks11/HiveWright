@@ -9,6 +9,7 @@ export default function SchedulesPage() {
   const { selected, loading: bizLoading } = useHiveContext();
   const [schedules, setSchedules] = useState<ScheduleListItem[]>([]);
   const [editingSchedule, setEditingSchedule] = useState<ScheduleListItem | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -19,14 +20,34 @@ export default function SchedulesPage() {
   }, [selected]);
 
   const toggle = async (id: string, enabled: boolean) => {
-    await fetch("/api/schedules", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: selected?.id, id, enabled }) });
-    setSchedules(prev => prev.map(s => s.id === id ? { ...s, enabled } : s));
+    setMutationError(null);
+    const res = await fetch("/api/schedules", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hiveId: selected?.id, id, enabled }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setMutationError(`Schedule update failed: ${body.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
+    setSchedules((prev) => prev.map((s) => s.id === id ? { ...s, enabled } : s));
   };
 
   const deleteSchedule = async (id: string) => {
     if (!confirm("Delete this schedule?")) return;
-    await fetch("/api/schedules", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: selected?.id, id }) });
-    setSchedules(prev => prev.filter(s => s.id !== id));
+    setMutationError(null);
+    const res = await fetch("/api/schedules", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hiveId: selected?.id, id }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      setMutationError(`Schedule deletion failed: ${body.error ?? `HTTP ${res.status}`}`);
+      return;
+    }
+    setSchedules((prev) => prev.filter((s) => s.id !== id));
   };
 
   if (bizLoading) return <p className="text-zinc-400">Loading...</p>;
@@ -48,6 +69,11 @@ export default function SchedulesPage() {
         Schedules are created through work intake — describe what you want automated and the system will set it up.
       </p>
 
+      {mutationError ? (
+        <p role="alert" className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+          {mutationError}
+        </p>
+      ) : null}
       <SchedulesTable
         schedules={schedules}
         onOpenSchedule={(id) => router.push(`/schedules/${id}`)}

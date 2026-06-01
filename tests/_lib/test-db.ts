@@ -94,6 +94,7 @@ export interface TestModelRoutingFixtureOptions {
 let fixtureNamespaceCounter = 0;
 const FIXTURE_RUN_ID = randomUUID();
 const fixtureNamespaceCountersByContext = new Map<string, number>();
+const pgvectorSupportBySql = new WeakMap<object, Promise<boolean>>();
 let testDbLockConnection: ReservedTestSql | null = null;
 let testDbLockReleased = false;
 const ISOLATED_SUITE_LOCK_IDS = (() => {
@@ -129,6 +130,28 @@ const testDbLockPromise = (async () => {
 })();
 
 await testDbLockPromise;
+
+export async function supportsPgvector(sql = testSql): Promise<boolean> {
+  const key = sql as object;
+  const cached = pgvectorSupportBySql.get(key);
+  if (cached) return cached;
+
+  const supportPromise = (async () => {
+    try {
+      await sql`CREATE EXTENSION IF NOT EXISTS vector`;
+      return true;
+    } catch (err: unknown) {
+      const code = (err as { code?: string } | null)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (code === "0A000" || msg.includes("extension \"vector\" is not available")) {
+        return false;
+      }
+      throw err;
+    }
+  })();
+  pgvectorSupportBySql.set(key, supportPromise);
+  return supportPromise;
+}
 
 function compactFixtureLabel(label: string): string {
   const compact = label

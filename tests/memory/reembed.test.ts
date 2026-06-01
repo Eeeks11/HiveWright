@@ -8,14 +8,16 @@ import {
   runEmbeddingReembedJob,
   runReembedJob,
 } from "../../src/memory/reembed";
-import { testSql as sql, truncateAll } from "../_lib/test-db";
+import { supportsPgvector, testSql as sql, truncateAll } from "../_lib/test-db";
 
 const CONFIG_ID = "00000000-0000-0000-0000-0000000000c1";
+const pgvectorAvailable = await supportsPgvector(sql);
+const vectorIt = pgvectorAvailable ? it : it.skip;
+
 beforeEach(async () => {
   await truncateAll(sql);
   resetEmbeddingConfigCache();
 
-  await sql`CREATE EXTENSION IF NOT EXISTS vector`;
   await sql`
     INSERT INTO embedding_config (
       id,
@@ -47,7 +49,7 @@ beforeEach(async () => {
 });
 
 describe("runReembedJob", () => {
-  it("resumes from last_reembedded_id without reprocessing completed rows", async () => {
+  vectorIt("resumes from last_reembedded_id without reprocessing completed rows", async () => {
     await seedMemoryRows(["alpha", "bravo", "charlie"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -91,7 +93,7 @@ describe("runReembedJob", () => {
     expect(Number(embedded)).toBe(3);
   });
 
-  it("records per-row failures with triage fields and leaves search working for successful rows", async () => {
+  vectorIt("records per-row failures with triage fields and leaves search working for successful rows", async () => {
     await seedMemoryRows(["findable", "broken"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -150,7 +152,7 @@ describe("runReembedJob", () => {
     expect(results.some((row) => row.chunkText === "broken")).toBe(false);
   });
 
-  it("retries transient malformed embedding responses and succeeds deterministically", async () => {
+  vectorIt("retries transient malformed embedding responses and succeeds deterministically", async () => {
     await seedMemoryRows(["recoverable"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -187,7 +189,7 @@ describe("runReembedJob", () => {
     expect(errors).toHaveLength(0);
   });
 
-  it("allows an explicit rerun to recover rows that previously failed with malformed responses", async () => {
+  vectorIt("allows an explicit rerun to recover rows that previously failed with malformed responses", async () => {
     await seedMemoryRows(["alpha", "bravo"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -260,7 +262,7 @@ describe("runReembedJob", () => {
     expect(remainingErrors).toHaveLength(0);
   });
 
-  it("stops promptly when the config is cancelled mid-run", async () => {
+  vectorIt("stops promptly when the config is cancelled mid-run", async () => {
     await seedMemoryRows(["alpha", "bravo"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -299,7 +301,7 @@ describe("runReembedJob", () => {
     expect(embeddingState.embedded).toBe(0);
   });
 
-  it("does not let a stale worker continue after the same config is restarted", async () => {
+  vectorIt("does not let a stale worker continue after the same config is restarted", async () => {
     await seedMemoryRows(["alpha", "bravo"]);
     await beginReembedRun(sql, CONFIG_ID, 1536);
 
@@ -344,7 +346,7 @@ describe("runReembedJob", () => {
     expect(embeddingState.embedded).toBe(0);
   });
 
-  it("migrates vector dimension without losing chunk text and noops after completion", async () => {
+  vectorIt("migrates vector dimension without losing chunk text and noops after completion", async () => {
     await sql`CREATE EXTENSION IF NOT EXISTS vector`;
     await sql.unsafe(`ALTER TABLE memory_embeddings ADD COLUMN IF NOT EXISTS embedding vector(768)`);
     await sql.unsafe(`ALTER TABLE memory_embeddings ALTER COLUMN embedding TYPE vector(768) USING NULL`);

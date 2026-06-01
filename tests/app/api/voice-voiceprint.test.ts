@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { testSql as sql, truncateAll } from "../../_lib/test-db";
+import { supportsPgvector, testSql as sql, truncateAll } from "../../_lib/test-db";
 import { POST } from "@/app/api/voice/voiceprint/enroll/route";
 
 /**
@@ -13,6 +13,8 @@ import { POST } from "@/app/api/voice/voiceprint/enroll/route";
  */
 
 const HIVE_ID = "00000000-0000-0000-0000-000000000001";
+const pgvectorAvailable = await supportsPgvector(sql);
+const vectorIt = pgvectorAvailable ? it : it.skip;
 
 function wavForm(bytes = 100): FormData {
   const form = new FormData();
@@ -58,7 +60,7 @@ describe("POST /api/voice/voiceprint/enroll", () => {
     delete process.env.VOICE_SERVICES_URL;
   });
 
-  it("stores a 192-d vector in owner_voiceprints", async () => {
+  vectorIt("stores a 192-d vector in owner_voiceprints", async () => {
     const res = await POST(enrollRequest(wavForm()));
     expect(res.status).toBe(200);
     const body = await res.json();

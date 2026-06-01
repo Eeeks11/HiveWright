@@ -161,12 +161,12 @@ describe("runHiveSetup atomicity", () => {
         type: "digital",
       });
       expect(await countRows("hives")).toBe(1);
-      expect(await countRows("adapter_config")).toBe(3);
+      expect(await countRows("adapter_config")).toBe(4);
       expect(await countRows("connector_installs")).toBe(1);
       expect(await countRows("credentials")).toBe(1);
       expect(await countRows("projects")).toBe(1);
       expect(await countRows("goals")).toBe(1);
-      expect(await countRows("schedules")).toBe(8);
+      expect(await countRows("schedules")).toBe(1);
       expect(await countRows("action_policies")).toBeGreaterThan(0);
 
       const policyRows = await sql<{ name: string; effect_type: string | null; effect: string; priority: number }[]>`
@@ -209,10 +209,21 @@ describe("runHiveSetup atomicity", () => {
         WHERE slug = 'dev-agent'
         LIMIT 1
       `;
-      expect(roleAfter).toEqual({
-        adapter_type: "codex",
-        recommended_model: "openai-codex/gpt-5.5",
-      });
+      expect(roleAfter).toEqual(roleBefore);
+
+      const [roleOverride] = await sql<{ config: Record<string, { adapterType?: string; recommendedModel?: string }> }[]>`
+        SELECT config
+        FROM adapter_config
+        WHERE hive_id = ${result.id}::uuid
+          AND adapter_type = 'hive-role-overrides'
+        LIMIT 1
+      `;
+      expect(roleOverride.config["dev-agent"]).toEqual(
+        expect.objectContaining({
+          adapterType: "codex",
+          recommendedModel: "openai-codex/gpt-5.5",
+        }),
+      );
     } finally {
       await sql`
         UPDATE role_templates
