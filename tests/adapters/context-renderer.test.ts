@@ -137,6 +137,19 @@ describe("renderSessionPrompt", () => {
     expect(prompt).not.toContain("## Retrieval And Evidence");
   });
 
+  it("labels injected skills as preloaded references rather than callable tools", () => {
+    const prompt = renderSessionPrompt(makeCtx({
+      skills: ["## Skill: hivewright-ops\n\n# HiveWright Operational Conventions\nFollow operational guardrails."],
+    }));
+
+    expect(prompt).toContain("## Preloaded Skill References");
+    expect(prompt).toContain("The skill reference text below is already loaded into this prompt");
+    expect(prompt).toContain("Do not try to call a separate skill loader");
+    expect(prompt).toContain("Do not announce skill usage");
+    expect(prompt).toContain("hivewright-ops");
+    expect(prompt).not.toContain("## Relevant Skills");
+  });
+
   it("renders git-backed project discipline only when the session is explicitly git-backed", () => {
     const plainPrompt = renderSessionPrompt(makeCtx({ gitBackedProject: false }));
     const repoPrompt = renderSessionPrompt(makeCtx({ gitBackedProject: true }));

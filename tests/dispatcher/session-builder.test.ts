@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import path from "path";
 import { buildSessionContext } from "@/dispatcher/session-builder";
+import { renderSessionPrompt } from "@/adapters/context-renderer";
 import { storeCredential } from "@/credentials/manager";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { syncRoleLibrary } from "@/roles/sync";
@@ -179,6 +180,50 @@ describe("buildSessionContext", () => {
     expect(ctx.credentials.HIVEWRIGHT_TASK_ID).toBe(task.id);
     expect(ctx.credentials.HIVEWRIGHT_HIVE_ID).toBe(bizId);
     expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "executor_default" });
+  });
+
+  it("injects goal-supervisor hivewright-ops as a preloaded skill reference", async () => {
+    await sql`
+      UPDATE adapter_config
+      SET config = ${sql.json({
+        routeOverrides: {
+          "openai:codex:openai-codex/gpt-5.5": {
+            roleSlugs: ["goal-supervisor"],
+          },
+        },
+      })}
+      WHERE hive_id = ${bizId} AND adapter_type = 'model-routing'
+    `;
+
+    const task: ClaimedTask = {
+      id: "00000000-0000-0000-0000-0000000000bb",
+      hiveId: bizId,
+      assignedTo: "goal-supervisor",
+      createdBy: "dispatcher",
+      status: "active",
+      priority: 5,
+      title: "[Replan] QA failed repeatedly",
+      brief: "Replan the failed goal without replaying old transcript noise.",
+      parentTaskId: null,
+      goalId: "00000000-0000-0000-0000-0000000000bc",
+      sprintNumber: null,
+      qaRequired: false,
+      acceptanceCriteria: null,
+      retryCount: 0,
+      doctorAttempts: 0,
+      failureReason: null,
+      projectId: null,
+    };
+
+    const ctx = await buildSessionContext(sql, task);
+    const prompt = renderSessionPrompt(ctx);
+
+    expect(ctx.roleTemplate.slug).toBe("goal-supervisor");
+    expect(ctx.skills.some((skill) => skill.includes("## Skill: hivewright-ops"))).toBe(true);
+    expect(prompt).toContain("## Preloaded Skill References");
+    expect(prompt).toContain("Skill: hivewright-ops");
+    expect(prompt).toContain("Do not try to call a separate skill loader");
+    expect(prompt).toContain("Do not announce skill usage");
   });
 
   it("uses lean context for QA/replan system review tasks to prevent transcript replay", async () => {
