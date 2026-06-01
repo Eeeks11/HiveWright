@@ -24,7 +24,6 @@ vi.mock("@/memory/embeddings", () => ({
 
 vi.mock("@/hives/reference-document-review", () => ({
   createReferenceDocumentReviewJob: vi.fn(),
-  processReferenceDocumentReviewJob: vi.fn(),
 }));
 
 import { GET, POST } from "./route";
@@ -32,7 +31,7 @@ import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { canAccessHive, canMutateHive } from "@/auth/users";
 import { checkPgvectorAvailable, storeEmbedding } from "@/memory/embeddings";
-import { createReferenceDocumentReviewJob, processReferenceDocumentReviewJob } from "@/hives/reference-document-review";
+import { createReferenceDocumentReviewJob } from "@/hives/reference-document-review";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
@@ -41,7 +40,6 @@ const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockCheckPgvectorAvailable = checkPgvectorAvailable as unknown as ReturnType<typeof vi.fn>;
 const mockStoreEmbedding = storeEmbedding as unknown as ReturnType<typeof vi.fn>;
 const mockCreateReferenceDocumentReviewJob = createReferenceDocumentReviewJob as unknown as ReturnType<typeof vi.fn>;
-const mockProcessReferenceDocumentReviewJob = processReferenceDocumentReviewJob as unknown as ReturnType<typeof vi.fn>;
 const params = { params: Promise.resolve({ id: "hive-1" }) };
 
 let tempRoot = "";
@@ -70,7 +68,6 @@ describe("GET /api/hives/[id]/files", () => {
     mockCheckPgvectorAvailable.mockResolvedValue(false);
     mockStoreEmbedding.mockResolvedValue(["embedding-1"]);
     mockCreateReferenceDocumentReviewJob.mockResolvedValue({ id: "review-1", status: "pending" });
-    mockProcessReferenceDocumentReviewJob.mockResolvedValue([]);
   });
 
   afterEach(async () => {
@@ -251,12 +248,7 @@ describe("GET /api/hives/[id]/files", () => {
       hiveId: "hive-1",
       documentId: "11111111-1111-4111-8111-111111111111",
     });
-    await vi.waitFor(() => expect(mockProcessReferenceDocumentReviewJob).toHaveBeenCalledWith(mockSql, expect.objectContaining({
-      hiveId: "hive-1",
-      documentId: "11111111-1111-4111-8111-111111111111",
-      reviewJobId: "review-1",
-      documentText: expect.stringContaining("Refunds require 48 hours notice"),
-    })));
+    expect(body.data.item.review).toEqual({ id: "review-1", status: "pending" });
   });
 
   it("rejects reference document uploads for read-only hive members", async () => {

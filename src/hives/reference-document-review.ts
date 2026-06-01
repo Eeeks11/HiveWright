@@ -117,9 +117,10 @@ export async function createReferenceDocumentReviewJob(
   const [row] = await sql<ReviewJobRow[]>`
     INSERT INTO hive_reference_document_review_jobs (hive_id, document_id, status, updated_at)
     VALUES (${input.hiveId}::uuid, ${input.documentId}::uuid, 'pending', NOW())
-    ON CONFLICT (document_id) DO UPDATE SET updated_at = NOW()
+    ON CONFLICT (hive_id, document_id) DO UPDATE SET status = 'pending', error = NULL, updated_at = NOW()
     RETURNING id, hive_id, document_id, status, error, reviewed_by, reviewed_at, created_at, updated_at
   `;
+  await sql`SELECT pg_notify('new_reference_document_review', ${row.id})`;
   return rowToJob(row);
 }
 
@@ -132,7 +133,7 @@ export async function listReferenceDocumentReviews(
       j.id, j.hive_id, j.document_id, j.status, j.error, j.reviewed_by, j.reviewed_at, j.created_at, j.updated_at,
       d.id AS doc_id, d.filename, d.relative_path, d.mime_type, d.size_bytes, d.uploaded_at
     FROM hive_reference_document_review_jobs j
-    JOIN hive_reference_documents d ON d.id = j.document_id
+    JOIN hive_reference_documents d ON d.id = j.document_id AND d.hive_id = j.hive_id
     WHERE j.hive_id = ${hiveId}::uuid
     ORDER BY j.created_at DESC
     LIMIT 200
@@ -142,6 +143,7 @@ export async function listReferenceDocumentReviews(
   const proposalRows = await sql<ProposalRow[]>`
     SELECT * FROM hive_reference_document_record_proposals
     WHERE review_job_id = ANY(${ids}::uuid[])
+      AND hive_id = ${hiveId}::uuid
     ORDER BY created_at ASC
   `;
   const byJob = new Map<string, ReferenceDocumentRecordProposal[]>();
@@ -176,11 +178,23 @@ export async function storeExtractedReferenceDocumentProposals(
   sql: ReferenceDocumentReviewSql,
   input: { hiveId: string; documentId: string; reviewJobId: string; proposals: ExtractedReferenceRecordProposal[] },
 ): Promise<ReferenceDocumentRecordProposal[]> {
+  const [matchingJob] = await sql<{ id: string }[]>`
+    SELECT j.id
+    FROM hive_reference_document_review_jobs j
+    JOIN hive_reference_documents d ON d.id = j.document_id AND d.hive_id = j.hive_id
+    WHERE j.id = ${input.reviewJobId}::uuid
+      AND j.hive_id = ${input.hiveId}::uuid
+      AND j.document_id = ${input.documentId}::uuid
+    LIMIT 1
+  `;
+  if (!matchingJob) throw new Error("reference document review job does not match hive/document");
+
   const normalized = normalizeExtractedProposals(input.proposals);
   await sql`
     DELETE FROM hive_reference_document_record_proposals
     WHERE review_job_id = ${input.reviewJobId}::uuid
       AND hive_id = ${input.hiveId}::uuid
+      AND document_id = ${input.documentId}::uuid
       AND decision = 'pending'
   `;
   const stored: ReferenceDocumentRecordProposal[] = [];
@@ -216,6 +230,42 @@ export async function storeExtractedReferenceDocumentProposals(
     WHERE id = ${input.reviewJobId}::uuid AND hive_id = ${input.hiveId}::uuid
   `;
   return stored;
+}
+
+export async function claimNextPendingReferenceDocumentReviewJob(
+  sql: ReferenceDocumentReviewSql,
+): Promise<ReferenceDocumentReviewJob | null> {
+  const [row] = await sql<ReviewJobRow[]>`
+    WITH next_job AS (
+      SELECT j.id
+      FROM hive_reference_document_review_jobs j
+      JOIN hive_reference_documents d ON d.id = j.document_id AND d.hive_id = j.hive_id
+      WHERE j.status = 'pending'
+         OR (j.status IN ('extracting', 'processing') AND j.updated_at < NOW() - INTERVAL '15 minutes')
+      ORDER BY j.created_at ASC
+      FOR UPDATE SKIP LOCKED
+      LIMIT 1
+    )
+    UPDATE hive_reference_document_review_jobs j
+    SET status = 'extracting', error = NULL, updated_at = NOW()
+    FROM next_job
+    WHERE j.id = next_job.id
+    RETURNING j.id, j.hive_id, j.document_id, j.status, j.error, j.reviewed_by, j.reviewed_at, j.created_at, j.updated_at
+  `;
+  return row ? rowToJob(row) : null;
+}
+
+export async function processNextPendingReferenceDocumentReviewJob(
+  sql: ReferenceDocumentReviewSql,
+): Promise<ReferenceDocumentRecordProposal[] | null> {
+  const job = await claimNextPendingReferenceDocumentReviewJob(sql);
+  if (!job) return null;
+  return processReferenceDocumentReviewJob(sql, {
+    hiveId: job.hiveId,
+    documentId: job.documentId,
+    reviewJobId: job.id,
+    documentText: null,
+  });
 }
 
 export async function failReferenceDocumentReviewJob(
@@ -269,6 +319,7 @@ export async function processReferenceDocumentReviewJob(
         reviewJobId: input.reviewJobId,
         documentId: input.documentId,
         documentText: text,
+        model: runtime.model,
       });
     } else {
       const provider = input.provider ?? runtime?.provider;
@@ -337,8 +388,17 @@ export async function decideReferenceDocumentProposal(
   },
 ): Promise<{ proposal: ReferenceDocumentRecordProposal; record: HiveRecord | null }> {
   const [proposalRow] = await sql<ProposalRow[]>`
-    SELECT * FROM hive_reference_document_record_proposals
-    WHERE id = ${input.proposalId}::uuid AND hive_id = ${input.hiveId}::uuid
+    SELECT p.*
+    FROM hive_reference_document_record_proposals p
+    JOIN hive_reference_document_review_jobs j
+      ON j.id = p.review_job_id
+     AND j.hive_id = p.hive_id
+     AND j.document_id = p.document_id
+    JOIN hive_reference_documents d
+      ON d.id = p.document_id
+     AND d.hive_id = p.hive_id
+    WHERE p.id = ${input.proposalId}::uuid
+      AND p.hive_id = ${input.hiveId}::uuid
     LIMIT 1
   `;
   if (!proposalRow) throw new Error("proposal not found");
@@ -394,7 +454,10 @@ export async function decideReferenceDocumentProposal(
         decided_by = ${input.userId}::uuid,
         decided_at = NOW(),
         updated_at = NOW()
-    WHERE id = ${input.proposalId}::uuid AND hive_id = ${input.hiveId}::uuid
+    WHERE id = ${input.proposalId}::uuid
+      AND hive_id = ${input.hiveId}::uuid
+      AND review_job_id = ${current.reviewJobId}::uuid
+      AND document_id = ${current.documentId}::uuid
     RETURNING *
   `;
 

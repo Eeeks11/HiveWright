@@ -7,6 +7,7 @@ import { inflateRawSync } from "node:zlib";
 export const REFERENCE_DOCUMENT_MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const REFERENCE_DOCUMENT_MAX_TEXT_CHARS = 60_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+const ENABLE_LIBREOFFICE_DOC_EXTRACTION = process.env.HIVEWRIGHT_ENABLE_LIBREOFFICE_DOC_EXTRACTION === "true" || process.env.NODE_ENV !== "production";
 const DIRECT_TEXT_EXTENSIONS = new Set([".txt", ".md", ".markdown", ".csv", ".json"]);
 
 export interface ExtractReferenceDocumentTextInput {
@@ -56,8 +57,10 @@ export async function extractReferenceDocumentText(input: ExtractReferenceDocume
   if (ext === ".doc") {
     const pandoc = await runOptionalCommand("pandoc", [filePath, "-t", "plain"], { timeoutMs, maxOutputBytes: maxTextChars * 4 });
     if (pandoc.ok && pandoc.stdout.trim()) return boundExtractedText(pandoc.stdout, maxTextChars, "pandoc");
-    const libre = await extractDocWithLibreOffice(filePath, timeoutMs, maxTextChars);
-    if (libre) return libre;
+    if (ENABLE_LIBREOFFICE_DOC_EXTRACTION) {
+      const libre = await extractDocWithLibreOffice(filePath, timeoutMs, maxTextChars);
+      if (libre) return libre;
+    }
     throw new Error("Legacy .doc extraction is not available. Convert the file to .docx, .pdf with selectable text, .txt, or .md and retry.");
   }
   throw new Error(`Unsupported reference document type '${ext || "unknown"}'. Upload .txt, .md, .csv, .json, .docx, .pdf, or convertible .doc.`);
@@ -98,26 +101,39 @@ async function commandExists(command: string): Promise<boolean> {
 
 async function runOptionalCommand(command: string, args: string[], options: { timeoutMs: number; maxOutputBytes: number }): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   if (!(await commandExists(command))) return { ok: false, stdout: "", stderr: `${command} not found` };
-  return new Promise((resolve) => {
-    execFile(command, args, {
-      timeout: options.timeoutMs,
-      maxBuffer: options.maxOutputBytes,
-      windowsHide: true,
-      env: minimalCommandEnv(),
-    }, (error, stdout, stderr) => {
-      resolve({ ok: !error, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+  const tempDir = await fs.mkdtemp(path.join(process.env.TMPDIR ?? "/tmp", "hw-extract-cmd-"));
+  try {
+    await fs.mkdir(path.join(tempDir, "home"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg-config"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg-cache"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg-data"), { recursive: true });
+    return await new Promise((resolve) => {
+      execFile(command, args, {
+        cwd: tempDir,
+        timeout: options.timeoutMs,
+        maxBuffer: options.maxOutputBytes,
+        windowsHide: true,
+        env: minimalCommandEnv(tempDir),
+      }, (error, stdout, stderr) => {
+        resolve({ ok: !error, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
+      });
     });
-  });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
-function minimalCommandEnv(): NodeJS.ProcessEnv {
+function minimalCommandEnv(tempDir: string = process.env.TMPDIR ?? "/tmp"): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-    HOME: process.env.HOME,
+    HOME: path.join(tempDir, "home"),
     NODE_ENV: process.env.NODE_ENV,
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    TMPDIR: process.env.TMPDIR,
+    TMPDIR: tempDir,
+    XDG_CONFIG_HOME: path.join(tempDir, "xdg-config"),
+    XDG_CACHE_HOME: path.join(tempDir, "xdg-cache"),
+    XDG_DATA_HOME: path.join(tempDir, "xdg-data"),
   };
 }
 

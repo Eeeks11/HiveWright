@@ -15,6 +15,7 @@ import { checkAndFireSchedules } from "./schedule-timer";
 import { runScheduledModelDiscovery } from "./model-discovery-schedule";
 import { runSystemModelHealthRenewal } from "./model-health-renewal";
 import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
+import { processNextPendingReferenceDocumentReviewJob } from "@/hives/reference-document-review";
 
 import {
   findNewGoals,
@@ -410,9 +411,23 @@ export class Dispatcher {
     this.shutdownCallbacks.push(() => decisionMessageSubscription.unlisten());
     console.log("[dispatcher] Listening for new_decision_message notifications.");
 
+    const referenceReviewSubscription = await this.sql.listen("new_reference_document_review", (reviewJobId) => {
+      console.log(`[dispatcher] New reference-document review notification: ${reviewJobId}`);
+      this.processPendingReferenceDocumentReviews().catch((err) =>
+        console.error("[dispatcher] reference-document review handler error:", err),
+      );
+    });
+    this.shutdownCallbacks.push(() => referenceReviewSubscription.unlisten());
+    console.log("[dispatcher] Listening for new_reference_document_review notifications.");
+
     // 4. Start poll fallback
     this.pollTimer = setInterval(() => {
-      if (!this.shuttingDown) this.processNextTask();
+      if (!this.shuttingDown) {
+        this.processNextTask();
+        this.processPendingReferenceDocumentReviews().catch((err) =>
+          console.error("[dispatcher] reference-document review poll error:", err),
+        );
+      }
     }, this.config.pollIntervalMs);
     console.log(`[dispatcher] Poll fallback every ${this.config.pollIntervalMs / 1000}s.`);
 
@@ -638,11 +653,27 @@ export class Dispatcher {
 
     console.log("[dispatcher] Dispatcher ready.");
 
-    // Do an initial task sweep
+    // Do initial sweeps
+    await this.processPendingReferenceDocumentReviews();
     await this.processNextTask();
   }
 
   private claimingTask = false;
+  private claimingReferenceDocumentReview = false;
+
+  private async processPendingReferenceDocumentReviews() {
+    if (this.shuttingDown || this.drainRequested || this.claimingReferenceDocumentReview) return;
+    this.claimingReferenceDocumentReview = true;
+    try {
+      while (!this.shuttingDown && !this.drainRequested) {
+        const proposals = await processNextPendingReferenceDocumentReviewJob(this.sql);
+        if (proposals === null) break;
+        console.log(`[dispatcher] Processed reference-document review (${proposals.length} proposal(s)).`);
+      }
+    } finally {
+      this.claimingReferenceDocumentReview = false;
+    }
+  }
 
   private async processNextTask() {
     if (this.shuttingDown) return;

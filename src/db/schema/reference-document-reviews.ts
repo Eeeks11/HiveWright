@@ -1,4 +1,4 @@
-import { numeric, pgTable, text, timestamp, uniqueIndex, uuid, varchar, index } from "drizzle-orm/pg-core";
+import { foreignKey, numeric, pgTable, text, timestamp, uniqueIndex, uuid, varchar, index } from "drizzle-orm/pg-core";
 import { businessRecords } from "./business-records";
 import { hives } from "./hives";
 import { hiveReferenceDocuments } from "./hive-reference-documents";
@@ -14,7 +14,8 @@ export const hiveReferenceDocumentReviewJobs = pgTable("hive_reference_document_
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
-  uniqueIndex("hive_reference_document_review_jobs_document_idx").on(table.documentId),
+  uniqueIndex("hive_reference_document_review_jobs_hive_document_idx").on(table.hiveId, table.documentId),
+  uniqueIndex("hive_reference_document_review_jobs_tuple_idx").on(table.id, table.hiveId, table.documentId),
   index("hive_reference_document_review_jobs_hive_status_idx").on(table.hiveId, table.status, table.createdAt),
 ]);
 
@@ -41,4 +42,9 @@ export const hiveReferenceDocumentRecordProposals = pgTable("hive_reference_docu
 }, (table) => [
   index("hive_reference_document_record_proposals_job_idx").on(table.reviewJobId, table.createdAt),
   index("hive_reference_document_record_proposals_hive_decision_idx").on(table.hiveId, table.decision, table.createdAt),
+  foreignKey({
+    name: "hive_reference_document_record_proposals_job_tuple_fk",
+    columns: [table.reviewJobId, table.hiveId, table.documentId],
+    foreignColumns: [hiveReferenceDocumentReviewJobs.id, hiveReferenceDocumentReviewJobs.hiveId, hiveReferenceDocumentReviewJobs.documentId],
+  }).onDelete("cascade"),
 ]);

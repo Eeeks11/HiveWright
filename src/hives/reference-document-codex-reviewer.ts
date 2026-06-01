@@ -19,6 +19,7 @@ export interface CodexReferenceReviewInput {
   reviewJobId: string;
   documentId: string;
   documentText: string;
+  model?: string;
   timeoutMs?: number;
 }
 
@@ -30,6 +31,10 @@ export async function runCodexReferenceDocumentReview(input: CodexReferenceRevie
   const schemaPath = path.join(tempDir, "schema.json");
   const outputPath = path.join(tempDir, "last-message.json");
   try {
+    await fs.mkdir(path.join(tempDir, "home"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg", "config"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg", "cache"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, "xdg", "data"), { recursive: true });
     await fs.writeFile(schemaPath, JSON.stringify(referenceProposalSchema()), { mode: 0o600 });
     const prompt = buildCodexReferenceReviewPrompt(input);
     const codexPath = input.codexPath ?? DEFAULT_CODEX_PATH;
@@ -38,6 +43,8 @@ export async function runCodexReferenceDocumentReview(input: CodexReferenceRevie
       schemaPath,
       outputPath,
       prompt,
+      model: input.model,
+      tempDir,
       timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
     void stdout;
@@ -65,9 +72,9 @@ function buildCodexReferenceReviewPrompt(input: CodexReferenceReviewInput): stri
   ].join("\n");
 }
 
-function runCodexExec(input: { codexPath: string; schemaPath: string; outputPath: string; prompt: string; timeoutMs: number }): Promise<{ stdout: string; stderr: string }> {
+function runCodexExec(input: { codexPath: string; schemaPath: string; outputPath: string; prompt: string; model?: string; tempDir: string; timeoutMs: number }): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(input.codexPath, [
+    const args = [
       "exec",
       "--skip-git-repo-check",
       "--sandbox",
@@ -77,10 +84,13 @@ function runCodexExec(input: { codexPath: string; schemaPath: string; outputPath
       input.schemaPath,
       "--output-last-message",
       input.outputPath,
-      "-",
-    ], {
+    ];
+    if (input.model?.trim()) args.push("--model", input.model.trim());
+    args.push("-");
+    const child = spawn(input.codexPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      env: minimalCodexEnv(),
+      cwd: input.tempDir,
+      env: minimalCodexEnv(input.tempDir),
       windowsHide: true,
     });
     let stdout = "";
@@ -119,19 +129,21 @@ function runCodexExec(input: { codexPath: string; schemaPath: string; outputPath
   });
 }
 
-function minimalCodexEnv(): NodeJS.ProcessEnv {
+function minimalCodexEnv(tempDir: string): NodeJS.ProcessEnv {
+  const home = path.join(tempDir, "home");
+  const xdg = path.join(tempDir, "xdg");
   return {
     PATH: process.env.PATH ?? "/home/trent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin",
-    HOME: process.env.HOME,
+    HOME: home,
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME,
     NODE_ENV: process.env.NODE_ENV,
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    TMPDIR: process.env.TMPDIR,
-    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-    XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
-    XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+    TMPDIR: tempDir,
+    XDG_CONFIG_HOME: path.join(xdg, "config"),
+    XDG_CACHE_HOME: path.join(xdg, "cache"),
+    XDG_DATA_HOME: path.join(xdg, "data"),
   };
 }
 
