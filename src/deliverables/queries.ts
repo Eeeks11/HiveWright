@@ -173,7 +173,26 @@ export async function listDeliverables(sql: SqlExecutor, filters: { hiveId?: str
       AND (${filters.taskId ?? null}::uuid IS NULL OR wp.task_id = ${filters.taskId ?? null})
       AND (${filters.goalId ?? null}::uuid IS NULL OR t.goal_id = ${filters.goalId ?? null})
       AND (${filters.completedOnly ? "completed" : null}::text IS NULL OR t.status = ${filters.completedOnly ? "completed" : null})
-    ORDER BY wp.created_at DESC
+    ORDER BY
+      CASE
+        WHEN wp.artifact_kind = 'final_artifact' THEN 0
+        WHEN CONCAT_WS(
+          ' ',
+          wp.title,
+          wp.filename,
+          wp.file_path,
+          wp.artifact_kind,
+          t.assigned_to,
+          t.created_by
+        ) ~* '(qa|review|compliance|signoff|audit|rework|notes|checklist|doctor|supervisor|peer[- ]?review)' THEN 7
+        WHEN wp.artifact_kind = 'landing_page' THEN 1
+        WHEN wp.artifact_kind = 'image' THEN 2
+        WHEN wp.artifact_kind = 'document' THEN 3
+        WHEN wp.artifact_kind = 'report' THEN 4
+        WHEN wp.artifact_kind IN ('business_output', 'deliverable', 'asset', 'publication') THEN 5
+        ELSE 6
+      END,
+      wp.created_at DESC
     LIMIT 200
   `;
   return (rows as DeliverableRow[]).map((row) => toDeliverableSummary(mapDeliverableRow(row)));

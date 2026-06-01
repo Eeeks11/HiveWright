@@ -60,7 +60,7 @@ async function fetchFeedback(
     ? `&qaFixtures=true&qaRunId=${encodeURIComponent(qaRunId)}`
     : "";
   const res = await fetch(
-    `/api/decisions?hiveId=${hiveId}&status=${status}&includeKinds=task_quality_feedback&limit=${status === "pending" ? 50 : 20}${qaParams}`,
+    `/api/decisions?hiveId=${hiveId}&status=${status}&includeKinds=task_quality_feedback&includeInternalSystem=true&limit=${status === "pending" ? 50 : 20}${qaParams}`,
   );
   if (!res.ok) throw new Error("Failed to load quality feedback");
   const body = await res.json();

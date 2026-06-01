@@ -153,11 +153,6 @@ export async function GET(request: Request) {
     if (!includeInternalSystem && !qaFixtures) {
       conditions.push(OWNER_ACTION_REQUIRED_SQL);
     }
-    const requestsQualityFeedback = kind === "task_quality_feedback" ||
-      includeKinds?.includes("task_quality_feedback");
-    if (requestsQualityFeedback && params.get("includeAiPeerQualityFeedback") !== "true") {
-      conditions.push("COALESCE(d.options #>> '{lane}', 'owner') = 'owner'");
-    }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 

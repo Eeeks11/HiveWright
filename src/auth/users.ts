@@ -21,6 +21,19 @@ export interface HiveMembership {
 type QuerySql = Sql | TransactionSql;
 
 const FIRST_OWNER_BOOTSTRAP_LOCK_KEY = "hivewright:first-owner-bootstrap";
+const TRUSTED_SYSTEM_ACTOR_IDS = new Set([
+  "internal-service-account",
+  "owner-bootstrap",
+]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isTrustedSystemActorId(userId: string): boolean {
+  return TRUSTED_SYSTEM_ACTOR_IDS.has(userId);
+}
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
 
 export async function countUsers(sql: QuerySql): Promise<number> {
   const [row] = await sql<{ c: number }[]>`
@@ -116,6 +129,9 @@ export async function canAccessHive(
   userId: string,
   hiveId: string,
 ): Promise<boolean> {
+  if (isTrustedSystemActorId(userId)) return true;
+  if (!isUuid(userId) || !isUuid(hiveId)) return false;
+
   // System owners implicitly have read access to every hive.
   const [user] = await sql<{ isSystemOwner: boolean }[]>`
     SELECT is_system_owner AS "isSystemOwner" FROM users WHERE id = ${userId}
@@ -135,6 +151,9 @@ export async function canMutateHive(
   userId: string,
   hiveId: string,
 ): Promise<boolean> {
+  if (isTrustedSystemActorId(userId)) return true;
+  if (!isUuid(userId) || !isUuid(hiveId)) return false;
+
   // System owners implicitly have write access to every hive.
   const [user] = await sql<{ isSystemOwner: boolean }[]>`
     SELECT is_system_owner AS "isSystemOwner" FROM users WHERE id = ${userId}

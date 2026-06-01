@@ -333,6 +333,66 @@ describe("Decisions API", () => {
       )
       RETURNING id
     `;
+    const [ownerQualityFeedback] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Rate task output quality',
+        'Internal quality feedback prompt for a completed task.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "owner" })},
+        'normal',
+        'pending',
+        'task_quality_feedback'
+      )
+      RETURNING id
+    `;
+    const [learningGateFollowup] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Learning gate follow-up',
+        'Supervisor learning gate follow-up should remain internal by default.',
+        'normal',
+        'pending',
+        'learning_gate_followup'
+      )
+      RETURNING id
+    `;
+    const [qaTask] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief)
+      VALUES (${hiveId}, 'qa', 'pipeline', 'Internal QA recheck', 'Review the task output internally.')
+      RETURNING id
+    `;
+    const [qaTaskDecision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, task_id, title, context, priority, status, kind)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        ${qaTask.id},
+        'QA recheck routing decision',
+        'QA needs to decide whether to route this back for rework.',
+        'normal',
+        'pending',
+        'decision'
+      )
+      RETURNING id
+    `;
+    const [notificationApproval] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind, route_metadata)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Approve HiveWright EA (Discord) Send Discord channel message?',
+        'Outbound notifier wants to send a Discord message.',
+        'normal',
+        'pending',
+        'external_action_approval',
+        ${sql.json({ connectorSlug: "ea-discord", operation: "send_channel" })}
+      )
+      RETURNING id
+    `;
     const [fixtureHive] = await sql<{ id: string }[]>`
       INSERT INTO hives (slug, name, type, is_system_fixture)
       VALUES (${PREFIX + "fixture"}, 'System Fixture Hive', 'digital', true)
@@ -360,6 +420,22 @@ describe("Decisions API", () => {
     expect(defaultBody.data.map((d: { id: string }) => d.id)).toContain(decisionId);
     expect(defaultBody.data.map((d: { id: string }) => d.id)).not.toContain(systemError.id);
     expect(defaultBody.data.map((d: { id: string }) => d.id)).not.toContain(aiPeer.id);
+    expect(defaultBody.data.map((d: { id: string }) => d.id)).not.toContain(qaTaskDecision.id);
+
+    const allDefaultRes = await getDecisions(new Request(
+      `http://localhost/api/decisions?hiveId=${hiveId}&kind=all`,
+    ));
+    const allDefaultBody = await allDefaultRes.json();
+    const allDefaultIds = allDefaultBody.data.map((d: { id: string }) => d.id);
+
+    expect(allDefaultRes.status).toBe(200);
+    expect(allDefaultIds).toContain(decisionId);
+    expect(allDefaultIds).not.toContain(systemError.id);
+    expect(allDefaultIds).not.toContain(aiPeer.id);
+    expect(allDefaultIds).not.toContain(ownerQualityFeedback.id);
+    expect(allDefaultIds).not.toContain(learningGateFollowup.id);
+    expect(allDefaultIds).not.toContain(qaTaskDecision.id);
+    expect(allDefaultIds).not.toContain(notificationApproval.id);
 
     const includeRes = await getDecisions(new Request(
       `http://localhost/api/decisions?hiveId=${hiveId}&kind=all&includeInternalSystem=true&includeAiPeerQualityFeedback=true`,
@@ -368,7 +444,15 @@ describe("Decisions API", () => {
     const includedIds = includeBody.data.map((d: { id: string }) => d.id);
 
     expect(includeRes.status).toBe(200);
-    expect(includedIds).toEqual(expect.arrayContaining([decisionId, systemError.id, aiPeer.id]));
+    expect(includedIds).toEqual(expect.arrayContaining([
+      decisionId,
+      systemError.id,
+      aiPeer.id,
+      ownerQualityFeedback.id,
+      learningGateFollowup.id,
+      qaTaskDecision.id,
+      notificationApproval.id,
+    ]));
     expect(includedIds).not.toContain(fixtureDecision.id);
   });
 

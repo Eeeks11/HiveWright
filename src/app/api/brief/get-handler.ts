@@ -17,6 +17,7 @@ import { getHiveCreationPause } from "@/operations/creation-pause";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { summarizeAiBudget } from "@/budget/ai-budget-policy";
 import { serializeGoalBudgetStatus } from "@/budget/status";
+import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
 import { countOwnerOutcomes, listOwnerOutcomes } from "@/outcomes/queries";
 
 /**
@@ -70,25 +71,17 @@ async function getBrief(request: Request, db: Sql) {
     // Pending decisions (urgent first, freshest within priority). Limit 10 so
     // a runaway never floods the brief.
     const decisionRows = await db`
-      SELECT id, title, priority, context, created_at,
-             EXTRACT(EPOCH FROM (NOW() - created_at)) / 3600 AS age_hours
-      FROM decisions
-      WHERE hive_id = ${hiveId}::uuid
-        AND status = 'pending'
-        AND kind = 'decision'
-        AND is_qa_fixture = false
-      ORDER BY CASE priority WHEN 'urgent' THEN 0 ELSE 1 END, created_at ASC
+      SELECT d.id, d.title, d.priority, d.context, d.created_at,
+             EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600 AS age_hours
+      FROM decisions d
+      JOIN hives h ON h.id = d.hive_id
+      LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+      WHERE d.hive_id = ${hiveId}::uuid
+        AND d.status = 'pending'
+        AND d.is_qa_fixture = false
+        AND ${db.unsafe(OWNER_ACTION_REQUIRED_SQL)}
+      ORDER BY CASE d.priority WHEN 'urgent' THEN 0 ELSE 1 END, d.created_at ASC
       LIMIT 10
-    `;
-
-    const [qualityFeedbackRow] = await db<{ pending_quality_feedback: number }[]>`
-      SELECT COUNT(*)::int AS pending_quality_feedback
-      FROM decisions
-      WHERE hive_id = ${hiveId}::uuid
-        AND status = 'pending'
-        AND kind = 'task_quality_feedback'
-        AND COALESCE(options #>> '{lane}', 'owner') = 'owner'
-        AND is_qa_fixture = false
     `;
 
     // Dashboard goals with progress + last activity. Home should hide only
@@ -114,7 +107,16 @@ async function getBrief(request: Request, db: Sql) {
              COALESCE(tc.open, 0) AS open,
              tc.last_activity,
              EXTRACT(EPOCH FROM (NOW() - COALESCE(tc.last_activity, g.updated_at))) / 3600 AS idle_hours,
-             (SELECT COUNT(*) FROM decisions d WHERE d.goal_id = g.id AND d.status = 'pending' AND d.kind = 'decision' AND d.is_qa_fixture = false) AS pending_decisions
+             (
+               SELECT COUNT(*)
+               FROM decisions d
+               JOIN hives h ON h.id = d.hive_id
+               LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+               WHERE d.goal_id = g.id
+                 AND d.status = 'pending'
+                 AND d.is_qa_fixture = false
+                 AND ${db.unsafe(OWNER_ACTION_REQUIRED_SQL)}
+             ) AS pending_decisions
       FROM goals g
       LEFT JOIN task_counts tc ON tc.goal_id = g.id
       WHERE g.hive_id = ${hiveId}::uuid
@@ -351,7 +353,7 @@ async function getBrief(request: Request, db: Sql) {
         (d) => d.priority === "urgent",
       ).length,
       pendingDecisions: decisionRows.length,
-      pendingQualityFeedback: Number(qualityFeedbackRow?.pending_quality_feedback ?? 0),
+      pendingQualityFeedback: 0,
       unreadOutcomes,
       totalPendingDecisions: decisionRows.length,
       stalledGoals: goals.filter((g) => g.health === "stalled").length,

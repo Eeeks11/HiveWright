@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Sql } from "postgres";
 import { requestExternalAction } from "@/actions/external-actions";
+import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
 
 export type NotifierCategory = "decision_owner" | "goal_achieved" | "goal_failed";
 
@@ -254,6 +255,8 @@ export class OutboundNotifier {
       SELECT d.id, d.hive_id, d.title, d.context, d.recommendation,
              COALESCE(${this.config.decisionChannelId ?? null}, ci.config->>'channelId') AS channel_id
       FROM decisions d
+      JOIN hives h ON h.id = d.hive_id
+      LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
       LEFT JOIN LATERAL (
         SELECT config
         FROM connector_installs
@@ -264,7 +267,8 @@ export class OutboundNotifier {
         LIMIT 1
       ) ci ON true
       WHERE d.status = 'pending'
-        AND d.kind <> 'external_action_approval'
+        AND d.is_qa_fixture = false
+        AND ${this.sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
         AND COALESCE(d.ea_decided_at, d.created_at) > NOW() - (${lookbackHours} * INTERVAL '1 hour')
     `;
 
@@ -477,6 +481,8 @@ export async function discoverOutboundNotificationEvents(
     SELECT d.id, d.hive_id, d.title, d.context, d.recommendation, d.created_at,
            COALESCE(${config.decisionChannelId ?? null}, ci.config->>'channelId') AS channel_id
     FROM decisions d
+    JOIN hives h ON h.id = d.hive_id
+    LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
     LEFT JOIN LATERAL (
       SELECT config
       FROM connector_installs
@@ -487,7 +493,8 @@ export async function discoverOutboundNotificationEvents(
       LIMIT 1
     ) ci ON true
     WHERE d.status = 'pending'
-      AND d.kind <> 'external_action_approval'
+      AND d.is_qa_fixture = false
+      AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
       AND NOT EXISTS (
         SELECT 1 FROM outbound_notifications n
         WHERE n.category = 'owner_decision'

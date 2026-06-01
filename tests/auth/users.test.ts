@@ -124,6 +124,16 @@ describe("verifyCredentials", () => {
 });
 
 describe("canAccessHive", () => {
+  it("treats the internal service account as trusted without querying UUID columns", async () => {
+    await expect(canAccessHive(sql, "internal-service-account", hiveA)).resolves.toBe(true);
+    await expect(canMutateHive(sql, "internal-service-account", hiveA)).resolves.toBe(true);
+  });
+
+  it("fails closed for malformed non-service user ids", async () => {
+    await expect(canAccessHive(sql, "not-a-uuid", hiveA)).resolves.toBe(false);
+    await expect(canMutateHive(sql, "not-a-uuid", hiveA)).resolves.toBe(false);
+  });
+
   it("system owner can access every hive", async () => {
     const owner = await bootstrapFirstOwner(sql, {
       email: fixture.email("system-owner"),
