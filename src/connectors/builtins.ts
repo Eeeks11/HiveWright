@@ -624,15 +624,15 @@ const voiceEa: ConnectorDefinitionDraft = {
 // Gmail (OAuth 2.0). Needs GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET env vars
 // from the Google Cloud Console OAuth credentials. The default posture is
 // deliberately read-only: thread list/detail operations can feed governed
-// research intake, while write/modify operations require separate owner
-// approval plus an explicitly expanded OAuth installation.
+// research intake. Write/modify Gmail operations stay unavailable until
+// HiveWright has an owner-approved OAuth scope-upgrade/re-auth flow.
 // ---------------------------------------------------------------------
 const gmail: ConnectorDefinitionDraft = {
   slug: "gmail",
   name: "Gmail",
   category: "email",
   description:
-    "Read-only Gmail research intake via OAuth. Email content, senders, links and attachments are untrusted data; write/label actions require explicit owner-approved scope expansion.",
+    "Read-only Gmail research intake via OAuth. Email content, senders, links and attachments are untrusted data; send/label actions are unavailable until owner-approved OAuth scope upgrade support exists.",
   icon: "📧",
   authType: "oauth2",
   setupFields: [],
@@ -658,20 +658,6 @@ const gmail: ConnectorDefinitionDraft = {
       kind: "read",
       required: true,
       description: "Reads sender/date/subject/snippet/link provenance without following links or trusting message text.",
-    },
-    {
-      key: "gmail:send_email",
-      label: "Send Gmail email",
-      kind: "send",
-      required: false,
-      description: "Optional Gmail send scope. Requires owner approval and an OAuth install that explicitly includes gmail.send.",
-    },
-    {
-      key: "gmail:label_thread",
-      label: "Modify Gmail labels",
-      kind: "admin",
-      required: false,
-      description: "Optional Gmail modify scope for label management. Requires owner approval and explicit scope expansion.",
     },
   ],
   oauth: {
@@ -767,127 +753,6 @@ const gmail: ConnectorDefinitionDraft = {
         return normalizeGmailThreadDetail(await res.json(), { maxBodyChars });
       },
     },
-    {
-      slug: "send_email",
-      label: "Send an email",
-      inputSchema: {
-        type: "object",
-        required: ["to", "subject", "body"],
-        properties: {
-          to: { type: "string", description: "To" },
-          subject: { type: "string", description: "Subject" },
-          body: { type: "string", description: "Body" },
-        },
-      },
-      outputSummary: "Sends an outbound email from the connected Gmail account after owner approval and explicit send-scope expansion.",
-      governance: {
-        effectType: "notify",
-        defaultDecision: "require_approval",
-        riskTier: "medium",
-        scopes: ["gmail:send_email"],
-        summary: "Sends outbound Gmail email. Disabled for default read-only research-intake installs unless the owner explicitly grants send scope.",
-        dryRunSupported: false,
-        externalSideEffect: true,
-      },
-      args: [
-        { key: "to", label: "To", type: "text", required: true },
-        { key: "subject", label: "Subject", type: "text", required: true },
-        { key: "body", label: "Body", type: "textarea", required: true },
-      ],
-      handler: async ({ args }) => {
-        assertGmailWriteOperationEnabled("send_email", "https://www.googleapis.com/auth/gmail.send");
-        const token = gmailAccessToken(args);
-        const to = typeof args.to === "string" ? args.to : "";
-        const subject = typeof args.subject === "string" ? args.subject : "";
-        const body = typeof args.body === "string" ? args.body : "";
-        if (!to || !subject || !body) throw new Error("to, subject and body are required");
-
-        const isHtml = body.includes("<");
-        const raw = [
-          `To: ${to}`,
-          `Subject: ${subject}`,
-          "MIME-Version: 1.0",
-          `Content-Type: ${isHtml ? "text/html" : "text/plain"}; charset=utf-8`,
-          "",
-          body,
-        ].join("\r\n");
-        const encoded = Buffer.from(raw, "utf8")
-          .toString("base64")
-          .replace(/\+/g, "-")
-          .replace(/\//g, "_")
-          .replace(/=+$/, "");
-
-        const res = await fetch(
-          "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ raw: encoded }),
-          },
-        );
-        if (!res.ok) {
-          throw new Error(`gmail send failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
-        }
-        return await res.json();
-      },
-    },
-    {
-      slug: "label_thread",
-      label: "Apply/remove thread labels",
-      inputSchema: {
-        type: "object",
-        required: ["threadId"],
-        properties: {
-          threadId: { type: "string", description: "Gmail thread id" },
-          addLabelIds: { type: "array", description: "Label IDs to add" },
-          removeLabelIds: { type: "array", description: "Label IDs to remove" },
-        },
-      },
-      outputSummary: "Applies/removes Gmail thread labels only after owner approval and explicit modify-scope expansion.",
-      governance: {
-        effectType: "write",
-        defaultDecision: "require_approval",
-        riskTier: "medium",
-        scopes: ["gmail:label_thread"],
-        summary: "Modifies Gmail labels. Default read-only installs cannot run this; owner must approve Gmail modify scope separately.",
-        dryRunSupported: false,
-        externalSideEffect: true,
-      },
-      args: [
-        { key: "threadId", label: "Thread id", type: "text", required: true },
-        { key: "addLabelIds", label: "Add label IDs", type: "textarea" },
-        { key: "removeLabelIds", label: "Remove label IDs", type: "textarea" },
-      ],
-      handler: async ({ args }) => {
-        assertGmailWriteOperationEnabled("label_thread", "https://www.googleapis.com/auth/gmail.modify");
-        const token = gmailAccessToken(args);
-        const threadId = typeof args.threadId === "string" ? args.threadId.trim() : "";
-        if (!threadId) throw new Error("threadId is required");
-        const addLabelIds = gmailLabelIds(args.addLabelIds);
-        const removeLabelIds = gmailLabelIds(args.removeLabelIds);
-        if (addLabelIds.length === 0 && removeLabelIds.length === 0) {
-          throw new Error("at least one label id to add or remove is required");
-        }
-        const res = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}/modify`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ addLabelIds, removeLabelIds }),
-          },
-        );
-        if (!res.ok) {
-          throw new Error(`gmail label modify failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
-        }
-        return await res.json();
-      },
-    },
   ],
 };
 
@@ -903,20 +768,6 @@ function gmailAccessToken(args: Record<string, unknown>): string {
   const token = String(args._accessToken ?? "");
   if (!token) throw new Error("access token unavailable");
   return token;
-}
-
-function assertGmailWriteOperationEnabled(operation: string, requiredGoogleScope: string): void {
-  if (process.env.GMAIL_ENABLE_WRITE_OPERATIONS !== "true") {
-    throw new Error(`${operation} is disabled for read-only Gmail research intake; owner must explicitly enable Gmail write operations and approve ${requiredGoogleScope}`);
-  }
-}
-
-function gmailLabelIds(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
-  if (typeof value === "string") {
-    return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
-  }
-  return [];
 }
 
 type GmailPart = {
@@ -971,7 +822,9 @@ function normalizeGmailMessage(message: GmailMessage, maxBodyChars: number) {
   const headers = new Map(
     (message.payload?.headers ?? []).map((header) => [String(header.name ?? "").toLowerCase(), String(header.value ?? "")]),
   );
-  const bodyText = collectGmailBodyText(message.payload).join("\n").slice(0, maxBodyChars);
+  const bodyContent = collectGmailBodyContent(message.payload);
+  const fullBodyText = bodyContent.texts.join("\n");
+  const bodyText = fullBodyText.slice(0, maxBodyChars);
   const attachments = collectGmailAttachments(message.payload);
   return {
     messageId: message.id ?? null,
@@ -983,23 +836,32 @@ function normalizeGmailMessage(message: GmailMessage, maxBodyChars: number) {
     snippet: message.snippet ?? null,
     labels: Array.isArray(message.labelIds) ? message.labelIds : [],
     bodyText,
-    bodyTruncated: collectGmailBodyText(message.payload).join("\n").length > maxBodyChars,
-    links: extractLinks(`${message.snippet ?? ""}\n${bodyText}`),
+    bodyTruncated: fullBodyText.length > maxBodyChars,
+    links: Array.from(new Set([
+      ...bodyContent.links,
+      ...extractLinks(`${message.snippet ?? ""}\n${bodyText}`),
+    ])),
     attachments,
   };
 }
 
-function collectGmailBodyText(part: GmailPart | undefined): string[] {
-  if (!part) return [];
-  const nested = (part.parts ?? []).flatMap(collectGmailBodyText);
+function collectGmailBodyContent(part: GmailPart | undefined): { texts: string[]; links: string[] } {
+  if (!part) return { texts: [], links: [] };
+  const nested = (part.parts ?? []).map(collectGmailBodyContent);
+  const nestedTexts = nested.flatMap((content) => content.texts);
+  const nestedLinks = nested.flatMap((content) => content.links);
   const mimeType = part.mimeType ?? "";
   const data = part.body?.data;
   if (data && (mimeType.startsWith("text/plain") || mimeType.startsWith("text/html"))) {
     const decoded = decodeGmailBase64(data);
+    const htmlLinks = mimeType.startsWith("text/html") ? extractHtmlAttributeLinks(decoded) : [];
     const text = mimeType.startsWith("text/html") ? decoded.replace(/<[^>]*>/g, " ") : decoded;
-    return [text.replace(/\s+/g, " ").trim(), ...nested].filter(Boolean);
+    return {
+      texts: [text.replace(/\s+/g, " ").trim(), ...nestedTexts].filter(Boolean),
+      links: Array.from(new Set([...htmlLinks, ...nestedLinks])),
+    };
   }
-  return nested;
+  return { texts: nestedTexts, links: Array.from(new Set(nestedLinks)) };
 }
 
 function collectGmailAttachments(part: GmailPart | undefined): Array<Record<string, unknown>> {
@@ -1028,6 +890,27 @@ function decodeGmailBase64(value: string): string {
 function extractLinks(value: string): string[] {
   const links = value.match(/https?:\/\/[^\s<>'")]+/gi) ?? [];
   return Array.from(new Set(links.map((link) => link.replace(/[),.;]+$/, ""))));
+}
+
+function extractHtmlAttributeLinks(value: string): string[] {
+  const links: string[] = [];
+  const attrRegex = /\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  let match: RegExpExecArray | null;
+  while ((match = attrRegex.exec(value)) !== null) {
+    const raw = match[1] ?? match[2] ?? match[3] ?? "";
+    const decoded = decodeHtmlEntities(raw.trim());
+    if (/^https?:\/\//i.test(decoded)) links.push(decoded);
+  }
+  return Array.from(new Set(links.map((link) => link.replace(/[),.;]+$/, ""))));
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
 }
 
 async function readTextWithByteLimit(res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
