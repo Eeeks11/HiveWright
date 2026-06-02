@@ -657,7 +657,7 @@ describe("Decisions API", () => {
     expect(tasks[0].brief).toContain("Verify the model is selectable in the hive creation dropdown.");
     expect(tasks[0].brief).toContain("Verify a role can be assigned to the model.");
     expect(tasks[0].brief).toContain("Verify dispatcher cost tracker coverage");
-    expect(tasks[0].brief).toContain("Run `npm run build` after the patch.");
+    expect(tasks[0].brief).toContain("Run `npm run build:runtime` after the patch.");
     expect(tasks[0].brief).toContain("Commit the implementation with a clear conventional commit message.");
     expect(tasks[0].acceptance_criteria).toContain("dispatcher cost tracker covers the model");
   });

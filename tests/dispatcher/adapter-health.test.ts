@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AdapterProbe } from "@/adapters/types";
 import { checkDispatcherModelRouteHealth } from "@/dispatcher/adapter-health";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -77,6 +78,60 @@ describe("checkDispatcherModelRouteHealth", () => {
       reason: "model_registry_missing",
     });
     expect(provisionerChecked).toBe(false);
+  });
+
+  it("refreshes due model health once before blocking stale routes", async () => {
+    const fingerprint = createRuntimeCredentialFingerprint({
+      provider: "openai",
+      adapterType: "codex",
+      baseUrl: null,
+    });
+    await sql`
+      INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)
+      VALUES (${HIVE_ID}, 'openai', 'openai-codex/gpt-5.5', 'codex', true)
+    `;
+    await sql`
+      INSERT INTO model_health (fingerprint, model_id, status, last_probed_at, next_probe_at)
+      VALUES (
+        ${fingerprint},
+        'openai-codex/gpt-5.5',
+        'healthy',
+        ${new Date(NOW.getTime() - 2 * 60 * 60 * 1000)},
+        ${new Date(NOW.getTime() - 60 * 60 * 1000)}
+      )
+    `;
+    const probe = vi.fn(async () => ({
+      healthy: true,
+      status: "healthy" as const,
+      failureClass: null,
+      latencyMs: 25,
+      costEstimateUsd: 0,
+      reason: {
+        code: "probe_ok",
+        message: "Probe completed successfully.",
+        failureClass: null,
+        retryable: false,
+      },
+    }));
+
+    const decision = await checkDispatcherModelRouteHealth(sql, {
+      hiveId: HIVE_ID,
+      roleSlug: "dev-agent",
+      adapterType: "codex",
+      modelId: "openai-codex/gpt-5.5",
+      now: NOW,
+      modelHealthAdapterFactory: async () => ({ probe } satisfies AdapterProbe),
+      provisionerFor: () => ({
+        check: async () => ({ satisfied: true, fixable: false }),
+        provision: async function* () {},
+      }),
+    });
+
+    expect(probe).toHaveBeenCalledTimes(1);
+    expect(decision).toMatchObject({
+      healthy: true,
+      reason: "model_health_and_provisioner_healthy",
+    });
   });
 
   it("blocks when the runtime provisioner rejects an otherwise healthy model", async () => {

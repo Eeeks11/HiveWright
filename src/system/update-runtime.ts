@@ -115,7 +115,7 @@ const UPDATE_COMMANDS: Record<string, { command: string; args: string[] }> = {
   "git pull --ff-only": { command: "git", args: ["pull", "--ff-only"] },
   "npm install": { command: "npm", args: ["install"] },
   "npm run db:migrate:app": { command: "npm", args: ["run", "db:migrate:app"] },
-  "npm run build": { command: "npm", args: ["run", "build"] },
+  "npm run build:runtime": { command: "npm", args: ["run", "build:runtime"] },
   "npm run build:dispatcher": { command: "npm", args: ["run", "build:dispatcher"] },
   "systemctl --user restart hivewright-dashboard hivewright-dispatcher": {
     command: "systemctl",

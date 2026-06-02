@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import path from "path";
+import type { AdapterProbe } from "@/adapters/types";
 import { buildSessionContext } from "@/dispatcher/session-builder";
 import { renderSessionPrompt } from "@/adapters/context-renderer";
 import { storeCredential } from "@/credentials/manager";
@@ -335,6 +336,69 @@ describe("buildSessionContext", () => {
 
     const ctx = await buildSessionContext(sql, task);
 
+    expect(ctx.primaryAdapterType).toBe("codex");
+    expect(ctx.model).toBe("openai-codex/gpt-5.5");
+  });
+
+  it("refreshes due auto-routing health before declaring routing unavailable", async () => {
+    const fingerprint = createRuntimeCredentialFingerprint({
+      provider: "openai",
+      adapterType: "codex",
+      baseUrl: null,
+    });
+    await sql`
+      UPDATE role_templates
+      SET adapter_type = 'auto',
+          recommended_model = 'auto'
+      WHERE slug = 'dev-agent'
+    `;
+    await sql`
+      UPDATE model_health
+      SET status = 'healthy',
+          last_probed_at = NOW() - INTERVAL '2 hours',
+          next_probe_at = NOW() - INTERVAL '1 hour'
+      WHERE fingerprint = ${fingerprint}
+        AND model_id = 'openai-codex/gpt-5.5'
+    `;
+    const probe = vi.fn(async () => ({
+      healthy: true,
+      status: "healthy" as const,
+      failureClass: null,
+      latencyMs: 25,
+      costEstimateUsd: 0,
+      reason: {
+        code: "probe_ok",
+        message: "Probe completed successfully.",
+        failureClass: null,
+        retryable: false,
+      },
+    }));
+
+    const task: ClaimedTask = {
+      id: "00000000-0000-0000-0000-000000000188",
+      hiveId: bizId,
+      assignedTo: "dev-agent",
+      createdBy: "owner",
+      status: "active",
+      priority: 5,
+      title: "Auto route stale health task",
+      brief: "Use the configured automatic model route after health refresh",
+      parentTaskId: null,
+      goalId: null,
+      sprintNumber: null,
+      qaRequired: false,
+      acceptanceCriteria: null,
+      retryCount: 0,
+      doctorAttempts: 0,
+      failureReason: null,
+      projectId: null,
+    };
+
+    const ctx = await buildSessionContext(sql, task, {
+      modelHealthAdapterFactory: async () => ({ probe } satisfies AdapterProbe),
+    });
+
+    expect(probe).toHaveBeenCalledTimes(1);
     expect(ctx.primaryAdapterType).toBe("codex");
     expect(ctx.model).toBe("openai-codex/gpt-5.5");
   });

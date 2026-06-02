@@ -218,6 +218,8 @@ export async function selectDueModelHealthProbeRoutes(
     now?: Date;
     limit?: number;
     hiveId?: string | null;
+    adapterType?: string;
+    modelId?: string;
     includeOnDemand?: boolean;
   } = {},
 ): Promise<DueModelHealthProbeRoute[]> {
@@ -225,6 +227,8 @@ export async function selectDueModelHealthProbeRoutes(
   const limit = input.limit ?? DEFAULT_LIMIT;
   const rows = await loadEnabledHiveModels(sql, {
     hiveId: input.hiveId ?? null,
+    adapterType: input.adapterType,
+    modelId: input.modelId,
     limit: Math.max(limit * 4, limit),
     includeOnDemand: true,
   });
@@ -291,8 +295,17 @@ export async function selectDueModelHealthProbeRoutes(
 
 async function loadEnabledHiveModels(
   sql: Sql,
-  input: { hiveId: string | null; limit: number; includeOnDemand: boolean },
+  input: {
+    hiveId: string | null;
+    adapterType?: string;
+    modelId?: string;
+    limit: number;
+    includeOnDemand: boolean;
+  },
 ): Promise<HiveModelProbeRow[]> {
+  const canonicalModelId = input.adapterType && input.modelId
+    ? canonicalModelIdForAdapter(input.adapterType, input.modelId)
+    : null;
   const rows = await sql<RawHiveModelProbeRow[]>`
     SELECT
       hm.hive_id,
@@ -308,6 +321,10 @@ async function loadEnabledHiveModels(
     LEFT JOIN credentials c ON c.id = hm.credential_id
     WHERE hm.enabled = true
       ${input.hiveId ? sql`AND hm.hive_id = ${input.hiveId}` : sql``}
+      ${input.adapterType ? sql`AND hm.adapter_type = ${input.adapterType}` : sql``}
+      ${input.modelId && canonicalModelId
+        ? sql`AND hm.model_id IN (${input.modelId}, ${canonicalModelId})`
+        : sql``}
     ORDER BY hm.fallback_priority ASC, hm.created_at ASC
   `;
   const deduped = dedupeProbeRows(rows);

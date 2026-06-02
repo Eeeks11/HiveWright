@@ -157,7 +157,7 @@ apply_update() {
     export HIVEWRIGHT_ENV_FILE="$ENV_FILE"
     npm install
     npm run db:migrate:app
-    npm run build
+    npm run build:runtime
     npm run build:dispatcher
     node --check dispatcher-bundle.js
 
