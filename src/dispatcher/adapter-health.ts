@@ -2,6 +2,8 @@ import type { Sql } from "postgres";
 import { provisionerFor as defaultProvisionerFor } from "@/provisioning";
 import type { Provisioner } from "@/provisioning/types";
 import { checkModelSpawnHealth, type ModelSpawnHealthDecision } from "@/model-health/spawn-gate";
+import { refreshDueModelHealth } from "@/model-health/refresh";
+import type { ModelProbeAdapterFactory } from "@/model-health/probe-runner";
 
 export type DispatcherModelRouteHealthReason =
   | "model_health_and_provisioner_healthy"
@@ -16,6 +18,8 @@ export interface DispatcherModelRouteHealthInput {
   modelId: string;
   now?: Date;
   provisionerFor?: (adapterType: string) => Provisioner | null;
+  modelHealthAdapterFactory?: ModelProbeAdapterFactory;
+  modelHealthEncryptionKey?: string;
 }
 
 export interface DispatcherModelRouteHealthDecision {
@@ -29,12 +33,40 @@ export async function checkDispatcherModelRouteHealth(
   sql: Sql,
   input: DispatcherModelRouteHealthInput,
 ): Promise<DispatcherModelRouteHealthDecision> {
-  const modelHealth = await checkModelSpawnHealth(sql, {
+  let modelHealth = await checkModelSpawnHealth(sql, {
     hiveId: input.hiveId,
     adapterType: input.adapterType,
     modelId: input.modelId,
     now: input.now,
   });
+
+  if (!modelHealth.canRun && isRefreshableModelHealthReason(modelHealth.reason)) {
+    try {
+      await refreshDueModelHealth(sql, {
+        hiveId: input.hiveId,
+        adapterType: input.adapterType,
+        modelId: input.modelId,
+        now: input.now,
+        limit: 1,
+        encryptionKey: input.modelHealthEncryptionKey ?? process.env.ENCRYPTION_KEY,
+        includeOnDemand: true,
+        adapterFactory: input.modelHealthAdapterFactory,
+      });
+      modelHealth = await checkModelSpawnHealth(sql, {
+        hiveId: input.hiveId,
+        adapterType: input.adapterType,
+        modelId: input.modelId,
+        now: input.now,
+      });
+    } catch (err) {
+      return {
+        healthy: false,
+        reason: modelHealth.reason,
+        detail: `model health refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+        modelHealth,
+      };
+    }
+  }
 
   if (!modelHealth.canRun) {
     return {
@@ -74,4 +106,10 @@ export async function checkDispatcherModelRouteHealth(
     reason: "model_health_and_provisioner_healthy",
     modelHealth,
   };
+}
+
+function isRefreshableModelHealthReason(reason: ModelSpawnHealthDecision["reason"]): boolean {
+  return reason === "health_probe_missing" ||
+    reason === "health_probe_stale" ||
+    reason === "health_probe_unhealthy";
 }

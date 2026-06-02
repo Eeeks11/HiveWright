@@ -156,7 +156,7 @@ export function buildUpdatePlan(status: UpdateStatus, options: UpdatePlanOptions
     "git pull --ff-only",
     "npm install",
     "npm run db:migrate:app",
-    "npm run build",
+    "npm run build:runtime",
     "npm run build:dispatcher",
   ];
 

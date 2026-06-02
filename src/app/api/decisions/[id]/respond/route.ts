@@ -481,7 +481,7 @@ function buildModelRegistryPatchBrief(
     "",
     "Commit and rebuild instructions:",
     "- Run the focused tests that cover the changed model registry and dispatcher cost tracking surfaces.",
-    "- Run `npm run build` after the patch.",
+    "- Run `npm run build:runtime` after the patch.",
     "- Run `git status` and stage only the files changed for this implementation.",
     "- Commit the implementation with a clear conventional commit message.",
     "- Include the created commit SHA and rebuild/test results in the task result summary.",

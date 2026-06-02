@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildUpdatePlan,
@@ -108,10 +110,20 @@ describe("HiveWright update system", () => {
       "git pull --ff-only",
       "npm install",
       "npm run db:migrate:app",
-      "npm run build",
+      "npm run build:runtime",
       "npm run build:dispatcher",
       "systemctl --user restart hivewright-dashboard hivewright-dispatcher",
     ]);
+  });
+
+  it("loads runtime env when the privileged updater builds the dashboard", () => {
+    const script = readFileSync(
+      path.resolve(__dirname, "../../scripts/hivewright-operational-update-root.sh"),
+      "utf8",
+    );
+
+    expect(script).toContain("npm run build:runtime");
+    expect(script).not.toMatch(/^\s*npm run build\s*$/m);
   });
 
   it("places dashboard update logs under the external runtime root", () => {

@@ -3,7 +3,13 @@ import type { ClaimedTask } from "./types";
 import type { ImageWorkProductContext, SessionContext, RoleContext } from "../adapters/types";
 import { resolveModel } from "../adapters/provider-config";
 import { loadModelRoutingView } from "../model-routing/registry";
-import { resolveConfiguredModelRoute } from "../model-routing/selector";
+import {
+  resolveConfiguredModelRoute,
+  type ModelRoutingPolicy,
+  type ResolvedModelRoute,
+} from "../model-routing/selector";
+import { refreshDueModelHealth } from "../model-health/refresh";
+import type { ModelProbeAdapterFactory } from "../model-health/probe-runner";
 import { queryRelevantMemory } from "../memory/injection";
 import { checkPgvectorAvailable } from "../memory/embeddings";
 import { loadSystemSkills, loadHiveSkills, resolveSkillSetForTask, effectiveToolsForLoadedSkills } from "../skills/loader";
@@ -21,6 +27,11 @@ import path from "path";
 
 type ToolsConfig = { mcps?: string[]; allowedTools?: string[]; customRole?: unknown };
 
+export interface BuildSessionContextOptions {
+  modelHealthAdapterFactory?: ModelProbeAdapterFactory;
+  modelHealthEncryptionKey?: string;
+}
+
 type ToolGrantDecisionAudit = {
   source: "role_tools_config" | "task_classifier";
   toolsConfig: ToolsConfig | null;
@@ -31,6 +42,7 @@ type ToolGrantDecisionAudit = {
 export async function buildSessionContext(
   sql: Sql,
   task: ClaimedTask,
+  options: BuildSessionContextOptions = {},
 ): Promise<SessionContext> {
   // 1. Load role template
   let [role] = await sql`
@@ -199,8 +211,8 @@ export async function buildSessionContext(
     ? resolveModel(task.modelOverride, null)
     : ((role.recommended_model as string | null) ?? null);
   const configuredAdapter = task.adapterOverride ?? (role.adapter_type as string | null) ?? null;
-  const { policy } = await loadModelRoutingView(sql, task.hiveId);
-  const route = resolveConfiguredModelRoute({
+  let { policy } = await loadModelRoutingView(sql, task.hiveId);
+  let route = resolveConfiguredModelRoute({
     roleSlug: task.assignedTo,
     roleType: (role.type as string | null) ?? null,
     manualAdapterType: configuredAdapter,
@@ -213,6 +225,29 @@ export async function buildSessionContext(
       retryCount: task.retryCount,
     },
   });
+  if (shouldRefreshAutoRoutingHealth(route, policy)) {
+    await refreshDueModelHealth(sql, {
+      hiveId: task.hiveId,
+      limit: 10,
+      encryptionKey: options.modelHealthEncryptionKey ?? process.env.ENCRYPTION_KEY,
+      includeOnDemand: true,
+      adapterFactory: options.modelHealthAdapterFactory,
+    });
+    ({ policy } = await loadModelRoutingView(sql, task.hiveId));
+    route = resolveConfiguredModelRoute({
+      roleSlug: task.assignedTo,
+      roleType: (role.type as string | null) ?? null,
+      manualAdapterType: configuredAdapter,
+      manualModel: configuredModel,
+      policy,
+      taskContext: {
+        taskTitle: task.title,
+        taskBrief: routingBrief,
+        acceptanceCriteria: task.acceptanceCriteria,
+        retryCount: task.retryCount,
+      },
+    });
+  }
 
   if (!route.adapterType || !route.model) {
     throw new Error(`Auto model routing unavailable for role ${task.assignedTo}: ${route.reason}`);
@@ -554,6 +589,23 @@ function parseRequiredCredentials(toolsMd: string | null): string[] {
   const match = toolsMd.match(/requires:\s*\[([^\]]+)\]/i);
   if (!match) return [];
   return match[1].split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+function shouldRefreshAutoRoutingHealth(
+  route: ResolvedModelRoute,
+  policy: ModelRoutingPolicy | null,
+): boolean {
+  if (route.source !== "auto_unavailable") return false;
+  if (!route.reason.includes("no enabled candidates")) return false;
+  return Boolean(policy?.candidates.some((candidate) => (
+    candidate.enabled !== false &&
+    (
+      candidate.status === "unknown" ||
+      candidate.status === "unhealthy" ||
+      candidate.probeFreshness === "due" ||
+      candidate.probeFreshness === "never"
+    )
+  )));
 }
 
 function normalizeSkillSlugs(value: unknown): string[] {
