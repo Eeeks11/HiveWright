@@ -5,6 +5,11 @@ import { requireApiUser } from "../_lib/auth";
 import { sql } from "../_lib/db";
 
 const HIVE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TASK_ID_RE = HIVE_ID_RE;
+
+type TaskHiveRow = {
+  hive_id: string;
+};
 
 async function authorizeHiveRequest(request: Request) {
   const authz = await requireApiUser();
@@ -18,7 +23,22 @@ async function authorizeHiveRequest(request: Request) {
     const hasAccess = await canAccessHive(sql, user.id, hiveId);
     if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
   }
-  return { hiveId, taskId: url.searchParams.get("taskId") };
+
+  const taskId = url.searchParams.get("taskId");
+  if (!taskId) return { hiveId, taskId };
+  if (!TASK_ID_RE.test(taskId)) return jsonError("taskId must be a valid UUID", 400);
+
+  const taskRows = await sql`
+    SELECT hive_id
+    FROM tasks
+    WHERE id = ${taskId}
+  `;
+  if (taskRows.length === 0) return jsonError("Task not found", 404);
+
+  const taskHiveId = (taskRows[0] as unknown as TaskHiveRow).hive_id;
+  if (taskHiveId !== hiveId) return jsonError("Task not found", 404);
+
+  return { hiveId, taskId };
 }
 
 export async function GET(request: Request) {

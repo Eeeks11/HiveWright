@@ -17,6 +17,8 @@ vi.mock("@/operations/runtime-drift-report", () => ({
 import { GET } from "./route";
 
 const HIVE_ID = "11111111-1111-1111-1111-111111111111";
+const OTHER_HIVE_ID = "22222222-2222-2222-2222-222222222222";
+const TASK_ID = "33333333-3333-3333-3333-333333333333";
 
 function request(query = `?hiveId=${HIVE_ID}`) {
   return new Request(`http://localhost/api/runtime-drift${query}`);
@@ -28,6 +30,7 @@ beforeEach(() => {
     user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
   });
   mocks.canAccessHive.mockResolvedValue(true);
+  mocks.sql.mockResolvedValue([{ hive_id: HIVE_ID }]);
   mocks.buildRuntimeDriftOperatorReport.mockResolvedValue({ hiveId: HIVE_ID, routeDrift: { status: "in_sync" } });
 });
 
@@ -74,15 +77,48 @@ describe("GET /api/runtime-drift", () => {
   });
 
   it("returns the runtime drift report for an authorized caller", async () => {
-    const res = await GET(request(`?hiveId=${HIVE_ID}&taskId=task-1`));
+    const res = await GET(request(`?hiveId=${HIVE_ID}&taskId=${TASK_ID}`));
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ hiveId: HIVE_ID, routeDrift: { status: "in_sync" } });
+    expect(mocks.sql).toHaveBeenCalledOnce();
     expect(mocks.buildRuntimeDriftOperatorReport).toHaveBeenCalledWith({
       sql: mocks.sql,
       hiveId: HIVE_ID,
-      taskId: "task-1",
+      taskId: TASK_ID,
     });
+  });
+
+  it("rejects malformed taskId before provenance lookup", async () => {
+    const res = await GET(request(`?hiveId=${HIVE_ID}&taskId=task-1`));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("taskId");
+    expect(mocks.sql).not.toHaveBeenCalled();
+    expect(mocks.buildRuntimeDriftOperatorReport).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing taskId rows before provenance lookup", async () => {
+    mocks.sql.mockResolvedValueOnce([]);
+
+    const res = await GET(request(`?hiveId=${HIVE_ID}&taskId=${TASK_ID}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toContain("Task not found");
+    expect(mocks.buildRuntimeDriftOperatorReport).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-hive taskId rows before provenance lookup", async () => {
+    mocks.sql.mockResolvedValueOnce([{ hive_id: OTHER_HIVE_ID }]);
+
+    const res = await GET(request(`?hiveId=${HIVE_ID}&taskId=${TASK_ID}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toContain("Task not found");
+    expect(mocks.buildRuntimeDriftOperatorReport).not.toHaveBeenCalled();
   });
 });
