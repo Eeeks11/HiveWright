@@ -4,12 +4,16 @@ const mocks = vi.hoisted(() => ({
   sql: vi.fn(),
   requireApiUser: vi.fn(),
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
   buildRuntimeDriftOperatorReport: vi.fn(),
 }));
 
 vi.mock("../_lib/db", () => ({ sql: mocks.sql }));
 vi.mock("../_lib/auth", () => ({ requireApiUser: mocks.requireApiUser }));
-vi.mock("@/auth/users", () => ({ canAccessHive: mocks.canAccessHive }));
+vi.mock("@/auth/users", () => ({
+  canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
+}));
 vi.mock("@/operations/runtime-drift-report", () => ({
   buildRuntimeDriftOperatorReport: mocks.buildRuntimeDriftOperatorReport,
 }));
@@ -30,6 +34,7 @@ beforeEach(() => {
     user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
   });
   mocks.canAccessHive.mockResolvedValue(true);
+  mocks.canMutateHive.mockResolvedValue(true);
   mocks.sql.mockResolvedValue([{ hive_id: HIVE_ID }]);
   mocks.buildRuntimeDriftOperatorReport.mockResolvedValue({ hiveId: HIVE_ID, routeDrift: { status: "in_sync" } });
 });
@@ -57,6 +62,24 @@ describe("GET /api/runtime-drift", () => {
 
     expect(res.status).toBe(403);
     expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", HIVE_ID);
+    expect(mocks.canMutateHive).not.toHaveBeenCalled();
+    expect(mocks.buildRuntimeDriftOperatorReport).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when a hive viewer lacks operator/manage permission", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "viewer-1", email: "viewer@example.com", isSystemOwner: false },
+    });
+    mocks.canAccessHive.mockResolvedValueOnce(true);
+    mocks.canMutateHive.mockResolvedValueOnce(false);
+
+    const res = await GET(request());
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toContain("manage this hive");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "viewer-1", HIVE_ID);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "viewer-1", HIVE_ID);
     expect(mocks.buildRuntimeDriftOperatorReport).not.toHaveBeenCalled();
   });
 

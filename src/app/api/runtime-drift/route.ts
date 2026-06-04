@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { buildRuntimeDriftOperatorReport } from "@/operations/runtime-drift-report";
 import { jsonError, jsonOk } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
@@ -22,6 +22,8 @@ async function authorizeHiveRequest(request: Request) {
   if (!user.isSystemOwner) {
     const hasAccess = await canAccessHive(sql, user.id, hiveId);
     if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+    const canManage = await canMutateHive(sql, user.id, hiveId);
+    if (!canManage) return jsonError("Forbidden: caller cannot manage this hive", 403);
   }
 
   const taskId = url.searchParams.get("taskId");
