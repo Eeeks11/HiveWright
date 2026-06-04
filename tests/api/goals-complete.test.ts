@@ -584,4 +584,59 @@ describe("POST /api/goals/[id]/complete", () => {
     `)[0].c;
     expect(secondMemoryCount).toBe(firstMemoryCount); // no new memory row
   });
+
+  it("returns safe 409 diagnostics for true pending owner decisions", async () => {
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind)
+      VALUES (${bizId}, ${goalId}, 'Approve owner launch', 'Owner must approve launch before completion.', 'Approve launch.', 'normal', 'pending', 'decision')
+      RETURNING id
+    `;
+
+    const res = await POST(
+      makeRequest(completionBody("gccomplete: blocked by owner decision")),
+      makeParams(goalId),
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      code: "pending_owner_decisions",
+      diagnostics: {
+        ownerDecisionCount: 1,
+        ownerDecisions: [
+          {
+            decisionId: decision.id,
+            reason: "owner_action_required",
+            title: "Approve owner launch",
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("Owner must approve launch before completion.");
+
+    const [goal] = await sql`SELECT status FROM goals WHERE id = ${goalId}`;
+    expect(goal.status).toBe("active");
+  });
+
+  it("archives non-owner pending decision contradictions before goal completion", async () => {
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, route_metadata)
+      VALUES (${bizId}, ${goalId}, 'Internal non-blocking decision', 'Internal route says no owner action is required.', 'Archive safely.', 'normal', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
+      RETURNING id
+    `;
+
+    const res = await POST(
+      makeRequest(completionBody("gccomplete: stale internal non-blocker ignored")),
+      makeParams(goalId),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe("achieved");
+
+    const [archived] = await sql<{ status: string; resolved_by: string | null }[]>`
+      SELECT status, resolved_by FROM decisions WHERE id = ${decision.id}
+    `;
+    expect(archived).toMatchObject({ status: "archived", resolved_by: "decision-integrity-sweeper" });
+  });
 });

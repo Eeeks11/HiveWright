@@ -18,6 +18,11 @@ import {
 } from "./final-artifacts";
 import { upsertOwnerOutcomeForCompletion } from "@/outcomes/durable";
 import { assertHiveMemoryWriteAllowed, markMemoryWritten } from "@/memory/governance";
+import { reconcileDecisionIntegrity } from "@/decisions/cleanup";
+import {
+  INTERNAL_DECISION_REASON_SQL,
+  OWNER_ACTION_REQUIRED_SQL,
+} from "@/decisions/visibility";
 
 export type GoalCompletionStatus = "achieved" | "execution_ready" | "blocked_on_owner_channel";
 
@@ -104,6 +109,73 @@ export interface CompleteGoalResult {
   completed: boolean;
 }
 
+export interface GoalOwnerDecisionDiagnostic {
+  decisionId: string;
+  reason: string;
+  title: string;
+}
+
+export interface GoalCompletionBlockerDiagnostics {
+  ownerDecisionCount: number;
+  ownerDecisions: GoalOwnerDecisionDiagnostic[];
+  reconciledDecisionIds: string[];
+  archivedDecisionIds: string[];
+  operatorActions: Array<{ decisionId: string; reason: string; priority: string }>;
+}
+
+export class GoalCompletionBlockedOnOwnerDecisionsError extends Error {
+  readonly diagnostics: GoalCompletionBlockerDiagnostics;
+
+  constructor(diagnostics: GoalCompletionBlockerDiagnostics) {
+    super(
+      `Goal completion blocked: ${diagnostics.ownerDecisionCount} pending owner decision(s) must be resolved before this goal can be completed`,
+    );
+    this.name = "GoalCompletionBlockedOnOwnerDecisionsError";
+    this.diagnostics = diagnostics;
+  }
+}
+
+interface PendingOwnerDecisionRow {
+  id: string;
+  title: string;
+  internal_reason: string | null;
+}
+
+async function getGoalPendingOwnerDecisionDiagnostics(
+  sql: Sql,
+  goalId: string,
+  reconciliation: Awaited<ReturnType<typeof reconcileDecisionIntegrity>>,
+): Promise<GoalCompletionBlockerDiagnostics> {
+  const ownerRows = await sql<PendingOwnerDecisionRow[]>`
+    SELECT
+      d.id,
+      d.title,
+      ${sql.unsafe(INTERNAL_DECISION_REASON_SQL)} AS internal_reason
+    FROM decisions d
+    JOIN hives h ON h.id = d.hive_id
+    LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+    WHERE d.goal_id = ${goalId}
+      AND d.status = 'pending'
+      AND d.kind = 'decision'
+      AND d.is_qa_fixture = false
+      AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
+    ORDER BY d.created_at ASC
+    LIMIT 25
+  `;
+
+  return {
+    ownerDecisionCount: ownerRows.length,
+    ownerDecisions: ownerRows.slice(0, 10).map((row) => ({
+      decisionId: row.id,
+      title: row.title,
+      reason: row.internal_reason ?? "owner_action_required",
+    })),
+    reconciledDecisionIds: reconciliation.resolvedDecisionIds,
+    archivedDecisionIds: reconciliation.archivedDecisionIds,
+    operatorActions: reconciliation.operatorActions,
+  };
+}
+
 function statusFromEvidence(evidenceBundle: CompletionEvidenceItem[] | undefined): GoalCompletionStatus | null {
   for (const item of evidenceBundle ?? []) {
     const parsed = parseGoalCompletionStatus(item.status);
@@ -124,8 +196,8 @@ export async function completeGoal(
   completionSummary: string,
   options: CompleteGoalOptions = {},
 ): Promise<CompleteGoalResult> {
-  const [goalContext] = await sql<{ project_id: string | null; project_git_repo: boolean | null }[]>`
-    SELECT goals.project_id, projects.git_repo AS project_git_repo
+  const [goalContext] = await sql<{ hive_id: string; project_id: string | null; project_git_repo: boolean | null }[]>`
+    SELECT goals.hive_id, goals.project_id, projects.git_repo AS project_git_repo
     FROM goals
     LEFT JOIN projects ON projects.id = goals.project_id
     WHERE goals.id = ${goalId}
@@ -142,6 +214,11 @@ export async function completeGoal(
   }
 
   const createdBy = options.createdBy ?? "goal-supervisor";
+  const reconciliation = await reconcileDecisionIntegrity(sql, {
+    hiveId: goalContext.hive_id,
+    goalId,
+    limit: 100,
+  });
   // Evidence policy: keys are present ONLY when their array is non-empty.
   // A no-evidence completion writes `{}` to the jsonb column (not
   // `{ taskIds: [], workProductIds: [] }`). Downstream readers (the
@@ -184,18 +261,13 @@ export async function completeGoal(
       throw new Error(`Goal cannot be completed: current status is '${goal.status}'`);
     }
 
-    const [pendingDecisionCount] = await tx<{ count: number }[]>`
-      SELECT COUNT(*)::int AS count
-      FROM decisions
-      WHERE goal_id = ${goalId}
-        AND status = 'pending'
-        AND kind = 'decision'
-        AND is_qa_fixture = false
-    `;
-    if ((pendingDecisionCount?.count ?? 0) > 0) {
-      throw new Error(
-        `Goal completion blocked: ${pendingDecisionCount.count} pending owner decision(s) must be resolved before this goal can be completed`,
-      );
+    const pendingOwnerDecisionDiagnostics = await getGoalPendingOwnerDecisionDiagnostics(
+      tx as unknown as Sql,
+      goalId,
+      reconciliation,
+    );
+    if (pendingOwnerDecisionDiagnostics.ownerDecisionCount > 0) {
+      throw new GoalCompletionBlockedOnOwnerDecisionsError(pendingOwnerDecisionDiagnostics);
     }
 
     // 1. Mark final/next-action state and clear session. "execution_ready" and
