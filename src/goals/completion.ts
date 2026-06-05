@@ -214,11 +214,6 @@ export async function completeGoal(
   }
 
   const createdBy = options.createdBy ?? "goal-supervisor";
-  const reconciliation = await reconcileDecisionIntegrity(sql, {
-    hiveId: goalContext.hive_id,
-    goalId,
-    limit: 100,
-  });
   // Evidence policy: keys are present ONLY when their array is non-empty.
   // A no-evidence completion writes `{}` to the jsonb column (not
   // `{ taskIds: [], workProductIds: [] }`). Downstream readers (the
@@ -260,6 +255,12 @@ export async function completeGoal(
     if (goal.status !== "active") {
       throw new Error(`Goal cannot be completed: current status is '${goal.status}'`);
     }
+
+    const reconciliation = await reconcileDecisionIntegrity(tx as unknown as Sql, {
+      hiveId: goal.hive_id,
+      goalId,
+      limit: 100,
+    });
 
     const pendingOwnerDecisionDiagnostics = await getGoalPendingOwnerDecisionDiagnostics(
       tx as unknown as Sql,

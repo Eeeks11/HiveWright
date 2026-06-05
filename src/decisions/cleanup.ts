@@ -12,6 +12,7 @@ export interface ArchiveStaleInternalDecisionsOptions {
   now?: Date;
   olderThanDays?: number;
   hiveId?: string;
+  goalId?: string;
   limit?: number;
 }
 
@@ -107,6 +108,7 @@ export async function archiveStaleInternalDecisions(
   const olderThanDays = options.olderThanDays ?? 14;
   const limit = Math.max(1, Math.min(options.limit ?? 100, 500));
   const cutoff = cutoffDate(now, olderThanDays);
+  const goalFilter = options.goalId ?? null;
 
   const rows = await sql<ArchivedDecisionRow[]>`
     WITH candidates AS (
@@ -123,6 +125,7 @@ export async function archiveStaleInternalDecisions(
         AND d.priority IN ('low', 'normal')
         AND d.created_at < ${cutoff}
         AND (${options.hiveId ?? null}::uuid IS NULL OR d.hive_id = ${options.hiveId ?? null}::uuid)
+        AND (${goalFilter}::uuid IS NULL OR d.goal_id = ${goalFilter}::uuid)
         AND ${sql.unsafe(INTERNAL_DECISION_SQL)}
       ORDER BY d.created_at ASC
       LIMIT ${limit}
@@ -144,8 +147,9 @@ export async function archiveStaleInternalDecisions(
   const archivedDecisionIds = rows.map((row) => row.id);
 
   await recordDecisionCleanupAudit(sql, {
-    targetId: options.hiveId ?? null,
+    targetId: options.goalId ?? options.hiveId ?? null,
     hiveId: options.hiveId ?? null,
+    goalId: options.goalId ?? null,
     archivedDecisionIds,
     cutoff,
     olderThanDays,
@@ -179,6 +183,7 @@ export async function reconcileDecisionIntegrity(
     now,
     olderThanDays,
     hiveId: options.hiveId,
+    goalId: options.goalId,
     limit,
   });
 

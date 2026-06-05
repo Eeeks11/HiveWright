@@ -162,6 +162,26 @@ describe("archiveStaleInternalDecisions", () => {
       VALUES (${hive.id}, ${goal.id}, 'Urgent internal diagnostic', 'High priority internal row needs operator review.', 'Review manually.', 'urgent', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
       RETURNING id
     `;
+    const [otherGoal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${hive.id}, 'Unrelated Decision Integrity Goal', 'active')
+      RETURNING id
+    `;
+    const [otherGoalStaleInternal] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind, created_at)
+      VALUES (
+        ${hive.id},
+        ${otherGoal.id},
+        'AI peer quality review: unrelated goal',
+        'AI peer review only for another goal.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "ai_peer" })},
+        'low',
+        'pending',
+        'task_quality_feedback',
+        ${new Date("2026-04-01T00:00:00Z")}
+      )
+      RETURNING id
+    `;
 
     const result = await reconcileDecisionIntegrity(sql, {
       hiveId: hive.id,
@@ -185,13 +205,14 @@ describe("archiveStaleInternalDecisions", () => {
     const rows = await sql<{ id: string; status: string; resolved_by: string | null }[]>`
       SELECT id, status, resolved_by
       FROM decisions
-      WHERE id IN (${resolvedAtContradiction.id}, ${ownerResponseContradiction.id}, ${routeNonOwner.id}, ${urgentInternal.id})
+      WHERE id IN (${resolvedAtContradiction.id}, ${ownerResponseContradiction.id}, ${routeNonOwner.id}, ${urgentInternal.id}, ${otherGoalStaleInternal.id})
     `;
     const byId = new Map(rows.map((row) => [row.id, row]));
     expect(byId.get(resolvedAtContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
     expect(byId.get(ownerResponseContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
     expect(byId.get(routeNonOwner.id)).toMatchObject({ status: 'archived', resolved_by: 'decision-integrity-sweeper' });
     expect(byId.get(urgentInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
+    expect(byId.get(otherGoalStaleInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
 
     const [audit] = await sql<{ metadata: Record<string, unknown> }[]>`
       SELECT metadata

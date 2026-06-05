@@ -523,7 +523,12 @@ describe("POST /api/goals/[id]/complete", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 409 for cancelled goal", async () => {
+  it("returns 409 for cancelled goal without reconciling stale decisions", async () => {
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, route_metadata)
+      VALUES (${bizId}, ${goalId}, 'Cancelled goal non-owner decision', 'Would be archived only if reconciliation ran.', 'Leave it alone.', 'normal', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
+      RETURNING id
+    `;
     await sql`UPDATE goals SET status = 'cancelled' WHERE id = ${goalId}`;
     const res = await POST(
       makeRequest(completionBody("gccomplete: should not resurrect")),
@@ -540,6 +545,11 @@ describe("POST /api/goals/[id]/complete", () => {
     // No audit row written.
     const completions = await sql`SELECT * FROM goal_completions WHERE goal_id = ${goalId}`;
     expect(completions.length).toBe(0);
+
+    const [decisionAfter] = await sql<{ status: string; resolved_by: string | null }[]>`
+      SELECT status, resolved_by FROM decisions WHERE id = ${decision.id}
+    `;
+    expect(decisionAfter).toMatchObject({ status: "pending", resolved_by: null });
   });
 
   it("returns 409 for paused goal", async () => {
@@ -564,6 +574,11 @@ describe("POST /api/goals/[id]/complete", () => {
       SELECT COUNT(*)::int AS c FROM hive_memory
       WHERE hive_id = ${bizId} AND content LIKE '%gccomplete%'
     `)[0].c;
+    const [lateDecision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, route_metadata)
+      VALUES (${bizId}, ${goalId}, 'Achieved goal non-owner decision', 'Would be archived only if idempotent completion reconciled.', 'Leave it alone.', 'normal', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
+      RETURNING id
+    `;
 
     // Second call (would double-write memory + double-fire notification if not idempotent)
     const res = await POST(
@@ -583,6 +598,11 @@ describe("POST /api/goals/[id]/complete", () => {
       WHERE hive_id = ${bizId} AND content LIKE '%gccomplete%'
     `)[0].c;
     expect(secondMemoryCount).toBe(firstMemoryCount); // no new memory row
+
+    const [lateDecisionAfter] = await sql<{ status: string; resolved_by: string | null }[]>`
+      SELECT status, resolved_by FROM decisions WHERE id = ${lateDecision.id}
+    `;
+    expect(lateDecisionAfter).toMatchObject({ status: "pending", resolved_by: null });
   });
 
   it("returns safe 409 diagnostics for true pending owner decisions", async () => {
