@@ -13,7 +13,7 @@ beforeEach(async () => {
 });
 
 describe("seedDefaultSchedules", () => {
-  it("seeds only the supervisor heartbeat for business hives", async () => {
+  it("seeds supervisor heartbeat plus strategic initiative loop for business hives", async () => {
     const res = await seedDefaultSchedules(sql, {
       id: HIVE,
       name: "Seed Co",
@@ -21,15 +21,16 @@ describe("seedDefaultSchedules", () => {
       kind: "business",
     });
 
-    expect(res).toEqual({ created: 1, skipped: 0 });
+    expect(res).toEqual({ created: 2, skipped: 0 });
 
-    const rows = await sql<{ origin_type: string; origin_key: string | null; cron_expression: string; enabled: boolean; task_template: { kind?: string; title?: string; brief?: string } }[]>`
+    const rows = await sql<{ origin_type: string; origin_key: string | null; cron_expression: string; enabled: boolean; task_template: { kind?: string; assignedTo?: string; title?: string; brief?: string } }[]>`
       SELECT origin_type, origin_key, cron_expression, enabled, task_template
       FROM schedules
       WHERE hive_id = ${HIVE}::uuid
+      ORDER BY origin_key ASC
     `;
 
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({
       origin_type: "system_default",
       origin_key: "hive-supervisor-heartbeat",
@@ -42,10 +43,21 @@ describe("seedDefaultSchedules", () => {
       title: "Hive supervisor heartbeat",
       brief: "(populated at run time)",
     });
+    expect(rows[1]).toMatchObject({
+      origin_type: "system_default",
+      origin_key: "strategic-initiative-evaluation",
+      cron_expression: "0 */6 * * *",
+      enabled: true,
+    });
+    expect(rows[1].task_template).toMatchObject({
+      kind: "strategic-initiative-evaluation",
+      assignedTo: "initiative-engine",
+      title: "Strategic initiative evaluation",
+    });
   });
 
   it.each(["business", "personal_project", "personal_assistant", "research", "creative"] as const)(
-    "seeds only the supervisor heartbeat for %s hives",
+    "seeds supervisor heartbeat and hive-scoped strategic initiative loop for %s hives",
     async (kind) => {
       await truncateAll(sql);
       const slug = `seed-kind-${kind}`;
@@ -60,12 +72,15 @@ describe("seedDefaultSchedules", () => {
         description: null,
         kind,
       });
-      expect(res).toEqual({ created: 1, skipped: 0 });
+      expect(res).toEqual({ created: 2, skipped: 0 });
 
       const rows = await sql<{ origin_key: string | null }[]>`
-        SELECT origin_key FROM schedules WHERE hive_id = ${HIVE}::uuid
+        SELECT origin_key FROM schedules WHERE hive_id = ${HIVE}::uuid ORDER BY origin_key ASC
       `;
-      expect(rows.map((row) => row.origin_key)).toEqual(["hive-supervisor-heartbeat"]);
+      expect(rows.map((row) => row.origin_key)).toEqual([
+        "hive-supervisor-heartbeat",
+        "strategic-initiative-evaluation",
+      ]);
     },
   );
 
@@ -83,13 +98,17 @@ describe("seedDefaultSchedules", () => {
       },
     );
 
-    expect(res).toEqual({ created: 1, skipped: 0 });
+    expect(res).toEqual({ created: 2, skipped: 0 });
 
     const rows = await sql<{ enabled: boolean; origin_key: string }[]>`
       SELECT enabled, origin_key FROM schedules
       WHERE hive_id = ${HIVE}::uuid
+      ORDER BY origin_key ASC
     `;
-    expect(rows).toEqual([{ enabled: true, origin_key: "hive-supervisor-heartbeat" }]);
+    expect(rows).toEqual([
+      { enabled: true, origin_key: "hive-supervisor-heartbeat" },
+      { enabled: false, origin_key: "strategic-initiative-evaluation" },
+    ]);
   });
 
   it("creates isolated system default instances for each hive without copying custom schedules", async () => {
@@ -118,10 +137,10 @@ describe("seedDefaultSchedules", () => {
       ORDER BY hive_id, origin_key NULLS LAST
     `;
 
-    expect(rows.filter((row) => row.hive_id === HIVE)).toHaveLength(2);
-    expect(rows.filter((row) => row.hive_id === secondHive)).toHaveLength(1);
+    expect(rows.filter((row) => row.hive_id === HIVE)).toHaveLength(3);
+    expect(rows.filter((row) => row.hive_id === secondHive)).toHaveLength(2);
     expect(rows.filter((row) => row.hive_id === secondHive).some((row) => row.task_template.title === "Hive A custom schedule")).toBe(false);
-    expect(rows.filter((row) => row.origin_type === "system_default")).toHaveLength(2);
+    expect(rows.filter((row) => row.origin_type === "system_default")).toHaveLength(4);
     expect(rows.filter((row) => row.origin_type === "custom")).toHaveLength(1);
   });
 
@@ -145,7 +164,7 @@ describe("seedDefaultSchedules", () => {
       description: null,
     });
 
-    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(res).toEqual({ created: 0, skipped: 2 });
     const [row] = await sql<{ cron_expression: string; enabled: boolean }[]>`
       SELECT cron_expression, enabled FROM schedules
       WHERE hive_id = ${HIVE}::uuid
@@ -166,12 +185,12 @@ describe("seedDefaultSchedules", () => {
       name: "Seed Co",
       description: null,
     });
-    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(res).toEqual({ created: 0, skipped: 2 });
 
     const [{ c: total }] = (await sql`
       SELECT COUNT(*)::int AS c FROM schedules WHERE hive_id = ${HIVE}::uuid
     `) as unknown as { c: number }[];
-    expect(total).toBe(1);
+    expect(total).toBe(2);
 
     const [{ c: heartbeats }] = (await sql`
       SELECT COUNT(*)::int AS c FROM schedules
@@ -204,7 +223,7 @@ describe("seedDefaultSchedules", () => {
       description: null,
     });
 
-    expect(res).toEqual({ created: 0, skipped: 1 });
+    expect(res).toEqual({ created: 1, skipped: 1 });
 
     const [{ heartbeats }] = await sql<{ heartbeats: number }[]>`
       WITH normalized AS (
@@ -222,7 +241,7 @@ describe("seedDefaultSchedules", () => {
     expect(heartbeats).toBe(1);
   });
 
-  it("does not include removed proactive/internal schedules in the default registry", () => {
+  it("keeps removed proactive/internal schedules out of the default registry while exposing the strategic loop", () => {
     expect(DEFAULT_SCHEDULE_REGISTRY).toEqual([
       {
         key: "hive-supervisor-heartbeat",
@@ -230,6 +249,13 @@ describe("seedDefaultSchedules", () => {
         kind: "hive-supervisor-heartbeat",
         cronExpression: "*/15 * * * *",
         tier: "core",
+      },
+      {
+        key: "strategic-initiative-evaluation",
+        title: "Strategic initiative evaluation",
+        kind: "strategic-initiative-evaluation",
+        cronExpression: "0 */6 * * *",
+        tier: "proactive",
       },
     ]);
   });

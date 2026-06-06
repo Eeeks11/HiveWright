@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const runInitiativeEvaluationMock = vi.fn();
+const runStrategicInitiativeEvaluationMock = vi.fn();
 
 vi.mock("@/initiative-engine", () => ({
   runInitiativeEvaluation: runInitiativeEvaluationMock,
+  runStrategicInitiativeEvaluation: runStrategicInitiativeEvaluationMock,
 }));
 
 import { checkAndFireSchedules } from "@/dispatcher/schedule-timer";
@@ -15,6 +17,7 @@ let scheduleId: string;
 beforeEach(async () => {
   await truncateAll(sql);
   runInitiativeEvaluationMock.mockReset();
+  runStrategicInitiativeEvaluationMock.mockReset();
   runInitiativeEvaluationMock.mockResolvedValue({
     runId: "run-1",
     trigger: { kind: "schedule", scheduleId: "sched-1" },
@@ -22,6 +25,16 @@ beforeEach(async () => {
     tasksCreated: 0,
     suppressed: 0,
     noop: 0,
+    errored: 0,
+    outcomes: [],
+  });
+  runStrategicInitiativeEvaluationMock.mockResolvedValue({
+    runId: "strategic-run-1",
+    trigger: { kind: "schedule", scheduleId: "sched-strategic-1" },
+    candidatesEvaluated: 0,
+    tasksCreated: 0,
+    suppressed: 0,
+    noop: 1,
     errored: 0,
     outcomes: [],
   });
@@ -98,6 +111,32 @@ describe("checkAndFireSchedules — initiative-evaluation", () => {
         kind: "schedule",
         scheduleId,
         targetGoalId,
+      },
+    });
+  });
+
+  it("routes strategic initiative schedules into the separate strategic runtime", async () => {
+    await sql`
+      UPDATE schedules
+      SET task_template = ${sql.json({
+        kind: "strategic-initiative-evaluation",
+        assignedTo: "initiative-engine",
+        title: "Strategic initiative evaluation",
+        brief: "(populated at run time)",
+      })}
+      WHERE id = ${scheduleId}
+    `;
+
+    const fired = await checkAndFireSchedules(sql);
+    expect(fired).toBe(1);
+
+    expect(runInitiativeEvaluationMock).not.toHaveBeenCalled();
+    expect(runStrategicInitiativeEvaluationMock).toHaveBeenCalledTimes(1);
+    expect(runStrategicInitiativeEvaluationMock).toHaveBeenCalledWith(sql, {
+      hiveId,
+      trigger: {
+        kind: "schedule",
+        scheduleId,
       },
     });
   });
