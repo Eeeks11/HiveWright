@@ -157,6 +157,21 @@ describe("archiveStaleInternalDecisions", () => {
       VALUES (${hive.id}, ${goal.id}, 'Route says no owner action', 'Internal route metadata marks this non-blocking.', 'Archive it.', 'normal', 'pending', 'decision', ${sql.json({ ownerActionRequired: false, secret: 'do-not-leak' })})
       RETURNING id
     `;
+    const [sameGoalStaleInternal] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind, created_at)
+      VALUES (
+        ${hive.id},
+        ${goal.id},
+        'AI peer quality review: target goal',
+        'AI peer review only for the goal being reconciled.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "ai_peer" })},
+        'low',
+        'pending',
+        'task_quality_feedback',
+        ${new Date("2026-04-01T00:00:00Z")}
+      )
+      RETURNING id
+    `;
     const [urgentInternal] = await sql<{ id: string }[]>`
       INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, options)
       VALUES (${hive.id}, ${goal.id}, 'Urgent internal diagnostic', 'High priority internal row needs operator review.', 'Review manually.', 'urgent', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
@@ -193,7 +208,11 @@ describe("archiveStaleInternalDecisions", () => {
       resolvedAtContradiction.id,
       ownerResponseContradiction.id,
     ]));
-    expect(result.archivedDecisionIds).toContain(routeNonOwner.id);
+    expect(result.archivedDecisionIds).toEqual(expect.arrayContaining([
+      sameGoalStaleInternal.id,
+      routeNonOwner.id,
+    ]));
+    expect(result.archivedDecisionIds).not.toContain(otherGoalStaleInternal.id);
     expect(result.operatorActions).toEqual([
       {
         decisionId: urgentInternal.id,
@@ -205,14 +224,30 @@ describe("archiveStaleInternalDecisions", () => {
     const rows = await sql<{ id: string; status: string; resolved_by: string | null }[]>`
       SELECT id, status, resolved_by
       FROM decisions
-      WHERE id IN (${resolvedAtContradiction.id}, ${ownerResponseContradiction.id}, ${routeNonOwner.id}, ${urgentInternal.id}, ${otherGoalStaleInternal.id})
+      WHERE id IN (${resolvedAtContradiction.id}, ${ownerResponseContradiction.id}, ${routeNonOwner.id}, ${sameGoalStaleInternal.id}, ${urgentInternal.id}, ${otherGoalStaleInternal.id})
     `;
     const byId = new Map(rows.map((row) => [row.id, row]));
     expect(byId.get(resolvedAtContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
     expect(byId.get(ownerResponseContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
     expect(byId.get(routeNonOwner.id)).toMatchObject({ status: 'archived', resolved_by: 'decision-integrity-sweeper' });
+    expect(byId.get(sameGoalStaleInternal.id)).toMatchObject({ status: 'archived', resolved_by: 'decision-cleanup' });
     expect(byId.get(urgentInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
     expect(byId.get(otherGoalStaleInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
+
+    const [staleAudit] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE target_type = 'decision_cleanup'
+        AND metadata ->> 'source' = 'stale_internal_decision_cleanup'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    expect(staleAudit.metadata).toMatchObject({
+      source: 'stale_internal_decision_cleanup',
+      goalId: goal.id,
+      archivedDecisionIds: [sameGoalStaleInternal.id],
+    });
+    expect(JSON.stringify(staleAudit.metadata)).not.toContain(otherGoalStaleInternal.id);
 
     const [audit] = await sql<{ metadata: Record<string, unknown> }[]>`
       SELECT metadata
