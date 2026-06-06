@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   normalizeFinalArtifactsFromEvidenceBundle: vi.fn(),
   assertRequiredFinalArtifactsAvailable: vi.fn(),
   upsertOwnerOutcomeForCompletion: vi.fn(),
+  reconcileDecisionIntegrity: vi.fn(),
 }));
 
 vi.mock("@/memory/governance", () => ({
@@ -51,12 +52,20 @@ vi.mock("@/outcomes/durable", () => ({
   upsertOwnerOutcomeForCompletion: mocks.upsertOwnerOutcomeForCompletion,
 }));
 
+vi.mock("@/decisions/cleanup", () => ({
+  reconcileDecisionIntegrity: mocks.reconcileDecisionIntegrity,
+}));
+
 import { completeGoal } from "./completion";
 
 describe("completeGoal memory governance", () => {
-  const tx = vi.fn() as ReturnType<typeof vi.fn> & { json: ReturnType<typeof vi.fn> };
+  const tx = vi.fn() as ReturnType<typeof vi.fn> & {
+    json: ReturnType<typeof vi.fn>;
+    unsafe: ReturnType<typeof vi.fn>;
+  };
   const sql = vi.fn() as ReturnType<typeof vi.fn> & {
     begin: ReturnType<typeof vi.fn>;
+    unsafe: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -64,16 +73,26 @@ describe("completeGoal memory governance", () => {
 
     tx
       .mockResolvedValueOnce([{ hive_id: "hive-1", title: "Govern memory", status: "active" }])
-      .mockResolvedValueOnce([{ count: 0 }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ id: "memory-1" }])
       .mockResolvedValueOnce([{ id: "completion-1" }]);
     tx.json = vi.fn((value) => value);
+    tx.unsafe = vi.fn((value) => value);
 
-    sql.mockResolvedValueOnce([{ project_id: null, project_git_repo: false }]);
+    sql.mockResolvedValueOnce([{ project_id: null, project_git_repo: false, hive_id: "hive-1" }]);
     sql.begin = vi.fn(async (callback) => callback(tx));
+    sql.unsafe = vi.fn((value) => value);
 
+    mocks.reconcileDecisionIntegrity.mockResolvedValue({
+      archivedCount: 0,
+      archivedDecisionIds: [],
+      resolvedCount: 0,
+      resolvedDecisionIds: [],
+      operatorActions: [],
+      cutoff: new Date("2026-01-01T00:00:00.000Z"),
+    });
     mocks.assertHiveMemoryWriteAllowed.mockResolvedValue({ allowed: true });
     mocks.verifyLandedState.mockResolvedValue({ ok: true });
   });

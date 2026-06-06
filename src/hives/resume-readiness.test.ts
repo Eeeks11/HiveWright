@@ -180,6 +180,19 @@ describe("getHiveResumeReadiness", () => {
     expect(countQuery).toContain("FROM decisions");
   });
 
+  it("counts pending decisions through the shared owner-action-required classifier", async () => {
+    const db = createDb({ counts: { pending_decisions: 0 } });
+
+    await getHiveResumeReadiness(db as never, {
+      hiveId: HIVE_ID,
+      checkModelHealth: vi.fn(),
+    });
+
+    const countCall = db.mock.calls.find((call) => call[0].join("?").includes("pending_decisions"));
+    expect(JSON.stringify(countCall)).toContain("ownerActionRequired");
+    expect(JSON.stringify(countCall)).toContain("route_metadata");
+  });
+
   it("reports running when the hive is not paused", async () => {
     const db = createDb({ paused: false });
 

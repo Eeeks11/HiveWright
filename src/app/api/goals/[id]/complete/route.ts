@@ -1,7 +1,13 @@
+import { NextResponse } from "next/server";
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { isInternalServiceAccountUser, requireApiUser } from "../../../_lib/auth";
-import { completeGoal, parseCompletionEvidenceBundle, parseGoalCompletionStatus } from "@/goals/completion";
+import {
+  completeGoal,
+  GoalCompletionBlockedOnOwnerDecisionsError,
+  parseCompletionEvidenceBundle,
+  parseGoalCompletionStatus,
+} from "@/goals/completion";
 import { parseLearningGateResult } from "@/goals/outcome-records";
 
 interface CompleteGoalBody {
@@ -175,6 +181,13 @@ export async function POST(
       latestCompletion: latestCompletion ?? null,
     });
   } catch (err) {
+    if (err instanceof GoalCompletionBlockedOnOwnerDecisionsError) {
+      return NextResponse.json({
+        error: err.message,
+        code: "pending_owner_decisions",
+        diagnostics: err.diagnostics,
+      }, { status: 409 });
+    }
     // `goalId` may be undefined if the throw happened before `await params` resolved,
     // but in practice that's a Next.js framework failure mode, not a route bug.
     console.error(`[POST /api/goals/[id]/complete] goalId=${goalId ?? "<unresolved>"} error:`, err);

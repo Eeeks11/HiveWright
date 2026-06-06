@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { archiveStaleInternalDecisions } from "@/decisions/cleanup";
+import { archiveStaleInternalDecisions, reconcileDecisionIntegrity } from "@/decisions/cleanup";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const NOW = new Date("2026-05-21T00:00:00Z");
@@ -129,5 +129,139 @@ describe("archiveStaleInternalDecisions", () => {
       aiPeerDecision.id,
       systemDecision.id,
     ]));
+  });
+
+  it("reconciles stale pending contradictions with sanitized audit metadata and emits operator actions for high-priority unsafe rows", async () => {
+    const [hive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('decision-integrity-hive', 'Decision Integrity Hive', 'digital')
+      RETURNING id
+    `;
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${hive.id}, 'Decision Integrity Goal', 'active')
+      RETURNING id
+    `;
+    const [resolvedAtContradiction] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, resolved_at)
+      VALUES (${hive.id}, ${goal.id}, 'Already resolved but pending', 'Resolved timestamp is already present.', 'No owner action.', 'normal', 'pending', 'decision', ${new Date("2026-05-20T00:00:00Z")})
+      RETURNING id
+    `;
+    const [ownerResponseContradiction] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, owner_response)
+      VALUES (${hive.id}, ${goal.id}, 'Owner responded but pending', 'Owner response is already present.', 'No owner action.', 'low', 'pending', 'decision', 'approved')
+      RETURNING id
+    `;
+    const [routeNonOwner] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, route_metadata)
+      VALUES (${hive.id}, ${goal.id}, 'Route says no owner action', 'Internal route metadata marks this non-blocking.', 'Archive it.', 'normal', 'pending', 'decision', ${sql.json({ ownerActionRequired: false, secret: 'do-not-leak' })})
+      RETURNING id
+    `;
+    const [sameGoalStaleInternal] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind, created_at)
+      VALUES (
+        ${hive.id},
+        ${goal.id},
+        'AI peer quality review: target goal',
+        'AI peer review only for the goal being reconciled.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "ai_peer" })},
+        'low',
+        'pending',
+        'task_quality_feedback',
+        ${new Date("2026-04-01T00:00:00Z")}
+      )
+      RETURNING id
+    `;
+    const [urgentInternal] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, recommendation, priority, status, kind, options)
+      VALUES (${hive.id}, ${goal.id}, 'Urgent internal diagnostic', 'High priority internal row needs operator review.', 'Review manually.', 'urgent', 'pending', 'decision', ${sql.json({ ownerActionRequired: false })})
+      RETURNING id
+    `;
+    const [otherGoal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${hive.id}, 'Unrelated Decision Integrity Goal', 'active')
+      RETURNING id
+    `;
+    const [otherGoalStaleInternal] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, options, priority, status, kind, created_at)
+      VALUES (
+        ${hive.id},
+        ${otherGoal.id},
+        'AI peer quality review: unrelated goal',
+        'AI peer review only for another goal.',
+        ${sql.json({ kind: "task_quality_feedback", lane: "ai_peer" })},
+        'low',
+        'pending',
+        'task_quality_feedback',
+        ${new Date("2026-04-01T00:00:00Z")}
+      )
+      RETURNING id
+    `;
+
+    const result = await reconcileDecisionIntegrity(sql, {
+      hiveId: hive.id,
+      goalId: goal.id,
+      now: NOW,
+    });
+
+    expect(result.resolvedDecisionIds).toEqual(expect.arrayContaining([
+      resolvedAtContradiction.id,
+      ownerResponseContradiction.id,
+    ]));
+    expect(result.archivedDecisionIds).toEqual(expect.arrayContaining([
+      sameGoalStaleInternal.id,
+      routeNonOwner.id,
+    ]));
+    expect(result.archivedDecisionIds).not.toContain(otherGoalStaleInternal.id);
+    expect(result.operatorActions).toEqual([
+      {
+        decisionId: urgentInternal.id,
+        reason: 'option_owner_action_not_required_high_priority',
+        priority: 'urgent',
+      },
+    ]);
+
+    const rows = await sql<{ id: string; status: string; resolved_by: string | null }[]>`
+      SELECT id, status, resolved_by
+      FROM decisions
+      WHERE id IN (${resolvedAtContradiction.id}, ${ownerResponseContradiction.id}, ${routeNonOwner.id}, ${sameGoalStaleInternal.id}, ${urgentInternal.id}, ${otherGoalStaleInternal.id})
+    `;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    expect(byId.get(resolvedAtContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
+    expect(byId.get(ownerResponseContradiction.id)).toMatchObject({ status: 'resolved', resolved_by: 'decision-integrity-sweeper' });
+    expect(byId.get(routeNonOwner.id)).toMatchObject({ status: 'archived', resolved_by: 'decision-integrity-sweeper' });
+    expect(byId.get(sameGoalStaleInternal.id)).toMatchObject({ status: 'archived', resolved_by: 'decision-cleanup' });
+    expect(byId.get(urgentInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
+    expect(byId.get(otherGoalStaleInternal.id)).toMatchObject({ status: 'pending', resolved_by: null });
+
+    const [staleAudit] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE target_type = 'decision_cleanup'
+        AND metadata ->> 'source' = 'stale_internal_decision_cleanup'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    expect(staleAudit.metadata).toMatchObject({
+      source: 'stale_internal_decision_cleanup',
+      goalId: goal.id,
+      archivedDecisionIds: [sameGoalStaleInternal.id],
+    });
+    expect(JSON.stringify(staleAudit.metadata)).not.toContain(otherGoalStaleInternal.id);
+
+    const [audit] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE target_type = 'decision_cleanup'
+        AND metadata ->> 'source' = 'decision_integrity_reconciliation'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    expect(audit.metadata).toMatchObject({
+      source: 'decision_integrity_reconciliation',
+      goalId: goal.id,
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain('do-not-leak');
+    expect(audit.metadata.operatorActions).toEqual(result.operatorActions);
   });
 });
