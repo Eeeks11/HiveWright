@@ -6,6 +6,7 @@ import {
   decisionTextRequiresOwnerApproval,
   parseEaResolverOutput,
 } from "@/decisions/ea-resolver";
+import { findStuckBlockedTasks } from "@/dispatcher/watchdog";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 describe("parseEaResolverOutput", () => {
@@ -195,6 +196,11 @@ describe.sequential("applyEaResolution", () => {
       INSERT INTO hives (id, slug, name, type)
       VALUES (${HIVE_ID}, 'ea-resolver-options', 'EA Resolver Options', 'digital')
     `;
+    await sql`
+      INSERT INTO role_templates (slug, name, type, adapter_type)
+      VALUES ('ea-resolver-test-role', 'EA Resolver Test Role', 'executor', 'claude-code')
+      ON CONFLICT (slug) DO NOTHING
+    `;
   });
 
   it("stores ownerOptions when escalating a named multi-way decision", async () => {
@@ -284,6 +290,159 @@ describe.sequential("applyEaResolution", () => {
         content: expect.stringContaining("EA auto-resolved"),
       }),
     ]);
+  });
+
+  it("finalizes the linked blocked task and active capsule when EA auto-resolves an owner handoff", async () => {
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${HIVE_ID}, 'Owner handoff goal', 'active')
+      RETURNING id
+    `;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, goal_id,
+        updated_at, result_summary
+      )
+      VALUES (
+        ${HIVE_ID}, 'ea-resolver-test-role', 'owner', 'Prepare owner handoff',
+        'Finish the deliverable and ask for owner input.', 'blocked', ${goal.id},
+        NOW() - INTERVAL '6 hours', NULL
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO task_execution_capsules (
+        task_id, hive_id, adapter_type, model, session_id, status, qa_state, last_output
+      )
+      VALUES (
+        ${task.id}, ${HIVE_ID}, 'claude-code', 'claude-sonnet', 'session-1',
+        'active', 'not_required', 'Completed output that requested owner input.'
+      )
+    `;
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (
+        hive_id, goal_id, task_id, title, context, recommendation, status, kind, route_metadata
+      )
+      VALUES (
+        ${HIVE_ID}, ${goal.id}, ${task.id}, 'Hive needs your input',
+        'The EA can answer this owner-handoff request from existing context.',
+        null, 'ea_review', 'decision',
+        ${sql.json({ source: "owner_handoff", taskId: task.id, autoDetected: true })}
+      )
+      RETURNING id
+    `;
+
+    await applyEaResolution(sql, decision.id, {
+      action: "auto_resolve",
+      reasoning: "The owner preference is already known; continue with the safe default.",
+    });
+
+    const [updatedTask] = await sql<{
+      status: string;
+      completed_at: Date | null;
+      failure_reason: string | null;
+      result_summary: string | null;
+    }[]>`
+      SELECT status, completed_at, failure_reason, result_summary
+      FROM tasks
+      WHERE id = ${task.id}
+    `;
+    expect(updatedTask.status).toBe("completed");
+    expect(updatedTask.completed_at).not.toBeNull();
+    expect(updatedTask.failure_reason).toBeNull();
+    expect(updatedTask.result_summary).toBe("Completed output that requested owner input.");
+
+    const [capsule] = await sql<{ status: string; qa_state: string }[]>`
+      SELECT status, qa_state
+      FROM task_execution_capsules
+      WHERE task_id = ${task.id}
+    `;
+    expect(capsule).toEqual({ status: "completed", qa_state: "passed" });
+
+    const stuck = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000);
+    expect(stuck.some((row) => row.id === task.id)).toBe(false);
+  });
+
+  it("does not finalize non-owner-handoff decisions or disturbed failed capsules", async () => {
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${HIVE_ID}, 'Non handoff goal', 'active')
+      RETURNING id
+    `;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, goal_id, updated_at)
+      VALUES (
+        ${HIVE_ID}, 'ea-resolver-test-role', 'owner', 'Blocked runtime task',
+        'Blocked on a runtime guard.', 'blocked', ${goal.id}, NOW() - INTERVAL '6 hours'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO task_execution_capsules (task_id, hive_id, adapter_type, status, qa_state)
+      VALUES (${task.id}, ${HIVE_ID}, 'claude-code', 'qa_failed', 'failed')
+    `;
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, task_id, title, context, status, kind, route_metadata)
+      VALUES (
+        ${HIVE_ID}, ${goal.id}, ${task.id}, 'Runtime guard review', 'Internal runtime blocker.',
+        'ea_review', 'runtime_guard', ${sql.json({ source: "runtime_guard", taskId: task.id })}
+      )
+      RETURNING id
+    `;
+
+    await applyEaResolution(sql, decision.id, {
+      action: "auto_resolve",
+      reasoning: "Runtime guard was handled separately.",
+    });
+
+    const [updatedTask] = await sql<{ status: string; completed_at: Date | null }[]>`
+      SELECT status, completed_at FROM tasks WHERE id = ${task.id}
+    `;
+    expect(updatedTask.status).toBe("blocked");
+    expect(updatedTask.completed_at).toBeNull();
+
+    const [capsule] = await sql<{ status: string; qa_state: string }[]>`
+      SELECT status, qa_state FROM task_execution_capsules WHERE task_id = ${task.id}
+    `;
+    expect(capsule).toEqual({ status: "qa_failed", qa_state: "failed" });
+  });
+
+  it("does not finalize pending owner-visible handoff decisions before EA resolves them", async () => {
+    const [goal] = await sql<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${HIVE_ID}, 'Pending owner decision goal', 'active')
+      RETURNING id
+    `;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, goal_id, updated_at)
+      VALUES (
+        ${HIVE_ID}, 'ea-resolver-test-role', 'owner', 'Await owner-visible handoff',
+        'Needs owner judgement.', 'blocked', ${goal.id}, NOW() - INTERVAL '6 hours'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO task_execution_capsules (task_id, hive_id, adapter_type, status, qa_state)
+      VALUES (${task.id}, ${HIVE_ID}, 'claude-code', 'active', 'not_required')
+    `;
+    await sql`
+      INSERT INTO decisions (hive_id, goal_id, task_id, title, context, status, kind, route_metadata)
+      VALUES (
+        ${HIVE_ID}, ${goal.id}, ${task.id}, 'Owner must choose', 'Owner-visible choice.',
+        'pending', 'decision', ${sql.json({ source: "owner_handoff", taskId: task.id })}
+      )
+    `;
+
+    const [updatedTask] = await sql<{ status: string; completed_at: Date | null }[]>`
+      SELECT status, completed_at FROM tasks WHERE id = ${task.id}
+    `;
+    expect(updatedTask.status).toBe("blocked");
+    expect(updatedTask.completed_at).toBeNull();
+
+    const [capsule] = await sql<{ status: string; qa_state: string }[]>`
+      SELECT status, qa_state FROM task_execution_capsules WHERE task_id = ${task.id}
+    `;
+    expect(capsule).toEqual({ status: "active", qa_state: "not_required" });
   });
 
   it("keeps owner-punted decisions pending instead of auto-resolving them", async () => {

@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { runEa } from "../ea/native/runner";
 
 /**
@@ -412,6 +412,70 @@ export type DecisionGuardSnapshot = {
   options?: unknown;
 };
 
+type DecisionRouteMetadata = {
+  source?: unknown;
+  taskId?: unknown;
+};
+
+type EaResolutionSnapshot = DecisionGuardSnapshot & {
+  task_id: string | null;
+  route_metadata: DecisionRouteMetadata | null;
+};
+
+function ownerHandoffTaskId(snapshot: EaResolutionSnapshot | undefined): string | null {
+  if (!snapshot?.task_id) return null;
+  const metadata = snapshot.route_metadata;
+  if (metadata?.source !== "owner_handoff") return null;
+  if (metadata.taskId !== undefined && metadata.taskId !== snapshot.task_id) return null;
+  return snapshot.task_id;
+}
+
+async function finalizeResolvedOwnerHandoffTask(
+  sql: Sql | TransactionSql,
+  input: { decisionId: string; taskId: string; eaSummary: string },
+): Promise<void> {
+  await sql`
+    UPDATE tasks t
+    SET status = 'completed',
+        result_summary = COALESCE(NULLIF(t.result_summary, ''), capsule.last_output, ${input.eaSummary}),
+        completed_at = COALESCE(t.completed_at, NOW()),
+        failure_reason = NULL,
+        dispatcher_pid = NULL,
+        started_at = NULL,
+        last_heartbeat = NULL,
+        updated_at = NOW()
+    FROM decisions d
+    LEFT JOIN LATERAL (
+      SELECT last_output
+      FROM task_execution_capsules
+      WHERE task_id = ${input.taskId}::uuid
+      LIMIT 1
+    ) capsule ON true
+    WHERE t.id = ${input.taskId}::uuid
+      AND t.status = 'blocked'
+      AND d.id = ${input.decisionId}::uuid
+      AND d.task_id = t.id
+      AND d.status = 'resolved'
+      AND d.resolved_by = 'ea-resolver'
+      AND COALESCE(d.route_metadata->>'source', '') = 'owner_handoff'
+  `;
+
+  await sql`
+    UPDATE task_execution_capsules capsule
+    SET status = 'completed',
+        qa_state = 'passed',
+        updated_at = NOW()
+    FROM decisions d
+    WHERE capsule.task_id = ${input.taskId}::uuid
+      AND capsule.status IN ('active', 'completed')
+      AND d.id = ${input.decisionId}::uuid
+      AND d.task_id = capsule.task_id
+      AND d.status = 'resolved'
+      AND d.resolved_by = 'ea-resolver'
+      AND COALESCE(d.route_metadata->>'source', '') = 'owner_handoff'
+  `;
+}
+
 export function decisionRequiresOwnerApproval(
   decision: DecisionGuardSnapshot,
 ): boolean {
@@ -446,14 +510,10 @@ export async function applyEaResolution(
   decisionId: string,
   result: EaResolverResult,
 ): Promise<void> {
+  let snapshot: EaResolutionSnapshot | undefined;
   if (result.action === "auto_resolve") {
-    const [snapshot] = await sql<{
-      title: string;
-      context: string;
-      recommendation: string | null;
-      options: unknown;
-    }[]>`
-      SELECT title, context, recommendation, options
+    [snapshot] = await sql<EaResolutionSnapshot[]>`
+      SELECT title, context, recommendation, options, task_id, route_metadata
       FROM decisions
       WHERE id = ${decisionId}
     `;
@@ -463,8 +523,8 @@ export async function applyEaResolution(
         reasoning:
           `Owner-approval gate detected in decision text — EA cannot auto-resolve. ` +
           `Original EA reasoning: ${result.reasoning}`,
-        ownerTitle: snapshot.title,
-        ownerContext: snapshot.context,
+        ownerTitle: snapshot.title ?? "Owner approval required",
+        ownerContext: snapshot.context ?? "The EA detected an owner-approval gate.",
         ownerRecommendation: snapshot.recommendation ?? undefined,
         ownerPriority: "normal",
       };
@@ -496,6 +556,14 @@ export async function applyEaResolution(
           ${`EA auto-resolved after discussion/review: ${result.reasoning}`}
         )
       `;
+      const linkedOwnerHandoffTaskId = ownerHandoffTaskId(snapshot);
+      if (linkedOwnerHandoffTaskId) {
+        await finalizeResolvedOwnerHandoffTask(tx, {
+          decisionId,
+          taskId: linkedOwnerHandoffTaskId,
+          eaSummary,
+        });
+      }
     });
     return;
   }
