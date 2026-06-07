@@ -135,13 +135,17 @@ type StrategicCandidate = {
   evidence: Record<string, unknown>;
 };
 
+const STRATEGIC_INITIATIVE_TASK_ROLE = "operations-coordinator";
+
 export interface InitiativeWorkSubmission {
   hiveId: string;
   input: string;
+  assignedTo?: string;
   projectId?: string | null;
   goalId?: string | null;
   priority: number;
   acceptanceCriteria: string;
+  forceType?: "goal";
 }
 
 export interface RunInitiativeEvaluationOptions {
@@ -653,13 +657,21 @@ export async function runStrategicInitiativeEvaluation(
     }
 
     try {
+      const expectedWorkType = candidate.action === "create_goal" ? "goal" : "task";
       const work = await submitWork({
         hiveId: input.hiveId,
         input: candidate.taskBrief,
+        assignedTo: candidate.action === "create_task" ? STRATEGIC_INITIATIVE_TASK_ROLE : undefined,
         goalId: candidate.existingGoalId,
         priority: 3,
         acceptanceCriteria: candidate.acceptanceCriteria,
+        forceType: candidate.action === "create_goal" ? "goal" : undefined,
       });
+      if (work.type !== expectedWorkType) {
+        throw new Error(
+          `Strategic initiative submitted ${candidate.action} but work intake returned ${work.type}`,
+        );
+      }
       outcomes.push(await persistDecision(sql, {
         runId: run.id,
         hiveId: input.hiveId,

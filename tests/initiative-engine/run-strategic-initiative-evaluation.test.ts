@@ -7,11 +7,12 @@ let hiveId: string;
 let otherHiveId: string;
 let goalId: string;
 let scheduleId: string;
+let submittedStrategicInputs: Array<{ assignedTo?: string; forceType?: "goal"; goalId?: string | null }> = [];
 
 async function seedRole(sql: Sql) {
   await sql`
     INSERT INTO role_templates (slug, name, type, adapter_type)
-    VALUES ('strategy-agent', 'Strategy Agent', 'executor', 'claude-code')
+    VALUES ('operations-coordinator', 'Operations Coordinator', 'executor', 'auto')
     ON CONFLICT (slug) DO NOTHING
   `;
 }
@@ -19,19 +20,29 @@ async function seedRole(sql: Sql) {
 async function submitWorkDirect(input: {
   hiveId: string;
   input: string;
+  assignedTo?: string;
   goalId?: string | null;
   priority: number;
   acceptanceCriteria: string;
+  forceType?: "goal";
 }) {
-  if (input.goalId) {
+  submittedStrategicInputs.push({
+    assignedTo: input.assignedTo,
+    forceType: input.forceType,
+    goalId: input.goalId ?? null,
+  });
+
+  const assignedTo = input.assignedTo;
+  if (assignedTo) {
+    const goalIdForTask = input.goalId ?? null;
     const [task] = await sql<Array<{ id: string; title: string }>>`
       INSERT INTO tasks (
         hive_id, goal_id, title, brief, status, assigned_to,
         created_by, acceptance_criteria, priority, qa_required
       )
       VALUES (
-        ${input.hiveId}, ${input.goalId}, 'Strategic next action', ${input.input},
-        'pending', 'strategy-agent', 'initiative-engine', ${input.acceptanceCriteria},
+        ${input.hiveId}, ${goalIdForTask}, 'Strategic next action', ${input.input},
+        'pending', ${assignedTo}, 'initiative-engine', ${input.acceptanceCriteria},
         ${input.priority}, false
       )
       RETURNING id, title
@@ -42,6 +53,10 @@ async function submitWorkDirect(input: {
       title: task.title,
       classification: { provider: "test", model: "test", confidence: 0.93, reasoning: "task", usedFallback: false },
     };
+  }
+
+  if (input.forceType !== "goal") {
+    throw new Error("submitWorkDirect requires forceType=goal for strategic goal creation");
   }
 
   const [goal] = await sql<Array<{ id: string; title: string }>>`
@@ -58,6 +73,7 @@ async function submitWorkDirect(input: {
 }
 
 beforeEach(async () => {
+  submittedStrategicInputs = [];
   await truncateAll(sql);
   await seedRole(sql);
   const [hive] = await sql<Array<{ id: string }>>`
@@ -158,6 +174,9 @@ describe.sequential("runStrategicInitiativeEvaluation", () => {
 
     expect(result.tasksCreated).toBe(1);
     expect(result.candidatesEvaluated).toBe(1);
+    expect(submittedStrategicInputs).toEqual([
+      { assignedTo: "operations-coordinator", forceType: undefined, goalId },
+    ]);
     expect(result.outcomes[0]).toMatchObject({
       actionTaken: "create_task",
       goalId,
@@ -257,6 +276,9 @@ describe.sequential("runStrategicInitiativeEvaluation", () => {
     }, { submitWork: submitWorkDirect });
 
     expect(result.tasksCreated).toBe(0);
+    expect(submittedStrategicInputs).toEqual([
+      { assignedTo: undefined, forceType: "goal", goalId: null },
+    ]);
     expect(result.outcomes[0].actionTaken).toBe("create_goal");
     expect(result.outcomes[0].createdGoalId).toBeTruthy();
     expect(result.outcomes[0].evidence).toMatchObject({
