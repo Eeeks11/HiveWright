@@ -59,6 +59,22 @@ const COMMON_DEFAULT_SCHEDULE_DEFINITIONS: DefaultScheduleDefinition[] = [
       brief: "(populated at run time)",
     }),
   },
+  {
+    key: "strategic-initiative-evaluation",
+    title: "Strategic initiative evaluation",
+    kind: "strategic-initiative-evaluation",
+    cronExpression: "0 */6 * * *",
+    tier: "proactive",
+    createdBy: SYSTEM_DEFAULT_CREATED_BY,
+    buildTemplate: () => ({
+      kind: "strategic-initiative-evaluation",
+      assignedTo: "initiative-engine",
+      title: "Strategic initiative evaluation",
+      brief: "Hive-scoped mission/target review; starts or advances work only when a clear high-leverage next move exists.",
+      qaRequired: false,
+      priority: 3,
+    }),
+  },
 ];
 
 const ALL_DEFAULT_SCHEDULE_DEFINITIONS = [...COMMON_DEFAULT_SCHEDULE_DEFINITIONS];

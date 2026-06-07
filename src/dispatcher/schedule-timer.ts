@@ -115,6 +115,22 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
           err instanceof Error ? err.message : String(err),
         );
       }
+    } else if (template.kind === "strategic-initiative-evaluation") {
+      try {
+        const { runStrategicInitiativeEvaluation } = await import("../initiative-engine");
+        await runStrategicInitiativeEvaluation(sql, {
+          hiveId: schedule.hive_id,
+          trigger: {
+            kind: "schedule",
+            scheduleId: schedule.id,
+          },
+        });
+      } catch (err) {
+        console.error(
+          `[schedule-timer] runStrategicInitiativeEvaluation failed for hive ${schedule.hive_id}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
     } else if (template.kind === "initiative-evaluation") {
       try {
         const { runInitiativeEvaluation } = await import("../initiative-engine");
