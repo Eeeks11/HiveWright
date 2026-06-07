@@ -1271,11 +1271,15 @@ async function persistDecision(
 
 function summarizeRun(runId: string, outcomes: InitiativeCandidateOutcome[]) {
   const suppressionReasons: Record<string, number> = {};
+  let createdGoals = 0;
   let createdTasks = 0;
   let suppressedCount = 0;
   let noopCount = 0;
+  let runFailures = 0;
+  let failureReason: string | null = null;
 
   for (const outcome of outcomes) {
+    if (outcome.actionTaken === "create_goal") createdGoals += 1;
     if (outcome.actionTaken === "create_task") createdTasks += 1;
     if (outcome.actionTaken === "suppress") {
       suppressedCount += 1;
@@ -1284,21 +1288,27 @@ function summarizeRun(runId: string, outcomes: InitiativeCandidateOutcome[]) {
           (suppressionReasons[outcome.suppressionReason] ?? 0) + 1;
       }
     }
-    if (outcome.actionTaken === "noop") noopCount += 1;
+    if (outcome.actionTaken === "noop") {
+      noopCount += 1;
+      if (/failed/i.test(outcome.rationale)) {
+        runFailures += 1;
+        failureReason ??= outcome.rationale;
+      }
+    }
   }
 
   return {
     runId,
     status: "completed" as const,
     evaluatedCandidates: outcomes.length,
-    createdCount: createdTasks,
-    createdGoals: 0,
+    createdCount: createdGoals + createdTasks,
+    createdGoals,
     createdTasks,
     createdDecisions: 0,
     suppressedCount,
     noopCount,
     suppressionReasons,
-    runFailures: noopCount,
-    failureReason: null,
+    runFailures,
+    failureReason,
   };
 }

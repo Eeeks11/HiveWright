@@ -213,6 +213,39 @@ describe.sequential("runStrategicInitiativeEvaluation", () => {
         noOp: { reason: "insufficient_mission_target_signal" },
       },
     });
+
+    const [run] = await sql<Array<{
+      status: string;
+      evaluated_candidates: number;
+      created_count: number;
+      created_goals: number;
+      created_tasks: number;
+      noop_count: number;
+      run_failures: number;
+      failure_reason: string | null;
+    }>>`
+      SELECT
+        status,
+        evaluated_candidates,
+        created_count,
+        created_goals,
+        created_tasks,
+        noop_count,
+        run_failures,
+        failure_reason
+      FROM initiative_runs
+      WHERE id = ${result.runId}
+    `;
+    expect(run).toMatchObject({
+      status: "completed",
+      evaluated_candidates: 1,
+      created_count: 0,
+      created_goals: 0,
+      created_tasks: 0,
+      noop_count: 1,
+      run_failures: 0,
+      failure_reason: null,
+    });
   });
 
   it("creates a new strategic goal when there is a mission/target but no active goal to advance", async () => {
@@ -231,6 +264,39 @@ describe.sequential("runStrategicInitiativeEvaluation", () => {
         kind: "strategic-new-initiative",
         targetTitle: "Add three wholesale customers",
       },
+    });
+
+    const [run] = await sql<Array<{
+      status: string;
+      evaluated_candidates: number;
+      created_count: number;
+      created_goals: number;
+      created_tasks: number;
+      noop_count: number;
+      run_failures: number;
+      failure_reason: string | null;
+    }>>`
+      SELECT
+        status,
+        evaluated_candidates,
+        created_count,
+        created_goals,
+        created_tasks,
+        noop_count,
+        run_failures,
+        failure_reason
+      FROM initiative_runs
+      WHERE id = ${result.runId}
+    `;
+    expect(run).toMatchObject({
+      status: "completed",
+      evaluated_candidates: 1,
+      created_count: 1,
+      created_goals: 1,
+      created_tasks: 0,
+      noop_count: 0,
+      run_failures: 0,
+      failure_reason: null,
     });
   });
 
