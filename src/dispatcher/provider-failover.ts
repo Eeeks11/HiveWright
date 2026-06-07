@@ -1,10 +1,12 @@
+import type { DispatcherModelRouteHealthDecision } from "./adapter-health";
+
 export interface ProviderFailoverInput {
   primaryAdapterType: string;
   primaryModel: string;
   fallbackAdapterType: string | null | undefined;
   fallbackModel: string | null | undefined;
-  primaryHealthy: boolean;
-  fallbackHealthy?: boolean;
+  primaryHealth: DispatcherModelRouteHealthDecision;
+  fallbackHealth?: DispatcherModelRouteHealthDecision | null;
 }
 
 export interface ProviderFailoverDecision {
@@ -14,6 +16,7 @@ export interface ProviderFailoverDecision {
   usedFallback: boolean;
   clearFallbackModel: boolean;
   reason: string;
+  diagnostic: string;
 }
 
 /**
@@ -24,7 +27,28 @@ export interface ProviderFailoverDecision {
  *   so known-bad runtime paths do not burn tokens or create recovery churn.
  */
 export function decideProviderFailoverRoute(input: ProviderFailoverInput): ProviderFailoverDecision {
-  if (input.primaryHealthy) {
+  const fallbackDeclared = Boolean(input.fallbackAdapterType && input.fallbackModel);
+
+  if (!fallbackDeclared) {
+    return {
+      adapterType: input.primaryAdapterType,
+      model: input.primaryModel,
+      canRun: false,
+      usedFallback: false,
+      clearFallbackModel: false,
+      reason: "no_declared_fallback_route",
+      diagnostic: buildDiagnostic(input, {
+        adapterType: input.primaryAdapterType,
+        model: input.primaryModel,
+        canRun: false,
+        usedFallback: false,
+        clearFallbackModel: false,
+        reason: "no_declared_fallback_route",
+      }),
+    };
+  }
+
+  if (input.primaryHealth.healthy) {
     return {
       adapterType: input.primaryAdapterType,
       model: input.primaryModel,
@@ -32,10 +56,22 @@ export function decideProviderFailoverRoute(input: ProviderFailoverInput): Provi
       usedFallback: false,
       clearFallbackModel: false,
       reason: "primary_adapter_healthy",
+      diagnostic: buildDiagnostic(input, {
+        adapterType: input.primaryAdapterType,
+        model: input.primaryModel,
+        canRun: true,
+        usedFallback: false,
+        clearFallbackModel: false,
+        reason: "primary_adapter_healthy",
+      }),
     };
   }
 
-  if (input.fallbackAdapterType && input.fallbackModel && input.fallbackHealthy === true) {
+  if (
+    input.fallbackAdapterType &&
+    input.fallbackModel &&
+    input.fallbackHealth?.healthy === true
+  ) {
     return {
       adapterType: input.fallbackAdapterType,
       model: input.fallbackModel,
@@ -43,6 +79,14 @@ export function decideProviderFailoverRoute(input: ProviderFailoverInput): Provi
       usedFallback: true,
       clearFallbackModel: true,
       reason: "primary_unhealthy_fallback_healthy",
+      diagnostic: buildDiagnostic(input, {
+        adapterType: input.fallbackAdapterType,
+        model: input.fallbackModel,
+        canRun: true,
+        usedFallback: true,
+        clearFallbackModel: true,
+        reason: "primary_unhealthy_fallback_healthy",
+      }),
     };
   }
 
@@ -52,9 +96,78 @@ export function decideProviderFailoverRoute(input: ProviderFailoverInput): Provi
     canRun: false,
     usedFallback: false,
     clearFallbackModel: false,
-    reason:
-      input.fallbackAdapterType && input.fallbackModel
-        ? "primary_and_fallback_unhealthy"
-        : "primary_unhealthy_no_declared_fallback",
+    reason: "primary_and_fallback_unhealthy",
+    diagnostic: buildDiagnostic(input, {
+      adapterType: input.primaryAdapterType,
+      model: input.primaryModel,
+      canRun: false,
+      usedFallback: false,
+      clearFallbackModel: false,
+      reason: "primary_and_fallback_unhealthy",
+    }),
   };
+}
+
+function buildDiagnostic(
+  input: ProviderFailoverInput,
+  decision: Omit<ProviderFailoverDecision, "diagnostic">,
+): string {
+  const selection = decision.canRun
+    ? decision.usedFallback ? "fallback" : "primary"
+    : "blocked";
+  const lines = [
+    `Final route selection: ${decision.adapterType}/${decision.model} (${selection}; reason=${decision.reason}).`,
+    describeRoute("Primary", input.primaryAdapterType, input.primaryModel, input.primaryHealth),
+  ];
+
+  if (!input.fallbackAdapterType || !input.fallbackModel) {
+    lines.push("Fallback route declaration: missing.");
+    return lines.join(" ");
+  }
+
+  if (input.fallbackHealth) {
+    lines.push(
+      describeRoute("Fallback", input.fallbackAdapterType, input.fallbackModel, input.fallbackHealth),
+    );
+  } else {
+    lines.push(
+      `Fallback route ${input.fallbackAdapterType}/${input.fallbackModel}: declared, not preflight-checked because the primary route is runnable.`,
+    );
+  }
+
+  return lines.join(" ");
+}
+
+function describeRoute(
+  label: "Primary" | "Fallback",
+  adapterType: string,
+  model: string,
+  health: DispatcherModelRouteHealthDecision,
+): string {
+  const parts = [
+    `${label} route ${adapterType}/${model}: ${health.healthy ? "routable" : "unroutable"} (${health.reason}${health.detail ? `; ${health.detail}` : ""}).`,
+  ];
+
+  if (health.refresh.attempted) {
+    const refreshParts = [
+      `refresh=${health.refresh.outcome}`,
+      `from=${health.refresh.initialReason ?? "unknown"}`,
+      `final=${health.refresh.finalReason ?? "unknown"}`,
+    ];
+    if (health.refresh.result) {
+      refreshParts.push(
+        `candidates=${health.refresh.result.candidates}`,
+        `probed=${health.refresh.result.probed}`,
+        `healthy=${health.refresh.result.healthy}`,
+        `unhealthy=${health.refresh.result.unhealthy}`,
+        `errors=${health.refresh.result.errors}`,
+      );
+    }
+    if (health.refresh.detail) {
+      refreshParts.push(health.refresh.detail);
+    }
+    parts.push(`Refresh outcome: ${refreshParts.join(", ")}.`);
+  }
+
+  return parts.join(" ");
 }

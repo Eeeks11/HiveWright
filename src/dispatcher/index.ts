@@ -47,7 +47,10 @@ import { buildSessionContext } from "./session-builder";
 import { provisionTaskWorkspace } from "./worktree-manager";
 import { runPreFlightChecks } from "./pre-flight";
 import { validateBrief } from "./pre-task-qa";
-import { checkDispatcherModelRouteHealth } from "./adapter-health";
+import {
+  checkDispatcherModelRouteHealth,
+  type DispatcherModelRouteHealthDecision,
+} from "./adapter-health";
 import { decideProviderFailoverRoute } from "./provider-failover";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
@@ -801,10 +804,15 @@ export class Dispatcher {
         return;
       }
 
-      const primaryHealthy = await this.isAdapterHealthy(adapterType, task.assignedTo, ctx.model, task.hiveId);
-      let fallbackHealthy: boolean | undefined;
-      if (!primaryHealthy && ctx.fallbackAdapterType && ctx.fallbackModel) {
-        fallbackHealthy = await this.isAdapterHealthy(
+      const primaryHealth = await this.checkRouteHealth(
+        adapterType,
+        task.assignedTo,
+        ctx.model,
+        task.hiveId,
+      );
+      let fallbackHealth: DispatcherModelRouteHealthDecision | null = null;
+      if (!primaryHealth.healthy && ctx.fallbackAdapterType && ctx.fallbackModel) {
+        fallbackHealth = await this.checkRouteHealth(
           ctx.fallbackAdapterType,
           task.assignedTo,
           ctx.fallbackModel,
@@ -817,9 +825,15 @@ export class Dispatcher {
         primaryModel: ctx.model,
         fallbackAdapterType: ctx.fallbackAdapterType,
         fallbackModel: ctx.fallbackModel,
-        primaryHealthy,
-        fallbackHealthy,
+        primaryHealth,
+        fallbackHealth,
       });
+      await writeTaskLog(this.sql, {
+        taskId: task.id,
+        goalId: task.goalId ?? undefined,
+        chunk: `[runtime-route] ${route.diagnostic}`,
+        type: "status",
+      }).catch(() => {});
       if (route.usedFallback) {
         console.log(
           `[dispatcher] Primary adapter ${primaryAdapterType} unhealthy — switching task ${task.id} to fallback ${route.adapterType}/${route.model}`,
@@ -832,11 +846,7 @@ export class Dispatcher {
       }
 
       if (!route.canRun) {
-        const reason = [
-          "runtime_blocked: Runtime health gate blocked task before spawn.",
-          `Resolved route: ${route.adapterType}/${route.model}.`,
-          `Reason: ${route.reason}.`,
-        ].join(" ");
+        const reason = `runtime_blocked: Runtime health gate blocked task before spawn. ${route.diagnostic}`;
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
         const run = await startExecutionRun(this.sql, {
           hiveId: task.hiveId,
@@ -845,7 +855,13 @@ export class Dispatcher {
           adapterType: route.adapterType,
           model: route.model,
           dispatcherPid: process.pid,
-          metadata: { routeStage: "runtime_health_gate", primaryAdapterType, primaryHealthy, fallbackHealthy },
+          metadata: {
+            routeStage: "runtime_health_gate",
+            primaryAdapterType,
+            primaryHealthy: primaryHealth.healthy,
+            fallbackHealthy: fallbackHealth?.healthy ?? null,
+            routeReason: route.reason,
+          },
         });
         await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
         await writeTaskLog(this.sql, {
@@ -2083,12 +2099,12 @@ export class Dispatcher {
    * Errors are treated as "unhealthy" rather than thrown so a transient
    * endpoint hiccup doesn't break the whole dispatch cycle.
    */
-  private async isAdapterHealthy(
+  private async checkRouteHealth(
     adapterType: string,
     slug: string,
     model: string,
     hiveId: string,
-  ): Promise<boolean> {
+  ): Promise<DispatcherModelRouteHealthDecision> {
     try {
       const status = await checkDispatcherModelRouteHealth(this.sql, {
         hiveId,
@@ -2101,13 +2117,30 @@ export class Dispatcher {
           `[dispatcher] model route health blocked ${adapterType}/${model}: ${status.reason}${status.detail ? ` (${status.detail})` : ""}`,
         );
       }
-      return status.healthy;
+      return status;
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
       console.warn(
         `[dispatcher] model route health check failed for ${adapterType}/${model}:`,
-        err instanceof Error ? err.message : err,
+        detail,
       );
-      return false;
+      return {
+        healthy: false,
+        reason: "health_probe_unhealthy",
+        detail,
+        modelHealth: {
+          canRun: false,
+          reason: "health_probe_unhealthy",
+          failureReason: detail,
+        },
+        refresh: {
+          attempted: false,
+          initialReason: null,
+          outcome: "not_needed",
+          finalReason: "health_probe_unhealthy",
+          detail,
+        },
+      };
     }
   }
 
