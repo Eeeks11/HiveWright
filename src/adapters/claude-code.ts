@@ -4,6 +4,7 @@ import { StreamJsonChunker } from "./claude-stream-parser";
 import { resolveMcps, buildClaudeMcpConfig } from "../tools/mcp-catalog";
 import { healthyProbeResult, probeResultFromBoundaryError } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
+import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
 
 export function resolveClaudeCodeWorkspace(ctx: SessionContext): string | null {
   if (ctx.worktreeContext?.isolationStatus === "active" && ctx.worktreeContext.effectiveWorkspace) {
@@ -128,6 +129,7 @@ export class ClaudeCodeAdapter implements Adapter {
     const prompt = this.translate(ctx);
     const args = this.buildCommand(ctx);
     const workspace = resolveClaudeCodeWorkspace(ctx);
+    if (workspace) assertNotForbiddenHiveWrightWorkspace(workspace);
 
     // Strip claude-code's auth env vars so the spawned `claude` CLI falls back
     // to its native OAuth (Pro/Max subscription) instead of trying to use a

@@ -13,6 +13,7 @@ import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
 } from "../audit/agent-events";
+import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
 
 /**
  * Direct codex CLI adapter — bypasses openclaw entirely.
@@ -516,6 +517,7 @@ function resolveCleanNonGitTaskWorkspace(ctx: SessionContext): string {
 }
 
 function ensureCodexWorkspace(workspace: string): void {
+  assertNotForbiddenHiveWrightWorkspace(workspace);
   fs.mkdirSync(workspace, { recursive: true });
 }
 

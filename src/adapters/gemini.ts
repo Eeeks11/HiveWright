@@ -6,6 +6,7 @@ import type { Adapter, AdapterProbeCredential, AdapterResult, ChunkCallback, Pro
 import { resolveMcps, buildGeminiMcpSettings } from "../tools/mcp-catalog";
 import { healthyProbeResult, probeResultFromBoundaryError } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
+import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
 
 interface GeminiStreamResult {
   isError: boolean;
@@ -189,9 +190,12 @@ export class GeminiAdapter implements Adapter {
       env.GEMINI_CLI_HOME = mcpHome.geminiCliHome;
     }
 
+    const workspace = ctx.projectWorkspace;
+    if (workspace) assertNotForbiddenHiveWrightWorkspace(workspace);
+
     return new Promise((resolve) => {
       const proc = spawn("gemini", args, {
-        cwd: ctx.projectWorkspace || process.cwd(),
+        cwd: workspace || process.cwd(),
         env: env as NodeJS.ProcessEnv,
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 14_400_000,

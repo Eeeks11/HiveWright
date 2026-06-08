@@ -45,6 +45,10 @@ import {
 import type { FSWatcher } from "chokidar";
 import { buildSessionContext } from "./session-builder";
 import { provisionTaskWorkspace } from "./worktree-manager";
+import {
+  evaluateTaskWorkspacePolicy,
+  type WorkspacePolicyDecision,
+} from "./workspace-policy";
 import { runPreFlightChecks } from "./pre-flight";
 import { validateBrief } from "./pre-task-qa";
 import {
@@ -55,7 +59,7 @@ import { decideProviderFailoverRoute } from "./provider-failover";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
-import type { Adapter } from "../adapters/types";
+import type { Adapter, SessionContext } from "../adapters/types";
 import { createDefaultRuntimeGuardPipeline, type RuntimeGuardDecision } from "../execution-guards";
 import {
   buildCodexEmptyOutputDiagnostic,
@@ -251,6 +255,41 @@ export class Dispatcher {
     this.sql = postgres(DATABASE_URL);
     this.config = config;
     this.outboundNotifier = new OutboundNotifier(this.sql);
+  }
+
+  private async blockTaskForWorkspacePolicy(
+    task: ClaimedTask,
+    ctx: SessionContext,
+    workspacePolicy: Extract<WorkspacePolicyDecision, { allowed: false }>,
+  ): Promise<void> {
+    const reason = workspacePolicy.reason;
+    console.warn(`[dispatcher] ${reason} task=${task.id} signals=${workspacePolicy.signals.join(",")}`);
+    const run = await startExecutionRun(this.sql, {
+      hiveId: task.hiveId,
+      taskId: task.id,
+      goalId: task.goalId,
+      adapterType: ctx.primaryAdapterType || "workspace-policy",
+      model: ctx.model,
+      dispatcherPid: process.pid,
+      metadata: {
+        routeStage: "workspace_policy_gate",
+        workspacePolicySignals: workspacePolicy.signals,
+        projectId: task.projectId,
+        gitBackedProject: ctx.gitBackedProject === true,
+        projectWorkspace: ctx.projectWorkspace,
+        baseProjectWorkspace: ctx.baseProjectWorkspace ?? null,
+        workspaceIsolationStatus: ctx.workspaceIsolation?.status ?? null,
+        workspaceIsolationReason: ctx.workspaceIsolation?.reason ?? null,
+      },
+    });
+    await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
+    await writeTaskLog(this.sql, {
+      taskId: task.id,
+      goalId: task.goalId ?? undefined,
+      chunk: reason,
+      type: "status",
+    }).catch(() => {});
+    await blockTask(this.sql, task.id, reason);
   }
 
   async start() {
@@ -721,6 +760,12 @@ export class Dispatcher {
 
       // 1. Build session context
       const ctx = await buildSessionContext(this.sql, task);
+      const preProvisionWorkspacePolicy = evaluateTaskWorkspacePolicy(ctx, { requireActiveIsolation: false });
+      if (!preProvisionWorkspacePolicy.allowed) {
+        await this.blockTaskForWorkspacePolicy(task, ctx, preProvisionWorkspacePolicy);
+        return;
+      }
+
       const workspaceProvision = await provisionTaskWorkspace(this.sql, ctx);
       if (workspaceProvision.status === "failed") {
         const reason = `Worktree provisioning failed: ${workspaceProvision.reason || "unknown error"}`;
@@ -741,6 +786,12 @@ export class Dispatcher {
         console.log(`[dispatcher] Worktree isolation skipped for ${task.id}: ${workspaceProvision.reason}`);
       } else {
         console.log(`[dispatcher] Worktree isolation active for ${task.id}: ${workspaceProvision.worktreePath}`);
+      }
+
+      const workspacePolicy = evaluateTaskWorkspacePolicy(ctx);
+      if (!workspacePolicy.allowed) {
+        await this.blockTaskForWorkspacePolicy(task, ctx, workspacePolicy);
+        return;
       }
 
       // 2. Pre-flight checks
