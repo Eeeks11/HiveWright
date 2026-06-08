@@ -78,6 +78,7 @@ vi.mock("@/dispatcher/provider-failover", () => ({
     canRun: true,
     reason: "primary healthy",
     clearFallbackModel: false,
+    diagnostic: `Final route selection: ${input.primaryAdapterType}/${input.primaryModel} (primary; reason=primary healthy).`,
   })),
 }));
 
@@ -87,12 +88,40 @@ function createDispatcherWithAdapter(adapter: Adapter) {
   const internal = dispatcher as unknown as {
     sql: typeof sql;
     resolveAdapter: () => Promise<Adapter>;
-    isAdapterHealthy: () => Promise<boolean>;
+    checkRouteHealth: () => Promise<{
+      healthy: boolean;
+      reason: string;
+      detail?: string;
+      modelHealth: {
+        canRun: boolean;
+        reason: string;
+        failureReason?: string | null;
+      };
+      refresh: {
+        attempted: boolean;
+        initialReason: string | null;
+        outcome: "not_needed" | "recovered" | "still_unhealthy" | "refresh_failed";
+        finalReason: string | null;
+      };
+    }>;
     executeTask: (task: unknown) => Promise<void>;
   };
   internal.sql = sql;
   internal.resolveAdapter = async () => adapter;
-  internal.isAdapterHealthy = async () => true;
+  internal.checkRouteHealth = async () => ({
+    healthy: true,
+    reason: "model_health_and_provisioner_healthy",
+    modelHealth: {
+      canRun: true,
+      reason: "fresh_healthy_probe",
+    },
+    refresh: {
+      attempted: false,
+      initialReason: null,
+      outcome: "not_needed",
+      finalReason: "fresh_healthy_probe",
+    },
+  });
   return { dispatcher: internal, close: () => originalSql.end() };
 }
 
@@ -200,6 +229,7 @@ beforeEach(async () => {
     canRun: true,
     reason: "primary healthy",
     clearFallbackModel: false,
+    diagnostic: `Final route selection: ${input.primaryAdapterType}/${input.primaryModel} (primary; reason=primary healthy).`,
   }));
 });
 
@@ -210,8 +240,10 @@ describe("dispatcher codex runtime diagnostics", () => {
       adapterType: "codex",
       model: "openai-codex/gpt-5.5",
       canRun: false,
-      reason: "primary_unhealthy_no_declared_fallback",
+      reason: "no_declared_fallback_route",
       clearFallbackModel: false,
+      diagnostic:
+        "Final route selection: codex/openai-codex/gpt-5.5 (blocked; reason=no_declared_fallback_route). Fallback route declaration: missing.",
     });
     const execute = vi.fn(async () => ({
       success: true,
@@ -235,7 +267,17 @@ describe("dispatcher codex runtime diagnostics", () => {
     `;
     expect(row.status).toBe("blocked");
     expect(row.failure_reason).toContain("Runtime health gate blocked task before spawn.");
-    expect(row.failure_reason).toContain("primary_unhealthy_no_declared_fallback");
+    expect(row.failure_reason).toContain("no_declared_fallback_route");
+    const logs = await sql<{ type: string; chunk: string }[]>`
+      SELECT type, chunk
+      FROM task_logs
+      WHERE task_id = ${task.id}
+      ORDER BY id ASC
+    `;
+    expect(logs.some((entry) =>
+      entry.type === "status" &&
+      entry.chunk.includes("[runtime-route] Final route selection: codex/openai-codex/gpt-5.5 (blocked; reason=no_declared_fallback_route)."),
+    )).toBe(true);
   });
 
   it("resumes the original Codex task session when QA sends work back", async () => {

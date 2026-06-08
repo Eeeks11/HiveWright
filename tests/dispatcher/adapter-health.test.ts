@@ -131,7 +131,63 @@ describe("checkDispatcherModelRouteHealth", () => {
     expect(decision).toMatchObject({
       healthy: true,
       reason: "model_health_and_provisioner_healthy",
+      refresh: {
+        attempted: true,
+        initialReason: "health_probe_stale",
+        outcome: "recovered",
+        finalReason: "fresh_healthy_probe",
+      },
     });
+  });
+
+  it("surfaces refresh failure details when a stale route cannot be re-probed", async () => {
+    const fingerprint = createRuntimeCredentialFingerprint({
+      provider: "openai",
+      adapterType: "codex",
+      baseUrl: null,
+    });
+    await sql`
+      INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)
+      VALUES (${HIVE_ID}, 'openai', 'openai-codex/gpt-5.5', 'codex', true)
+    `;
+    await sql`
+      INSERT INTO model_health (fingerprint, model_id, status, last_probed_at, next_probe_at)
+      VALUES (
+        ${fingerprint},
+        'openai-codex/gpt-5.5',
+        'healthy',
+        ${new Date(NOW.getTime() - 2 * 60 * 60 * 1000)},
+        ${new Date(NOW.getTime() - 60 * 60 * 1000)}
+      )
+    `;
+
+    const decision = await checkDispatcherModelRouteHealth(sql, {
+      hiveId: HIVE_ID,
+      roleSlug: "dev-agent",
+      adapterType: "codex",
+      modelId: "openai-codex/gpt-5.5",
+      now: NOW,
+      modelHealthAdapterFactory: async () => {
+        throw new Error("probe adapter unavailable");
+      },
+      provisionerFor: () => ({
+        check: async () => ({ satisfied: true, fixable: false }),
+        provision: async function* () {},
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      healthy: false,
+      reason: "health_probe_stale",
+      refresh: {
+        attempted: true,
+        initialReason: "health_probe_stale",
+        outcome: "refresh_failed",
+        finalReason: "health_probe_stale",
+      },
+    });
+    expect(decision.detail).toContain("model health refresh failed");
+    expect(decision.detail).toContain("probe adapter unavailable");
   });
 
   it("blocks when the runtime provisioner rejects an otherwise healthy model", async () => {
