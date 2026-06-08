@@ -10,6 +10,8 @@ import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import {
   OWNER_ACTION_REQUIRED_ORDER_SQL,
   OWNER_ACTION_REQUIRED_SQL,
+  OWNER_DECISION_INBOX_KIND_SQL,
+  OWNER_DECISION_INBOX_SQL,
   shouldIncludeInternalSystem,
 } from "@/decisions/visibility";
 import {
@@ -97,9 +99,10 @@ export async function GET(request: Request) {
     const params = parseSearchParams(request.url);
     const hiveId = params.get("hiveId");
     const status = params.get("status") ?? "pending";
-    // Default to 'decision' so the legacy Decisions page only sees owner
-    // judgement calls. Callers can pass kind=system_error for the System
-    // Health feed, or kind=all to get everything unfiltered.
+    // Default to the owner inbox. The Decisions surface groups every
+    // owner-action-required workflow decision together unless the caller
+    // explicitly asks for another kind (for example system_error or
+    // task_quality_feedback).
     const includeKinds = params.get("includeKinds")
       ?.split(",")
       .map((value) => value.trim())
@@ -122,6 +125,7 @@ export async function GET(request: Request) {
     const conditions: string[] = [];
     const values: unknown[] = [];
     let paramIdx = 1;
+    const usesOwnerInboxKind = kind === "decision";
 
     if (hiveId) {
       conditions.push(`d.hive_id = $${paramIdx++}`);
@@ -131,7 +135,11 @@ export async function GET(request: Request) {
       conditions.push(`d.status = $${paramIdx++}`);
       values.push(status);
     }
-    if (kind && kind !== "all") {
+    if (usesOwnerInboxKind) {
+      conditions.push(includeInternalSystem || qaFixtures
+        ? OWNER_DECISION_INBOX_KIND_SQL
+        : OWNER_DECISION_INBOX_SQL);
+    } else if (kind && kind !== "all") {
       conditions.push(`d.kind = $${paramIdx++}`);
       values.push(kind);
     } else if (includeKinds && includeKinds.length > 0) {
@@ -150,7 +158,7 @@ export async function GET(request: Request) {
     } else {
       conditions.push("d.is_qa_fixture = false");
     }
-    if (!includeInternalSystem && !qaFixtures) {
+    if (!usesOwnerInboxKind && !includeInternalSystem && !qaFixtures) {
       conditions.push(OWNER_ACTION_REQUIRED_SQL);
     }
     const requestsQualityFeedback = kind === "task_quality_feedback" ||

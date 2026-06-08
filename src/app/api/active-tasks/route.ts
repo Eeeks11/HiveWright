@@ -1,6 +1,7 @@
 import { sql } from "../_lib/db";
 import { requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
+import { OWNER_DECISION_INBOX_SQL } from "@/decisions/visibility";
 import { isDecisionLiveBlocking, isTaskLiveBlocking } from "./live-blocking";
 
 interface TaskRow {
@@ -147,11 +148,9 @@ export async function GET(request: Request) {
         created_at DESC
     `) as unknown as CriticalTaskRow[];
 
-    // Align the relationship map's decision blockers with the owner-facing
-    // brief and default decisions feed: only unresolved owner decisions
-    // (`kind='decision'`, `status='pending'`) belong in the live blocker
-    // count. Workflow-specific approvals/escalations live on their domain
-    // surfaces and should not keep the topology glowing red.
+    // Keep the relationship map aligned with the owner-facing inbox: if the
+    // owner is being asked to act on a pending decision, the same decision
+    // should show up here as a live blocker.
     const criticalDecisionRows = (await sql`
       SELECT
         d.id,
@@ -163,11 +162,13 @@ export async function GET(request: Request) {
         g.title AS goal_title,
         g.status AS goal_status
       FROM decisions d
+      JOIN hives h ON h.id = d.hive_id
+      LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
       LEFT JOIN goals g ON g.id = d.goal_id AND g.hive_id = d.hive_id
       WHERE d.hive_id = ${hiveId}::uuid
         AND d.status = 'pending'
-        AND d.kind = 'decision'
         AND d.is_qa_fixture = false
+        AND ${sql.unsafe(OWNER_DECISION_INBOX_SQL)}
       ORDER BY
         d.created_at DESC
       LIMIT 12

@@ -29,7 +29,7 @@ import { createBriefGetHandler } from "./get-handler";
 function createDb() {
   const db = vi.fn((strings: TemplateStringsArray) => {
     const query = strings.join("?");
-    if (query.includes("FROM decisions") && query.includes("kind = 'decision'") && query.includes("LIMIT 10")) {
+    if (query.includes("FROM decisions d") && query.includes("LIMIT 10")) {
       return Promise.resolve([
         {
           id: "decision-1",
@@ -155,8 +155,10 @@ describe("GET /api/brief", () => {
     expect(body.data.operationLock.resumeReadiness.status).toBe("blocked");
     expect(body.data.operationLock.resumeReadiness.blockers[0].code).toBe("no_enabled_models");
     const queries = db.mock.calls.map((call) => call[0].join("?"));
-    expect(queries.find((query) => query.includes("kind = 'decision'") && query.includes("LIMIT 10")))
-      .toContain("is_qa_fixture = false");
+    const decisionQuery = queries.find((query) => query.includes("FROM decisions d") && query.includes("LIMIT 10"));
+    expect(decisionQuery).toContain("is_qa_fixture = false");
+    expect(db.unsafe).toHaveBeenCalledWith(expect.stringContaining("d.kind <> 'system_error'"));
+    expect(db.unsafe).toHaveBeenCalledWith(expect.stringContaining("d.kind <> 'task_quality_feedback'"));
     expect(queries.find((query) => query.includes("pending_quality_feedback")))
       .toContain("is_qa_fixture = false");
     expect(queries.find((query) => query.includes("pending_quality_feedback")))

@@ -111,7 +111,7 @@ describe("GET /api/decisions", () => {
     ]);
   });
 
-  it("keeps the default decisions list scoped to kind=decision", async () => {
+  it("treats the default decisions list as the owner inbox, not a literal kind=decision filter", async () => {
     mocks.sql.unsafe
       .mockResolvedValueOnce([{ total: "0" }])
       .mockResolvedValueOnce([]);
@@ -119,9 +119,10 @@ describe("GET /api/decisions", () => {
     const res = await GET(new Request("http://localhost/api/decisions?hiveId=hive-1&status=pending"));
 
     expect(res.status).toBe(200);
-    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.kind = $3");
+    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.kind <> 'system_error'");
+    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.kind <> 'task_quality_feedback'");
     expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("d.is_qa_fixture = false");
-    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["hive-1", "pending", "decision"]);
+    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["hive-1", "pending"]);
   });
 
   it("rejects callers without access to the requested hive", async () => {

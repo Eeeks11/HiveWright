@@ -29,6 +29,7 @@ import {
   renderEaAttachmentSection,
   sanitizeEaAttachmentFilename,
 } from "./attachments";
+import { OWNER_DECISION_INBOX_SQL } from "@/decisions/visibility";
 
 /**
  * Save Discord attachments for a single owner message to a per-message
@@ -329,7 +330,15 @@ async function buildStatusSummary(sql: Sql, hiveId: string): Promise<string> {
   >`
     SELECT
       (SELECT COUNT(*) FROM goals WHERE hive_id = ${hiveId} AND status = 'active') AS active_goals,
-      (SELECT COUNT(*) FROM decisions WHERE hive_id = ${hiveId} AND status = 'pending' AND kind = 'decision') AS pending_decisions,
+      (
+        SELECT COUNT(*)
+        FROM decisions d
+        JOIN hives h ON h.id = d.hive_id
+        LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+        WHERE d.hive_id = ${hiveId}
+          AND d.status = 'pending'
+          AND ${sql.unsafe(OWNER_DECISION_INBOX_SQL)}
+      ) AS pending_decisions,
       (SELECT COUNT(*) FROM decisions WHERE hive_id = ${hiveId} AND status = 'pending' AND kind = 'system_error') AS pending_system_errors,
       (SELECT COUNT(*) FROM tasks WHERE hive_id = ${hiveId} AND status = 'unresolvable') AS unresolvable_tasks,
       (SELECT COUNT(*) FROM goals WHERE hive_id = ${hiveId} AND status = 'achieved' AND updated_at > NOW() - INTERVAL '7 days') AS recent_completions

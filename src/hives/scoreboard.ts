@@ -1,5 +1,5 @@
 import type { Sql, TransactionSql } from "postgres";
-import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
+import { OWNER_DECISION_INBOX_SQL } from "@/decisions/visibility";
 import { getOperatingProfile } from "@/hives/operating-profile";
 import { type HiveKind, normalizeHiveKind, normalizeHiveOperatingMode } from "@/hives/kind";
 
@@ -314,7 +314,7 @@ async function listOwnerActionDecisions(sql: ScoreboardSql, hiveId: string): Pro
     LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
     WHERE d.hive_id = ${hiveId}::uuid
       AND d.status = 'pending'
-      AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
+      AND ${sql.unsafe(OWNER_DECISION_INBOX_SQL)}
     ORDER BY
       CASE d.priority
         WHEN 'urgent' THEN 1

@@ -122,13 +122,14 @@ describe("GET /api/active-tasks", () => {
     expect(body.criticalItems.every((item) => item.href.startsWith(`/${item.sourceType === "task" ? "tasks" : "decisions"}/`))).toBe(true);
   });
 
-  it("keeps owner-brief critical decisions aligned to the default decisions feed", async () => {
+  it("keeps owner-brief critical decisions aligned to the owner inbox for workflow-specific approvals", async () => {
     await sql`
       INSERT INTO decisions (hive_id, title, context, priority, status, kind, created_at)
       VALUES
         (${BIZ_A}, 'Webhook approval', 'ctx', 'normal', 'pending', 'external_action_approval', NOW() - INTERVAL '5 minutes'),
         (${BIZ_A}, 'Supervisor follow-up', 'ctx', 'normal', 'pending', 'supervisor_flagged', NOW() - INTERVAL '6 minutes'),
-        (${BIZ_A}, 'Learning gate follow-up', 'ctx', 'normal', 'pending', 'learning_gate_followup', NOW() - INTERVAL '7 minutes')
+        (${BIZ_A}, 'Learning gate follow-up', 'ctx', 'normal', 'pending', 'learning_gate_followup', NOW() - INTERVAL '7 minutes'),
+        (${BIZ_A}, 'Release scan model review', 'ctx', 'normal', 'pending', 'release_scan_model_proposal', NOW() - INTERVAL '8 minutes')
     `;
 
     const res = await GET(new Request(`http://localhost/api/active-tasks?hiveId=${BIZ_A}&includeCritical=true`));
@@ -143,7 +144,12 @@ describe("GET /api/active-tasks", () => {
 
     expect(
       body.criticalItems.filter((item) => item.sourceType === "decision").map((item) => item.title),
-    ).toEqual(["Owner runtime decision"]);
+    ).toEqual([
+      "Owner runtime decision",
+      "Webhook approval",
+      "Learning gate follow-up",
+      "Release scan model review",
+    ]);
   });
 
   it("keeps parked tasks in the critical feed when failed and unresolvable work is noisy", async () => {

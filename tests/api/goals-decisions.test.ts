@@ -305,6 +305,20 @@ describe("Decisions API", () => {
     expect(dec.priority).toBe("urgent");
   });
 
+  it("GET /api/decisions — includes pending release-scan model proposals in the default owner inbox", async () => {
+    const releaseDecisionId = await createReleaseScanModelDecision();
+
+    const res = await getDecisions(new Request(
+      `http://localhost/api/decisions?hiveId=${hiveId}`,
+    ));
+    expect(res.status).toBe(200);
+
+    const body = await res.json();
+    const releaseDecision = body.data.find((decision: { id: string }) => decision.id === releaseDecisionId);
+    expect(releaseDecision).toBeDefined();
+    expect(releaseDecision.kind).toBe("release_scan_model_proposal");
+  });
+
   it("GET /api/decisions — hides internal machinery by default and exposes it through includeInternalSystem", async () => {
     const [systemError] = await sql<{ id: string }[]>`
       INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind)

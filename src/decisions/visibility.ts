@@ -42,6 +42,16 @@ export const INTERNAL_DECISION_SQL = `(
 
 export const OWNER_ACTION_REQUIRED_SQL = `(NOT ${INTERNAL_DECISION_SQL})`;
 
+export const OWNER_DECISION_INBOX_KIND_SQL = `(
+  d.kind <> 'system_error'
+  AND d.kind <> 'task_quality_feedback'
+)`;
+
+export const OWNER_DECISION_INBOX_SQL = `(
+  ${OWNER_DECISION_INBOX_KIND_SQL}
+  AND ${OWNER_ACTION_REQUIRED_SQL}
+)`;
+
 export const OWNER_ACTION_REQUIRED_ORDER_SQL = `
   CASE WHEN ${OWNER_ACTION_REQUIRED_SQL} THEN 0 ELSE 1 END
 `;

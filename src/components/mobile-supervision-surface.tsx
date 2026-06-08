@@ -119,7 +119,7 @@ async function fetchDecisions(hiveId: string): Promise<PendingDecision[]> {
   const params = new URLSearchParams({
     hiveId,
     status: "pending",
-    includeKinds: "decision,creation_pause_resume_approval",
+    kind: "decision",
     limit: "6",
   });
   const res = await fetch(`/api/decisions?${params.toString()}`);
