@@ -128,7 +128,7 @@ describe("provider failover drill routing", () => {
     });
   });
 
-  it("parks instead of spawning when a role has no declared fallback path even if the primary is healthy", () => {
+  it("runs a healthy primary even when a role has no declared fallback path", () => {
     const decision = decideProviderFailoverRoute({
       primaryAdapterType: "claude-code",
       primaryModel: "anthropic/claude-sonnet-4-6",
@@ -137,6 +137,30 @@ describe("provider failover drill routing", () => {
       primaryHealth: healthDecision({
         healthy: true,
         reason: "model_health_and_provisioner_healthy",
+      }),
+      fallbackHealth: null,
+    });
+
+    expect(decision).toMatchObject({
+      adapterType: "claude-code",
+      model: "anthropic/claude-sonnet-4-6",
+      canRun: true,
+      usedFallback: false,
+      clearFallbackModel: false,
+      reason: "primary_adapter_healthy",
+    });
+    expect(decision.diagnostic).toContain("Fallback route declaration: missing.");
+  });
+
+  it("parks an unhealthy primary when no fallback path is declared", () => {
+    const decision = decideProviderFailoverRoute({
+      primaryAdapterType: "claude-code",
+      primaryModel: "anthropic/claude-sonnet-4-6",
+      fallbackAdapterType: null,
+      fallbackModel: null,
+      primaryHealth: healthDecision({
+        healthy: false,
+        reason: "health_probe_unhealthy",
       }),
       fallbackHealth: null,
     });

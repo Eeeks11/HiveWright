@@ -37,7 +37,8 @@ const CODE_ROLE_SLUGS = new Set([
   "qa-reviewer",
 ]);
 
-const CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|code(?!\s+word)|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source|test(?:s|ing)?|typescript|ui|ux|vitest)\b/i;
+const CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|code(?!\s+word)|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
+const PRODUCT_CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
 const HIVEWRIGHT_PRODUCT_PATTERN = /\b(hivewright|dispatcher|dashboard|agent stream|task stream|hive page|hives?\/[\[:]|reference document.*(?:ui|ux|page|component)|runtime preflight)\b/i;
 
 export function evaluateTaskWorkspacePolicy(
@@ -127,7 +128,7 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
   const hivewrightSignals = HIVEWRIGHT_PRODUCT_PATTERN.test(text);
 
-  return (codeRole && codeSignals) || (hivewrightSignals && codeSignals);
+  return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
 }
 
 export function isHiveWrightProductCodeTask(task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">): boolean {
