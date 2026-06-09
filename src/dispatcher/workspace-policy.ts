@@ -126,10 +126,12 @@ export function evaluateTaskWorkspacePolicy(
 export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">): boolean {
   const text = taskText(task);
   const codeRole = CODE_ROLE_SLUGS.has(task.assignedTo.trim().toLowerCase());
+  const doctorRole = task.assignedTo.trim().toLowerCase() === "doctor";
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
   const hivewrightSignals = HIVEWRIGHT_PRODUCT_PATTERN.test(text);
   const readOnlyNonCodeIntent = READ_ONLY_NON_CODE_PATTERN.test(text);
 
+  if (doctorRole) return false;
   if (!codeRole && readOnlyNonCodeIntent) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
