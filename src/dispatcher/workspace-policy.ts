@@ -38,7 +38,7 @@ const CODE_ROLE_SLUGS = new Set([
 ]);
 
 const CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|code(?!\s+word)|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
-const PRODUCT_CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
+const PRODUCT_CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|component|dashboard|dispatcher|fix|frontend|implementation|(?:database|db|schema|drizzle) migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
 const HIVEWRIGHT_PRODUCT_PATTERN = /\b(hivewright|dispatcher|dashboard|agent stream|task stream|hive page|hives?\/[\[:]|reference document.*(?:ui|ux|page|component)|runtime preflight)\b/i;
 
 export function evaluateTaskWorkspacePolicy(
