@@ -262,4 +262,21 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
     expect(decision).toMatchObject({ allowed: true });
   });
+
+  it("does not treat source-evidence research in the HiveWright hive as product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "research-analyst",
+        title: "Daily AI and market signal scan",
+        brief: "Review source links for HiveWright market context and write an evidence summary. Do not change code or repositories.",
+        acceptanceCriteria: "Cite sources and identify decisions.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
 });
