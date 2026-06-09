@@ -126,6 +126,31 @@ describe("HiveWright update system", () => {
     expect(script).not.toMatch(/^\s*npm run build\s*$/m);
   });
 
+  it("enforces the canonical operational remote and main branch in the privileged updater", () => {
+    const script = readFileSync(
+      path.resolve(__dirname, "../../scripts/hivewright-operational-update-root.sh"),
+      "utf8",
+    );
+
+    expect(script).toContain('CANONICAL_REMOTE_URL="${HIVEWRIGHT_CANONICAL_REMOTE_URL:-https://github.com/Eeeks11/HiveWright.git}"');
+    expect(script).toContain("ensure_canonical_remote()");
+    expect(script).toContain("Operational install origin remote is not the canonical GitHub remote; automatic updates are blocked until the remote is restored.");
+    expect(script).toContain('state":"blocked-remote-misconfigured"');
+    expect(script).toContain("expectedRemoteUrl");
+    expect(script).toContain("ensure_canonical_remote\n");
+  });
+
+  it("uses canonical preflight checks for apply/lock and exposes the current service start command", () => {
+    const script = readFileSync(
+      path.resolve(__dirname, "../../scripts/hivewright-operational-update-root.sh"),
+      "utf8",
+    );
+
+    expect(script).toContain('commands":["systemctl start hivewright-update.service"]');
+    expect(script).toContain("ensure_canonical_remote\n    [ \"$(git rev-parse --show-toplevel)\" = \"$INSTALL_DIR\" ]");
+    expect(script).toContain('lock) ensure_root; ensure_paths; configure_root_git; ensure_canonical_remote; lock_repo ;;');
+  });
+
   it("places dashboard update logs under the external runtime root", () => {
     const dir = resolveUpdateLogDirectory({
       HIVEWRIGHT_RUNTIME_ROOT: "/var/lib/hivewright-runtime",
