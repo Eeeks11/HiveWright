@@ -365,6 +365,57 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not block non-code QA replanning for business evidence work", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "goal-supervisor",
+        title: "[Replan] QA failed repeatedly: Traceable prefab/modular terminology and search evidence pack",
+        brief: "## QA Failure Re-Planning\nThe following sprint task failed QA repeatedly and needs automatic re-planning or decomposition. Original brief: Sprint 1 needs traceable evidence, not broad narratives. Owner guardrails prohibit public/production changes.",
+        acceptanceCriteria: "Create follow-up non-code research tasks only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("does not block readiness evidence refreshes that do not edit source", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "infrastructure-agent",
+        title: "Refresh readiness, backup, and restore evidence after runtime-path remediation",
+        brief: "Rerun current install proofs so audit evidence is current: dispatcher-health, runtime-path, backup, and restore-smoke. Store results in a new dated readiness directory and summarize backup retention gaps if any remain.",
+        acceptanceCriteria: "A new dated readiness artifact set exists with dispatcher health, runtime path, backup, and restore-smoke results captured.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/readiness",
+      baseProjectWorkspace: "/home/trent/.hivewright/readiness",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("does not block governed skill QA reviews as source editing", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "qa",
+        title: "[Skill QA] Review: dev-agent-qa-failure-skill-improvement",
+        brief: "A new skill candidate has been proposed by role dev-agent and requires QA review. Please review the skill content for correctness, clarity, scope, and no sensitive data.",
+        acceptanceCriteria: "Approve or reject the candidate through the governed skill lifecycle API.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
