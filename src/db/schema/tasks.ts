@@ -30,6 +30,7 @@ export const tasks = pgTable("tasks", {
   dispatcherPid: integer("dispatcher_pid"),
   doctorAttempts: integer("doctor_attempts").default(0).notNull(),
   failureReason: text("failure_reason"),
+  terminalDisposition: jsonb("terminal_disposition").$type<Record<string, unknown>>(),
   routeSelectionEvidence: jsonb("route_selection_evidence").$type<Record<string, unknown>>(),
   scheduleRevisionSnapshot: jsonb("schedule_revision_snapshot").$type<ScheduleRevisionSnapshotV1>(),
   adapterOverride: varchar("adapter_override", { length: 100 }),
