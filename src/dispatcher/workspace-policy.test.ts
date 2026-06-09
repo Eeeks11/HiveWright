@@ -279,4 +279,48 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
     expect(decision).toMatchObject({ allowed: true });
   });
+
+  it("does not treat business migration/readiness registers as HiveWright product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "operations-coordinator",
+        title: "Convert AGP June 2026 readiness signals into an internal action register",
+        brief: "Read a HiveWright hive artifact and cover Oneflare closure/migration by 30 June 2026. Do not change code or repositories.",
+        acceptanceCriteria: "Produce the internal action register only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/aussie-garden-pros/projects/operations",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/aussie-garden-pros/projects/operations",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("still treats database migration implementation work as HiveWright product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "backend-engineer",
+        title: "Implement HiveWright database migration for task routing",
+        brief: "Patch the dispatcher source code and add a schema migration.",
+        projectId: "project-1",
+      },
+      projectWorkspace: "/home/trent/dev/hivewright",
+      baseProjectWorkspace: "/home/trent/dev/hivewright",
+      gitBackedProject: true,
+      workspaceIsolation: {
+        status: "active",
+        worktreePath: "/home/trent/dev/hivewright/.worktrees/task-routing",
+        baseWorkspacePath: "/home/trent/dev/hivewright",
+        branchName: "hw/task/task-routing-backend-engineer",
+        isolationActive: true,
+        reused: false,
+        reason: null,
+      },
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
 });
