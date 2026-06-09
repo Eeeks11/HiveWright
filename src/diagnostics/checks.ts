@@ -15,6 +15,7 @@ import {
   type DiagnosticStatus,
   type DiagnosticSummary,
 } from "./types";
+import { resolveHiveWrightBuildProvenance } from "./build-provenance";
 
 export type HiveWrightDiagnosticsSnapshot = {
   checkedAt: string;
@@ -42,14 +43,18 @@ const REQUIRED_ENV = ["DATABASE_URL", "ENCRYPTION_KEY", "INTERNAL_SERVICE_TOKEN"
 const DISPATCHER_STALE_AFTER_MS = 2 * 60 * 1000;
 const EXECUTION_RUN_STALE_AFTER_MS = 15 * 60 * 1000;
 
-export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date } = {}): HiveWrightHealthSnapshot {
-  const env = input.env ?? process.env;
+export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date; repoRoot?: string } = {}): HiveWrightHealthSnapshot {
+  const provenance = resolveHiveWrightBuildProvenance({
+    env: input.env,
+    now: input.now,
+    repoRoot: input.repoRoot,
+  });
   return {
     status: "ok",
     service: "hivewright",
-    version: env.npm_package_version ?? null,
-    buildHash: env.VERCEL_GIT_COMMIT_SHA ?? env.HIVEWRIGHT_BUILD_HASH ?? null,
-    checkedAt: (input.now ?? new Date()).toISOString(),
+    version: provenance.version,
+    buildHash: provenance.buildHash,
+    checkedAt: provenance.capturedAt,
   };
 }
 
