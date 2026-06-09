@@ -40,6 +40,7 @@ const CODE_ROLE_SLUGS = new Set([
 const CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|code(?!\s+word)|component|dashboard|dispatcher|fix|frontend|implementation|migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
 const PRODUCT_CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|component|dashboard|dispatcher|fix|frontend|implementation|(?:database|db|schema|drizzle) migration|patch|pull request|refactor|repo|source code|typescript|ui|ux|vitest)\b/i;
 const HIVEWRIGHT_PRODUCT_PATTERN = /\b(hivewright|dispatcher|dashboard|agent stream|task stream|hive page|hives?\/[\[:]|reference document.*(?:ui|ux|page|component)|runtime preflight)\b/i;
+const READ_ONLY_NON_CODE_PATTERN = /\b(do not|don't|without)\b.{0,80}\b(edit|change|modify|patch|write|touch)\b.{0,80}\b(code|repo|repository|repositories|source|implementation|local development)\b|\bdo not\b.{0,80}\bpropose\b.{0,80}\b(hivewright product improvements|internal platform work|ai model\/runtime changes)\b|\bread[- ]only\b.{0,80}\b(api|path|scan|summary|analysis|diagnosis|research|artifact|artifacts)\b/i;
 
 export function evaluateTaskWorkspacePolicy(
   ctx: SessionContext,
@@ -127,6 +128,9 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const codeRole = CODE_ROLE_SLUGS.has(task.assignedTo.trim().toLowerCase());
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
   const hivewrightSignals = HIVEWRIGHT_PRODUCT_PATTERN.test(text);
+  const readOnlyNonCodeIntent = READ_ONLY_NON_CODE_PATTERN.test(text);
+
+  if (!codeRole && readOnlyNonCodeIntent) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
 }

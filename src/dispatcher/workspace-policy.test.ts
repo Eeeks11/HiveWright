@@ -280,6 +280,57 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not treat read-only HiveWright market/runtime scans as product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "research-analyst",
+        title: "Daily AI and market signal scan",
+        brief: "Scan only the highest-signal changes relevant to HiveWright: competitors, pricing, model/runtime changes, security developments, and customer demand signals. Use guarded APIs and durable artifacts only. Do not edit any local HiveWright repository or implementation code.",
+        acceptanceCriteria: "Produce a concise brief with only the material findings.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("does not treat external business world scans mentioning repo verification as product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "research-analyst",
+        title: "Daily world scan",
+        brief: "Run the daily world scan for Short Stay Sales. Hive context: Australian marketplace for buying and selling Airbnb and short-stay accommodation investment properties; current imported context needs live repo/site/runtime verification. Do not propose HiveWright product improvements, AI model/runtime changes, or internal platform work from this business-hive scan.",
+        acceptanceCriteria: "Produce a concise external-signal summary only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("does not treat quality/doctor diagnosis context as product code work", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "doctor",
+        title: "Quality diagnosis: Hive supervisor heartbeat — 22 finding(s)",
+        brief: "Use exactly one cause category and produce a fenced JSON diagnosis. Evidence includes previous workspace_policy_blocked text and runtime-route logs; do not patch source code.",
+        acceptanceCriteria: "Diagnosis only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
   it("does not treat business migration/readiness registers as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
