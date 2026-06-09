@@ -135,7 +135,8 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const recoveryNonCodeIntent = NON_CODE_RECOVERY_PATTERN.test(text) && !EXPLICIT_SOURCE_EDIT_PATTERN.test(text);
 
   if (doctorRole) return false;
-  if (!codeRole && (readOnlyNonCodeIntent || recoveryNonCodeIntent)) return false;
+  if (readOnlyNonCodeIntent) return false;
+  if (!codeRole && recoveryNonCodeIntent) return false;
   if (codeRole && recoveryNonCodeIntent && !EXPLICIT_SOURCE_EDIT_PATTERN.test(text)) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));

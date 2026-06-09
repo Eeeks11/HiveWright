@@ -416,6 +416,23 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not block read-only QA of business diagnostics artifacts as source editing", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "qa",
+        title: "[QA] Review: Classify diagnostics read-path metadata exposure",
+        brief: "Review the exact diagnostic artifacts and touched read paths, including model-routing/model-health route behavior as needed. Classify response bodies, logs, saved artifacts, and operator runbook recommendations against the Short Stay Sales governance matrix. Read-only only: do not change production routes, auth, deployment config, credentials, routing defaults, probe schedules, quarantine state, candidate ordering, public copy, seller-intake workflow, or protected records.",
+        acceptanceCriteria: "First line pass or fail; include concise evidence-based issues only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
