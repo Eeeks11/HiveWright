@@ -42,6 +42,7 @@ const PRODUCT_CODE_CHANGE_PATTERN = /\b(app|backend|bug|build|component|dashboar
 const HIVEWRIGHT_PRODUCT_PATTERN = /\b(hivewright|dispatcher|dashboard|agent stream|task stream|hive page|hives?\/[\[:]|reference document.*(?:ui|ux|page|component)|runtime preflight)\b/i;
 const READ_ONLY_NON_CODE_PATTERN = /\b(do not|don't|without)\b.{0,80}\b(edit|change|modify|patch|write|touch)\b.{0,80}\b(code|repo|repository|repositories|source|implementation|local development)\b|\bdo not\b.{0,80}\bpropose\b.{0,80}\b(hivewright product improvements|internal platform work|ai model\/runtime changes)\b|\bread[- ]only\b.{0,80}\b(api|path|scan|summary|analysis|diagnosis|research|artifact|artifacts)\b/i;
 const NON_CODE_RECOVERY_PATTERN = /\b(qa failure re-planning|replan|diagnosis only|follow-up task only|review the skill content|audit readiness|observability compliance exposure|readiness artifact|readiness packet|backup|restore-smoke|evidence pack|inventory and recommendation|owner approval gate memo)\b/i;
+const QA_REVIEW_ONLY_PATTERN = /\b(review|evaluate|verify)\b.{0,120}\b(deliverable|artifact|acceptance criteria|pass|fail)\b|\bfirst non-empty line\b.{0,80}\b(pass|fail)\b/i;
 const EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|route)\b/i;
 
 export function evaluateTaskWorkspacePolicy(
@@ -132,11 +133,14 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
   const hivewrightSignals = HIVEWRIGHT_PRODUCT_PATTERN.test(text);
   const readOnlyNonCodeIntent = READ_ONLY_NON_CODE_PATTERN.test(text);
-  const recoveryNonCodeIntent = NON_CODE_RECOVERY_PATTERN.test(text) && !EXPLICIT_SOURCE_EDIT_PATTERN.test(text);
+  const explicitSourceEditIntent = EXPLICIT_SOURCE_EDIT_PATTERN.test(text);
+  const recoveryNonCodeIntent = NON_CODE_RECOVERY_PATTERN.test(text) && !explicitSourceEditIntent;
+  const qaReviewOnlyIntent = task.assignedTo.trim().toLowerCase() === "qa" && QA_REVIEW_ONLY_PATTERN.test(text) && !explicitSourceEditIntent;
 
   if (doctorRole) return false;
+  if (qaReviewOnlyIntent) return false;
   if (!codeRole && (readOnlyNonCodeIntent || recoveryNonCodeIntent)) return false;
-  if (codeRole && recoveryNonCodeIntent && !EXPLICIT_SOURCE_EDIT_PATTERN.test(text)) return false;
+  if (codeRole && recoveryNonCodeIntent && !explicitSourceEditIntent) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
 }

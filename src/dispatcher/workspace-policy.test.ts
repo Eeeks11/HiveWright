@@ -416,6 +416,23 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not block artifact-only QA reviews that mention diagnostics metadata", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "qa",
+        title: "[QA] Review: Classify diagnostics read-path metadata exposure",
+        brief: "## Git Evidence\nIsolation status: skipped\nSkipped reason: Worktree isolation disabled: task is not associated with a git-backed project.\n\n### Your Job\nReview the deliverable against the acceptance criteria. Your first non-empty line must be exactly `pass` or `fail`.",
+        acceptanceCriteria: "Review the artifact only and do not modify source code.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
