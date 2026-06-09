@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
+  buildRuntimeBuildCommands,
   buildRuntimeCutoverConfig,
   buildRuntimeDeploymentProvenance,
   writeRuntimeServiceFiles,
@@ -65,10 +66,9 @@ async function ensureRuntimeWorktree(repo: string, runtimeCheckout: string, ref:
 }
 
 async function buildRuntime(runtimeCheckout: string) {
-  await run("npm", ["install"], runtimeCheckout);
-  await run("npm", ["run", "db:migrate:app"], runtimeCheckout);
-  await run("npm", ["run", "build:runtime"], runtimeCheckout);
-  await run("npm", ["run", "build:dispatcher"], runtimeCheckout);
+  for (const [command, args] of buildRuntimeBuildCommands()) {
+    await run(command, args, runtimeCheckout);
+  }
 }
 
 async function restartServices(skipRestart: boolean) {

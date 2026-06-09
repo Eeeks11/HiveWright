@@ -41,6 +41,15 @@ export type RuntimeDeploymentProvenance = {
   };
 };
 
+export function buildRuntimeBuildCommands(): [string, string[]][] {
+  return [
+    ["npm", ["install", "--include=dev"]],
+    ["npm", ["run", "db:migrate:app"]],
+    ["npm", ["run", "build:runtime"]],
+    ["npm", ["run", "build:dispatcher"]],
+  ];
+}
+
 export function buildRuntimeCutoverConfig(input: RuntimeCutoverConfigInput): RuntimeCutoverConfig {
   const serviceUser = input.serviceUser ?? os.userInfo().username;
   const runtimeCheckout = path.resolve(input.runtimeCheckout);

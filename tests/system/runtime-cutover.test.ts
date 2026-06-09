@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRuntimeBuildCommands,
   buildRuntimeCutoverConfig,
   buildRuntimeDeploymentProvenance,
   renderDashboardUserService,
@@ -48,5 +49,14 @@ describe("runtime cutover", () => {
     expect(provenance.deployedCommit).toBe("abc123def456");
     expect(provenance.systemd.dashboardUnit).toBe("/home/trent/.config/systemd/user/hivewright-dashboard.service");
     expect(provenance.systemd.dispatcherUnit).toBe("/home/trent/.config/systemd/user/hivewright-dispatcher.service");
+  });
+
+  it("includes dev dependencies in the runtime cutover build plan", () => {
+    expect(buildRuntimeBuildCommands()).toEqual([
+      ["npm", ["install", "--include=dev"]],
+      ["npm", ["run", "db:migrate:app"]],
+      ["npm", ["run", "build:runtime"]],
+      ["npm", ["run", "build:dispatcher"]],
+    ]);
   });
 });
