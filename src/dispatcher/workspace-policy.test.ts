@@ -433,6 +433,40 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not block compliance checklist/table work that forbids implementation", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "compliance-risk-analyst",
+        title: "Build canonical OAIC/privacy remediation checklist for active micro-tools",
+        brief: "Produce the Sprint 1 canonical OAIC/privacy remediation checklist/table using only internal artifacts and source references. Build one finite table with privacy surfaces, cloud/API routing, risk rating, mitigation class, owner gate status, and stop condition. Do not use live probes, do not inspect production/customer data, do not make configuration changes, do not contact vendors, and do not draft external-facing policy text. If any attribute cannot be resolved from internal evidence, mark it as unknown or defer rather than inferring. Mitigations are classified as internal-safe, implementation-later, owner-gated, or defer.",
+        acceptanceCriteria: "No live probes, customer data inspection, vendor contact, or config changes occur.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("still blocks compliance implementation work that asks for source edits", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "compliance-risk-analyst",
+        title: "Implement privacy logging fix for active micro-tools",
+        brief: "Patch the dashboard API route source code and add a Vitest regression for the compliance logging bug.",
+        acceptanceCriteria: "Code changes and tests are committed.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      gitBackedProject: false,
+    }));
+
+    expect(decision.allowed).toBe(false);
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
