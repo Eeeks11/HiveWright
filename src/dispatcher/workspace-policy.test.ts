@@ -331,6 +331,23 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("never treats doctor recovery tasks as direct source-editing work", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "doctor",
+        title: "[Doctor] Diagnose: Reconcile restored Whiston bookkeeping reference document",
+        brief: "Failed task context mentions reference document UI, workspace_policy_blocked, repository flow, and source logs. Diagnose and route the next action; do not edit source directly.",
+        acceptanceCriteria: "Diagnosis or follow-up task only.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management",
+      gitBackedProject: false,
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+  });
+
   it("does not treat business migration/readiness registers as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
