@@ -36,6 +36,7 @@
     "test:watch": "vitest",
     "test:setup-db": "tsx scripts/setup-test-db.ts",
     "hivewright:update": "tsx scripts/update-hivewright.ts",
+    "runtime:cutover": "tsx scripts/cutover-runtime-worktree.ts",
     "notifier:verify": "tsx scripts/verify-outbound-notifier.ts",
     "notifier:live-smoke": "tsx scripts/send-outbound-notifier-live-smoke.ts",
     "readiness:runtime-paths": "tsx scripts/readiness/runtime-path-proof.ts",

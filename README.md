@@ -53,7 +53,13 @@ npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services instead of ad-hoc terminals, this repo includes `hivewrightv2-dashboard.service` and `hivewrightv2-dispatcher.service` as reference units.
+If you run HiveWright as user services instead of ad-hoc terminals, cut over the live runtime onto a dedicated writable worktree under the approved repo with:
+
+```bash
+npm run runtime:cutover -- --repo /home/trent/dev/hivewright --runtime-checkout /home/trent/dev/hivewright-live --ref <commit-or-branch>
+```
+
+That command builds the runtime checkout, rewrites the `hivewright-dashboard.service` and `hivewright-dispatcher.service` user units, restarts both services, and writes deployment provenance under `~/.hivewright/logs/deployments/`.
 
 ## Setup Walkthrough
 
@@ -107,7 +113,7 @@ Before relying on a backup, test that you can restore it on another machine or a
 
 ## Update
 
-When you update HiveWright from `main`, use this order:
+When you update HiveWright from `main`, use this order for ad-hoc local terminals:
 
 ```bash
 git pull
@@ -115,6 +121,12 @@ npm install
 npm run db:migrate:app
 systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
+```
+
+If you are operating a persistent live install from user services, use the runtime cutover command instead so the live cwd stays on a dedicated writable source-controlled checkout:
+
+```bash
+npm run runtime:cutover -- --repo /home/trent/dev/hivewright --runtime-checkout /home/trent/dev/hivewright-live --ref main
 ```
 
 Notes:
