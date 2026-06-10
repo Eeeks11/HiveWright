@@ -467,6 +467,46 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision.allowed).toBe(false);
   });
 
+  it("still blocks dev-agent dashboard/table/checklist implementation even with internal-artifact language", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "dev-agent",
+        title: "Build dashboard checklist table for internal artifacts",
+        brief: "Implement the HiveWright dashboard UI table that renders internal artifacts and owner checklist state.",
+        acceptanceCriteria: "Add component code and Vitest coverage.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      gitBackedProject: false,
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("no approved git-backed project_id");
+    }
+  });
+
+  it("still blocks code-role QA artifact implementation when broad recovery words appear", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "frontend-engineer",
+        title: "Replan dashboard readiness artifact table",
+        brief: "Fix the HiveWright dashboard source so the readiness artifact table shows QA failure re-planning status.",
+        acceptanceCriteria: "Patch React component code and add tests.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/readiness",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/readiness",
+      gitBackedProject: false,
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("no approved git-backed project_id");
+    }
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
