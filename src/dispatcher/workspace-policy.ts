@@ -145,7 +145,7 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
 
   if (doctorRole) return false;
   if (qaReviewOnlyIntent) return false;
-  if (!codeRole && (readOnlyNonCodeIntent || recoveryNonCodeIntent || explicitNonImplementationIntent || complianceReadOnlyArtifactIntent)) return false;
+  if (!codeRole && (readOnlyNonCodeIntent || recoveryNonCodeIntent || complianceReadOnlyArtifactIntent)) return false;
   if (codeRole && recoveryNonCodeIntent && !explicitSourceEditIntent) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));

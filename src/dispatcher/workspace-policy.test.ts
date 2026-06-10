@@ -507,6 +507,26 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }
   });
 
+  it("still blocks non-code-role HiveWright UI implementation with no-live-probe guardrails", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "compliance-risk-analyst",
+        title: "Build dashboard checklist table for internal artifacts",
+        brief: "Implement the HiveWright dashboard UI table that renders internal artifacts and owner checklist state. Do not use live probes, do not inspect production/customer data, do not make configuration changes, do not contact vendors, and do not draft external-facing policy text.",
+        acceptanceCriteria: "Dashboard UI implementation is covered by tests.",
+      },
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      gitBackedProject: false,
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("no approved git-backed project_id");
+    }
+  });
+
   it("still treats database migration implementation work as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
