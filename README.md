@@ -53,13 +53,7 @@ npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services instead of ad-hoc terminals, cut over the live runtime onto a dedicated writable worktree under the approved repo with:
-
-```bash
-npm run runtime:cutover -- --repo /home/trent/dev/hivewright --runtime-checkout /home/trent/dev/hivewright-live --ref <commit-or-branch>
-```
-
-That command builds the runtime checkout, rewrites the `hivewright-dashboard.service` and `hivewright-dispatcher.service` user units, restarts both services, and writes deployment provenance under `~/.hivewright/logs/deployments/`.
+If you run HiveWright as user services, keep the services pointed at the locked operational install (`/home/trent/apps/HiveWright`) and keep runtime/private state under `~/.hivewright`. Do not run dashboard or dispatcher from a writable `~/dev` checkout; updates should flow through GitHub and the privileged operational updater.
 
 ## Setup Walkthrough
 
@@ -123,11 +117,7 @@ systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
 ```
 
-If you are operating a persistent live install from user services, use the runtime cutover command instead so the live cwd stays on a dedicated writable source-controlled checkout:
-
-```bash
-npm run runtime:cutover -- --repo /home/trent/dev/hivewright --runtime-checkout /home/trent/dev/hivewright-live --ref main
-```
+For persistent live installs, use the privileged operational updater from the locked install. It fast-forwards `/home/trent/apps/HiveWright`, rebuilds dashboard and dispatcher artifacts, restarts the user services, and verifies the running PIDs have cwd `/home/trent/apps/HiveWright`.
 
 Notes:
 
