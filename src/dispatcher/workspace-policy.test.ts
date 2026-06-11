@@ -401,6 +401,42 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }))).toMatchObject({ allowed: true });
   });
 
+  it("does not block repository-neutral duplicate-decision addendum inventory tasks", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "reference-document-reviewer",
+      title: "Sprint 2 duplicate-decision addendum for canonical residue inventory",
+      brief: "Produce a duplicate-decision addendum for canonical residue inventory. Do not run git commands. Do not inspect or modify code. Do not create branches, worktrees, commits, local repo artifacts, production changes, provider contacts, or source/API/config changes. It is repository-neutral and requires no git/project/code change.",
+      acceptanceCriteria: "Cite internal HiveWright records and state that no prohibited downstream work was spawned.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
+  it("does not block bounded runtime preflight route investigations that forbid code work", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "system-health-auditor",
+      title: "Bounded hive supervisor adapter/preflight route investigation",
+      brief: "Treat this as one deduped runtime/session/model-route failure pattern, not separate Doctor or implementation tasks. Re-check live route-health counts and test the supervisor/adapter/preflight/session path without spawning implementation work. Do not run git commands. Do not inspect or modify code. If a true code defect remains, hand it off separately as one bounded implementation follow-up with evidence.",
+      acceptanceCriteria: "Route-health counts, tested route/session path, root-cause bucket, and recommended operational action only.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/runtime-triage",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/runtime-triage",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("does not let repository-neutral wording override explicit implementation requests", () => {
     for (const phrase of [
       "patch the HiveWright dashboard/API source code",
