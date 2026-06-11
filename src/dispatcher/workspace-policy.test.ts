@@ -445,6 +445,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
       "patch the HiveWright source implementation",
       "edit the HiveWright source implementation",
       "change the implementation source",
+      "do not modify unrelated code. Then patch the HiveWright dashboard/API source code",
     ] as const) {
       const task = {
         ...baseTask,
