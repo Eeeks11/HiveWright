@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import type { SessionContext } from "../adapters/types";
 import type { ClaimedTask } from "./types";
-import { evaluateTaskWorkspacePolicy, isHiveWrightCodeTask } from "./workspace-policy";
+import { evaluateTaskWorkspacePolicy, isCodeChangingTask, isHiveWrightCodeTask } from "./workspace-policy";
 
 afterEach(() => {
   delete process.env.HIVEWRIGHT_FORBIDDEN_SOURCE_ROOTS;
@@ -363,6 +363,91 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }));
 
     expect(decision).toMatchObject({ allowed: true });
+  });
+
+  it("does not block repository-neutral canonical inventory tasks as code-changing", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "reference-document-reviewer",
+      title: "Replacement Sprint 1 canonical inventory for completed output residue",
+      brief: "Produce the replacement Sprint 1 canonical inventory for completed output residue. Repository-Neutral Boundary: This task is not scoped to a git-backed project or codebase. Do not run git commands. Do not require a git-backed project, project checkout, code change, local filesystem artifact, branch, worktree, or commit. Use internal HiveWright records, task outputs, decisions, memories, retained work product references, and task result text.",
+      acceptanceCriteria: "Inventory enumerates every source task exactly once and states that no direct implementation or code-changing work was spawned.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
+  it("does not block source-backed research packets that explicitly forbid git work", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "research-analyst",
+      title: "Verify June 10 privacy-surface signals and locate current-tech packet",
+      brief: "Create the evidence base for the canonical privacy-surface inventory goal. This is Sprint 1 research and clarification only. Use only verified official sources and internal artifact/work-product records. Do not run git commands unless this task is explicitly scoped to a git-backed project/repository.",
+      acceptanceCriteria: "Official source URLs and artifact references are cited; no code, branch, worktree, or commit is required.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/privacy-surface",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/privacy-surface",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
+  it("does not let repository-neutral wording override explicit implementation requests", () => {
+    for (const phrase of [
+      "patch the HiveWright dashboard/API source code",
+      "edit the HiveWright dashboard/API source code",
+      "change the HiveWright dashboard/API source code",
+      "patch the HiveWright source implementation",
+      "edit the HiveWright source implementation",
+      "change the implementation source",
+    ] as const) {
+      const task = {
+        ...baseTask,
+        assignedTo: "compliance-risk-analyst",
+        title: "Repository-neutral HiveWright dashboard implementation",
+        brief: `Repository-neutral note: do not require a git-backed project for background reading. Then ${phrase} and add Vitest tests for the route.`,
+        acceptanceCriteria: "Implementation is committed with test coverage.",
+      };
+
+      expect(isCodeChangingTask(task)).toBe(true);
+      const decision = evaluateTaskWorkspacePolicy(ctx({
+        task,
+        projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/governance",
+        baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/governance",
+        gitBackedProject: false,
+      }));
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.reason).toContain("no approved git-backed project_id");
+      }
+    }
+  });
+
+  it("does not block external business world scans that mention dashboard evidence boundaries", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "intelligence-analyst",
+      title: "Daily world scan: current external signals for Whiston Management",
+      brief: "Scan current external signals that could materially affect Whiston Management. Summarize dashboard/API records only as evidence references. Do not propose HiveWright product improvements, internal platform work, provider contacts, or production changes.",
+      acceptanceCriteria: "Concise external-signal summary only.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/intelligence",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/intelligence",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
   });
 
   it("does not block non-code QA replanning for business evidence work", () => {
