@@ -189,6 +189,37 @@ async function classifyAndApply(
     return "fixed_by_later_work";
   }
 
+  if (isSupervisorHeartbeatResidue(task)) {
+    const laterHeartbeat = await hasLaterSupervisorHeartbeat(sql, task);
+    if (laterHeartbeat) {
+      await markDuplicateHistorical(sql, task, buildRouteSelectionEvidence(task, {
+        outcome: "duplicate_historical",
+        now: input.now,
+        supersedingTaskId: laterHeartbeat.id,
+      }));
+      return "duplicate_historical";
+    }
+
+    await createEaReviewDecision(sql, task, {
+      title: `EA review needed for hive-supervisor heartbeat: ${task.title}`,
+      context: [
+        "Hive Supervisor triaged an unresolvable heartbeat/runtime residue row.",
+        "",
+        `Task: ${task.title}`,
+        `Failure reason: ${task.failure_reason ?? "Unknown"}`,
+        "",
+        "Heartbeat watchdog rows are terminal system artifacts and must not spawn doctor recovery work.",
+        "Investigate the runtime/session path and confirm whether this row is stale residue or a current dispatcher-model issue.",
+      ].join("\n"),
+      recommendation:
+        "EA should classify this heartbeat/runtime residue and consolidate or retire it before any further recovery work is considered.",
+      priority: "high",
+      outcome: "needs_ea_review",
+      now: input.now,
+    });
+    return "needs_ea_review";
+  }
+
   const replacement = await hasLaterReplacement(sql, task);
   if (replacement) {
     await markDuplicateHistorical(sql, task, buildRouteSelectionEvidence(task, {
@@ -319,6 +350,36 @@ async function hasLaterReplacement(
       AND created_at > ${task.created_at}
       AND created_by IN ${sql(RECOVERY_CREATORS)}
       AND status IN ('pending', 'active', 'claimed', 'running', 'in_review', 'blocked', 'completed')
+    LIMIT 1
+  `;
+  return row ?? null;
+}
+
+function isSupervisorHeartbeatResidue(task: UnresolvableTaskRow): boolean {
+  return (
+    task.parent_task_id === null &&
+    task.assigned_to === "hive-supervisor" &&
+    /^Hive supervisor heartbeat\b/i.test(task.title)
+  );
+}
+
+async function hasLaterSupervisorHeartbeat(
+  sql: Sql,
+  task: UnresolvableTaskRow,
+): Promise<{ id: string } | null> {
+  if (!isSupervisorHeartbeatResidue(task)) return null;
+
+  const [row] = await sql<{ id: string }[]>`
+    SELECT id
+    FROM tasks
+    WHERE hive_id = ${task.hive_id}
+      AND id != ${task.id}
+      AND parent_task_id IS NULL
+      AND assigned_to = 'hive-supervisor'
+      AND title ILIKE 'Hive supervisor heartbeat%'
+      AND created_at > ${task.created_at}
+      AND status IN ('pending', 'active', 'claimed', 'running', 'in_review', 'blocked', 'completed', 'cancelled', 'superseded', 'unresolvable', 'failed')
+    ORDER BY created_at ASC
     LIMIT 1
   `;
   return row ?? null;
