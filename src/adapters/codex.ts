@@ -494,7 +494,7 @@ const CODEX_EMPTY_OUTPUT_TRUNCATION_MARKER =
  * dispatcher-owned task workspace outside the business artifact tree so stale
  * AGENTS.md files and historical reports cannot become live instructions.
  */
-function resolveCodexEffectiveWorkspace(ctx: SessionContext): string | null {
+export function resolveCodexEffectiveWorkspace(ctx: SessionContext): string | null {
   if (
     ctx.workspaceIsolation?.status === "active" &&
     ctx.workspaceIsolation.worktreePath
@@ -516,7 +516,7 @@ function resolveCleanNonGitTaskWorkspace(ctx: SessionContext): string {
   return path.join(root, safeTaskId);
 }
 
-function ensureCodexWorkspace(workspace: string): void {
+export function ensureCodexWorkspace(workspace: string): void {
   assertNotForbiddenHiveWrightWorkspace(workspace);
   fs.mkdirSync(workspace, { recursive: true });
 }
