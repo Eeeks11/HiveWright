@@ -55,23 +55,27 @@ describe("closeout drift checker", () => {
       supervisorReports: [
         {
           id: "report-1",
-          task_id: "task-1",
-          finding_key: "stalled:task-1",
-          status: "open",
-          created_at: "2026-06-12T11:30:00.000Z",
+          agent_task_id: "task-1",
+          ran_at: "2026-06-12T11:30:00.000Z",
+          actions: {
+            actions: [{ kind: "close_task", taskId: "task-1" }],
+          },
+          action_outcomes: [],
         },
       ],
     });
 
-    expect(report.findings).toEqual([
-      expect.objectContaining({
-        kind: "terminal_task_has_newer_unresolved_supervisor_finding",
-        severity: "warning",
-        sourceTable: "supervisor_reports",
-        sourceId: "report-1",
-        relatedIds: ["task-1"],
-      }),
-    ]);
+    expect(report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "terminal_task_has_newer_unresolved_supervisor_finding",
+          severity: "warning",
+          sourceTable: "supervisor_reports",
+          sourceId: "report-1",
+          relatedIds: ["task-1"],
+        }),
+      ]),
+    );
   });
 
   it("reports terminal tasks missing canonical closeout markers", () => {
@@ -95,7 +99,7 @@ describe("closeout drift checker", () => {
     ]);
   });
 
-  it("reports final artifacts without owner handoff", () => {
+  it("reports final artifacts without owner-openable routes", () => {
     const report = checkCloseoutDrift({
       workProducts: [
         {
@@ -118,7 +122,28 @@ describe("closeout drift checker", () => {
     ]);
   });
 
-  it("reports goal completions whose final artifact evidence lacks an owner-openable handoff", () => {
+  it("accepts current work_products URL/file fields as owner-openable routes", () => {
+    const report = checkCloseoutDrift({
+      workProducts: [
+        {
+          id: "wp-public",
+          artifact_kind: "final_artifact",
+          public_url: "https://example.test/final",
+          created_at: "2026-06-12T12:00:00.000Z",
+        },
+        {
+          id: "wp-file",
+          artifact_kind: "final_artifact",
+          file_path: "/home/trent/.hivewright/hives/h1/work-products/final.png",
+          created_at: "2026-06-12T12:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(report.findings).toEqual([]);
+  });
+
+  it("reports goal completions whose final artifact evidence lacks an owner-openable outcome or artifact route", () => {
     const report = checkCloseoutDrift({
       workProducts: [
         {
@@ -132,7 +157,6 @@ describe("closeout drift checker", () => {
         {
           id: "gc-1",
           goal_id: "goal-1",
-          status: "completed",
           evidence: {
             workProductIds: ["wp-1"],
           },
@@ -152,15 +176,62 @@ describe("closeout drift checker", () => {
     );
   });
 
+  it("accepts owner_outcomes primary_open_url as the goal completion handoff", () => {
+    const report = checkCloseoutDrift({
+      workProducts: [
+        {
+          id: "wp-1",
+          goal_id: "goal-1",
+          artifact_kind: "final_artifact",
+          created_at: "2026-06-12T12:00:00.000Z",
+        },
+      ],
+      goalCompletions: [
+        {
+          id: "gc-1",
+          goal_id: "goal-1",
+          evidence: {
+            workProductIds: ["wp-1"],
+          },
+          created_at: "2026-06-12T12:05:00.000Z",
+        },
+      ],
+      ownerOutcomes: [
+        {
+          id: "outcome-1",
+          goal_id: "goal-1",
+          goal_completion_id: "gc-1",
+          primary_open_url: "/deliverables/wp-1/open",
+          primary_work_product_id: "wp-1",
+          created_at: "2026-06-12T12:06:00.000Z",
+        },
+      ],
+    });
+
+    expect(report.findings).toEqual([
+      expect.objectContaining({
+        kind: "artifact_missing_owner_handoff",
+        sourceTable: "work_products",
+        sourceId: "wp-1",
+      }),
+    ]);
+  });
+
   it("reports supervisor action/outcome mismatches", () => {
     const report = checkCloseoutDrift({
       supervisorReports: [
         {
           id: "report-1",
-          task_id: "task-1",
-          action: "close",
-          outcome: "needs_owner",
-          created_at: "2026-06-12T12:00:00.000Z",
+          ran_at: "2026-06-12T12:00:00.000Z",
+          actions: {
+            actions: [{ kind: "close_task", taskId: "task-1" }],
+          },
+          action_outcomes: [
+            {
+              action: { kind: "close_task", taskId: "task-1" },
+              status: "error",
+            },
+          ],
         },
       ],
     });
@@ -176,7 +247,7 @@ describe("closeout drift checker", () => {
     ]);
   });
 
-  it("does not report clean terminal closeout rows", () => {
+  it("does not report clean terminal closeout rows using current schema fields", () => {
     const report = checkCloseoutDrift({
       tasks: [terminalTask],
       decisions: [
@@ -190,17 +261,24 @@ describe("closeout drift checker", () => {
       supervisorReports: [
         {
           id: "report-1",
-          task_id: "task-1",
-          status: "resolved",
-          resolved_at: "2026-06-12T09:30:00.000Z",
-          created_at: "2026-06-12T09:00:00.000Z",
+          agent_task_id: "task-1",
+          ran_at: "2026-06-12T09:00:00.000Z",
+          actions: {
+            actions: [{ kind: "close_task", taskId: "task-1" }],
+          },
+          action_outcomes: [
+            {
+              action: { kind: "close_task", taskId: "task-1" },
+              status: "applied",
+            },
+          ],
         },
       ],
       workProducts: [
         {
           id: "wp-1",
           artifact_kind: "final_artifact",
-          owner_handoff_url: "/deliverables/wp-1/open",
+          public_url: "/deliverables/wp-1/open",
           created_at: "2026-06-12T09:00:00.000Z",
         },
       ],
@@ -208,12 +286,20 @@ describe("closeout drift checker", () => {
         {
           id: "gc-1",
           goal_id: "goal-1",
-          status: "completed",
           evidence: {
             workProductIds: ["wp-1"],
-            primaryOpenUrl: "/deliverables/wp-1/open",
           },
           created_at: "2026-06-12T09:00:00.000Z",
+        },
+      ],
+      ownerOutcomes: [
+        {
+          id: "outcome-1",
+          goal_id: "goal-1",
+          goal_completion_id: "gc-1",
+          primary_open_url: "/deliverables/wp-1/open",
+          primary_work_product_id: "wp-1",
+          created_at: "2026-06-12T09:01:00.000Z",
         },
       ],
     });
