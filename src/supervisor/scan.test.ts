@@ -2111,6 +2111,22 @@ describe.sequential("reference-only terminal dispositions", () => {
     `;
     expect(task.terminal_disposition?.kind).toBe(REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND);
     expect(task.terminal_disposition?.terminal).toBe(true);
+    expect(task.terminal_disposition).toMatchObject({
+      terminal_status: "closed",
+      final_disposition_label: "reference_only_output",
+      closure_scope: "task",
+      decision_boundary: "autonomous_safe",
+      storage_root_family: "db_task_terminal_disposition",
+      source_finding: {
+        kind: "orphan_output",
+        key: `reference_only_output:${taskId}`,
+      },
+      source_record_ref: {
+        table: "tasks",
+        id: taskId,
+        field: "terminal_disposition",
+      },
+    });
 
     const report = await scanHive(sql, HIVE_ID);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(false);
@@ -2220,5 +2236,22 @@ describe.sequential("reference-only terminal dispositions", () => {
     `;
     expect(wrapper.status).toBe("superseded");
     expect(wrapper.terminal_disposition?.kind).toBe("reference_only_wrapper_superseded");
+    expect(wrapper.terminal_disposition).toMatchObject({
+      terminal_status: "superseded",
+      final_disposition_label: "reference_only_wrapper_superseded",
+      closure_scope: "task",
+      decision_boundary: "autonomous_safe",
+      storage_root_family: "db_task_terminal_disposition",
+      source_finding: {
+        kind: "orphan_output",
+        key: `reference_only_wrapper_superseded:${wrapperTaskId}`,
+        evidence_ref: sourceTaskId,
+      },
+      source_record_ref: {
+        table: "tasks",
+        id: wrapperTaskId,
+        field: "terminal_disposition",
+      },
+    });
   });
 });

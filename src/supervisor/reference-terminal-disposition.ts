@@ -1,5 +1,13 @@
 import type { Sql } from "postgres";
 import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
+import type {
+  ClosureScope,
+  DecisionBoundary,
+  FinalDispositionLabel,
+  StorageRootFamily,
+  TerminalStatus,
+} from "@/closeout/registry";
+import { resolveTerminalDispositionCompatibility } from "@/closeout/registry";
 
 export const REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND = "reference_only_output";
 export const REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND = "reference_only_wrapper_superseded";
@@ -23,6 +31,21 @@ export type ReferenceOnlyTerminalDisposition = {
   recordedAt: string;
   source: "supervisor.referenceOnlyTerminalDisposition";
   reason: string;
+  terminal_status: TerminalStatus;
+  final_disposition_label: FinalDispositionLabel;
+  closure_scope: ClosureScope;
+  decision_boundary: DecisionBoundary;
+  storage_root_family: StorageRootFamily;
+  source_finding: {
+    kind: "orphan_output";
+    key: string;
+    evidence_ref: string;
+  };
+  source_record_ref: {
+    table: "tasks";
+    id: string;
+    field: "terminal_disposition";
+  };
   task: {
     id: string;
     hiveId: string;
@@ -59,7 +82,7 @@ type WrapperCandidateRow = {
   title: string;
   brief: string | null;
   parent_task_id: string;
-  source_disposition: ReferenceOnlyTerminalDisposition;
+  source_disposition: { kind: string };
 };
 
 export interface ReferenceOnlyTerminalDispositionResult {
@@ -179,6 +202,8 @@ function buildReferenceOnlyTerminalDisposition(
   task: ReferenceOnlyCandidateRow,
   now: Date,
 ): ReferenceOnlyTerminalDisposition {
+  const compatibility = resolveTerminalDispositionCompatibility(REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND);
+
   return {
     schemaVersion: 1,
     kind: REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND,
@@ -186,6 +211,21 @@ function buildReferenceOnlyTerminalDisposition(
     recordedAt: now.toISOString(),
     source: "supervisor.referenceOnlyTerminalDisposition",
     reason: "Reference-only output has durable task/hive/role-attributed work product evidence and no open owner action or active follow-up.",
+    terminal_status: compatibility.terminalStatus,
+    final_disposition_label: compatibility.finalDispositionLabel ?? REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND,
+    closure_scope: compatibility.closureScope,
+    decision_boundary: compatibility.decisionBoundary,
+    storage_root_family: compatibility.storageRootFamily,
+    source_finding: {
+      kind: "orphan_output",
+      key: `reference_only_output:${task.id}`,
+      evidence_ref: task.work_product_ids[0] ?? task.id,
+    },
+    source_record_ref: {
+      table: "tasks",
+      id: task.id,
+      field: "terminal_disposition",
+    },
     task: {
       id: task.id,
       hiveId: task.hive_id,
@@ -262,6 +302,7 @@ async function markWrapperSuperseded(
   wrapper: WrapperCandidateRow,
   now: Date,
 ): Promise<void> {
+  const compatibility = resolveTerminalDispositionCompatibility(REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND);
   const disposition = {
     schemaVersion: 1,
     kind: REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND,
@@ -269,6 +310,21 @@ async function markWrapperSuperseded(
     recordedAt: now.toISOString(),
     source: "supervisor.referenceOnlyTerminalDisposition.wrapper",
     reason: "Wrapper cleanup task superseded because the parent reference-only output already has a canonical terminal disposition.",
+    terminal_status: compatibility.terminalStatus,
+    final_disposition_label: compatibility.finalDispositionLabel ?? REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND,
+    closure_scope: compatibility.closureScope,
+    decision_boundary: compatibility.decisionBoundary,
+    storage_root_family: compatibility.storageRootFamily,
+    source_finding: {
+      kind: "orphan_output",
+      key: `reference_only_wrapper_superseded:${wrapper.id}`,
+      evidence_ref: wrapper.parent_task_id,
+    },
+    source_record_ref: {
+      table: "tasks",
+      id: wrapper.id,
+      field: "terminal_disposition",
+    },
     task: {
       id: wrapper.id,
       hiveId: wrapper.hive_id,
