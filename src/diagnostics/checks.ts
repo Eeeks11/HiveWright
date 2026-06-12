@@ -123,14 +123,14 @@ function checkRuntimeConfig(env: NodeJS.ProcessEnv, now: Date): DiagnosticStatus
   });
 }
 
-function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
+export function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
   try {
-    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.W_OK);
+    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.X_OK);
     return buildDiagnosticStatus({
       id: "app.workspace",
       label: "Application workspace",
       severity: "ok",
-      summary: "Application workspace is readable and writable.",
+      summary: "Application workspace is readable and executable.",
       details: path.resolve(repoRoot),
       checkedAt: now,
     });
@@ -139,9 +139,9 @@ function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
       id: "app.workspace",
       label: "Application workspace",
       severity: "critical",
-      summary: "Application workspace is not readable and writable.",
+      summary: "Application workspace is not readable/executable.",
       details: err instanceof Error ? err.message : String(err),
-      recommendedAction: "Fix filesystem permissions or run HiveWright from a writable workspace.",
+      recommendedAction: "Fix filesystem permissions or run HiveWright from a readable application workspace.",
       requiresOwnerAction: true,
       checkedAt: now,
     });
