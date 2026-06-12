@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildRuntimePathProof, findProjectRoot } from "@/readiness/runtime-path-proof";
+import { buildRuntimePathProof, findProjectRoot, resolveRuntimePathProofOutputPath } from "@/readiness/runtime-path-proof";
 
 describe("runtime path proof", () => {
   it("passes when runtime, env file, and hive workspaces resolve outside repo", () => {
@@ -26,5 +26,22 @@ describe("runtime path proof", () => {
   it("finds the project root from a subdirectory instead of trusting cwd", () => {
     const repoRoot = findProjectRoot(path.join(process.cwd(), "src", "readiness"));
     expect(repoRoot).toBe(process.cwd());
+  });
+
+  it("writes the runtime path proof under the external runtime root", () => {
+    const repoRoot = "/home/operator/apps/HiveWright";
+    const outputPath = resolveRuntimePathProofOutputPath(
+      { HIVEWRIGHT_RUNTIME_ROOT: "/home/operator/.hivewright" },
+      repoRoot,
+    );
+
+    expect(outputPath).toBe("/home/operator/.hivewright/tmp/readiness/runtime-path-proof.md");
+  });
+
+  it("rejects runtime path proof output paths inside the repository", () => {
+    const repoRoot = "/home/operator/apps/HiveWright";
+    expect(() =>
+      resolveRuntimePathProofOutputPath({ HIVEWRIGHT_RUNTIME_ROOT: path.join(repoRoot, ".hivewright") }, repoRoot),
+    ).toThrow(/outside the HiveWright software repository/);
   });
 });
