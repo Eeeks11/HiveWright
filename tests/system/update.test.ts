@@ -126,6 +126,17 @@ describe("HiveWright update system", () => {
     expect(script).not.toMatch(/^\s*npm run build\s*$/m);
   });
 
+  it("writes a canonical runtime cutover record after privileged updates", () => {
+    const script = readFileSync(
+      path.resolve(__dirname, "../../scripts/hivewright-operational-update-root.sh"),
+      "utf8",
+    );
+
+    expect(script).toContain("latest-runtime-cutover.json");
+    expect(script).toContain("\"runtimeMode\":\"locked-install\"");
+    expect(script).toContain("dashboard_build_hash");
+  });
+
   it("places dashboard update logs under the external runtime root", () => {
     const dir = resolveUpdateLogDirectory({
       HIVEWRIGHT_RUNTIME_ROOT: "/var/lib/hivewright-runtime",
