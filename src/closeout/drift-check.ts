@@ -55,6 +55,7 @@ export interface CloseoutWorkProductRow {
   public_url?: string | null;
   source_url?: string | null;
   file_path?: string | null;
+  content?: string | null;
   created_at: string | Date;
 }
 
@@ -125,7 +126,7 @@ function isTerminalTask(task: CloseoutTaskRow): boolean {
 }
 
 function hasOwnerOpenableRoute(workProduct: CloseoutWorkProductRow): boolean {
-  return Boolean(workProduct.public_url?.trim() || workProduct.source_url?.trim() || workProduct.file_path?.trim());
+  return Boolean(workProduct.public_url?.trim() || workProduct.file_path?.trim() || workProduct.content?.trim());
 }
 
 function outcomeMatchesAction(outcome: CloseoutSupervisorOutcome, action: CloseoutSupervisorAction): boolean {
@@ -218,7 +219,7 @@ export function checkCloseoutDrift(input: CloseoutDriftCheckInput, now = new Dat
       sourceTable: "work_products",
       sourceId: workProduct.id,
       relatedIds: [workProduct.task_id, workProduct.goal_id].filter((id): id is string => Boolean(id)),
-      message: `Final artifact ${workProduct.id} has no owner-openable public URL, source URL, or deliverable file path.`,
+      message: `Final artifact ${workProduct.id} has no owner-openable public URL, deliverable file path, or inline content.`,
     });
   }
 

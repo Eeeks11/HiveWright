@@ -122,7 +122,7 @@ describe("closeout drift checker", () => {
     ]);
   });
 
-  it("accepts current work_products URL/file fields as owner-openable routes", () => {
+  it("accepts current work_products URL/file/content fields as owner-openable routes", () => {
     const report = checkCloseoutDrift({
       workProducts: [
         {
@@ -137,10 +137,37 @@ describe("closeout drift checker", () => {
           file_path: "/home/trent/.hivewright/hives/h1/work-products/final.png",
           created_at: "2026-06-12T12:00:00.000Z",
         },
+        {
+          id: "wp-content",
+          artifact_kind: "final_artifact",
+          content: "# Final report\n\nOwner-readable inline content.",
+          created_at: "2026-06-12T12:00:00.000Z",
+        },
       ],
     });
 
     expect(report.findings).toEqual([]);
+  });
+
+  it("does not accept source_url alone as an owner-openable deliverable route", () => {
+    const report = checkCloseoutDrift({
+      workProducts: [
+        {
+          id: "wp-source-only",
+          artifact_kind: "final_artifact",
+          source_url: "https://example.test/source",
+          created_at: "2026-06-12T12:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(report.findings).toEqual([
+      expect.objectContaining({
+        kind: "artifact_missing_owner_handoff",
+        sourceTable: "work_products",
+        sourceId: "wp-source-only",
+      }),
+    ]);
   });
 
   it("reports goal completions whose final artifact evidence lacks an owner-openable outcome or artifact route", () => {
