@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { resolveHivewrightEnvFilePath, resolveHivewrightRuntimeRoot, pathContains } from "@/runtime/paths";
+import { resolveHivewrightEnvFilePath, resolveHivewrightRuntimeRoot, resolveRuntimePath, pathContains } from "@/runtime/paths";
 import { resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 
 export interface RuntimePathProofEntry {
@@ -65,4 +65,11 @@ export function renderRuntimePathProofMarkdown(proof: RuntimePathProof): string 
     "## Failures",
     ...(proof.failures.length === 0 ? ["- None"] : proof.failures.map((failure) => `- ${failure}`)),
   ].join("\n");
+}
+
+export function resolveRuntimePathProofOutputPath(
+  env: { [key: string]: string | undefined } = process.env,
+  repoRoot = findProjectRoot(),
+): string {
+  return resolveRuntimePath(["tmp", "readiness", "runtime-path-proof.md"], env, repoRoot);
 }
