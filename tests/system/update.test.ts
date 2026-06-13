@@ -134,7 +134,12 @@ describe("HiveWright update system", () => {
 
     expect(script).toContain("latest-runtime-cutover.json");
     expect(script).toContain("\"runtimeMode\":\"locked-install\"");
-    expect(script).toContain("dashboard_build_hash");
+    expect(script).toContain('DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://127.0.0.1:3002}"');
+    expect(script).toContain("verify_dashboard_health()");
+    expect(script).toContain('http_code="$(curl -sS -o "$tmp_file" -w \'%{http_code}\' "$health_url" || printf \'000\')"');
+    expect(script).toContain('echo "dashboard_http=$DASHBOARD_HTTP_CODE"');
+    expect(script).toContain('Dashboard build hash does not match operational checkout head');
+    expect(script).not.toContain('[ -n "$dashboard_build_hash" ] || dashboard_build_hash="$(git rev-parse HEAD)"');
   });
 
   it("enforces the canonical operational remote and main branch in the privileged updater", () => {
@@ -160,6 +165,18 @@ describe("HiveWright update system", () => {
     expect(script).toContain('commands":["systemctl start hivewright-update.service"]');
     expect(script).toContain("ensure_canonical_remote\n    [ \"$(git rev-parse --show-toplevel)\" = \"$INSTALL_DIR\" ]");
     expect(script).toContain('lock) ensure_root; ensure_paths; configure_root_git; ensure_canonical_remote; lock_repo ;;');
+  });
+
+  it("installs the privileged updater as a wrapper around the locked operational checkout", () => {
+    const script = readFileSync(
+      path.resolve(__dirname, "../../scripts/install-operational-repo-lock.sh"),
+      "utf8",
+    );
+
+    expect(script).not.toContain('install -o root -g root -m 0755 "$UPDATER_SRC" "$UPDATER_DST"');
+    expect(script).toContain("cat > \"$UPDATER_DST\" <<'WRAPPER'");
+    expect(script).toContain('exec /home/trent/apps/HiveWright/scripts/hivewright-operational-update-root.sh "$@"');
+    expect(script).toContain('sudo -u "$SERVICE_USER" sudo -n /usr/local/sbin/hivewright-operational-update status-json >/dev/null');
   });
 
   it("places dashboard update logs under the external runtime root", () => {

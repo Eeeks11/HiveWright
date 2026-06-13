@@ -18,7 +18,13 @@ SUDOERS_PATH="/etc/sudoers.d/hivewright-update"
 [ -d "$INSTALL_DIR/.git" ] || { echo "Missing operational git checkout: $INSTALL_DIR" >&2; exit 3; }
 [ -d "$RUNTIME_ROOT" ] || mkdir -p "$RUNTIME_ROOT"
 
-install -o root -g root -m 0755 "$UPDATER_SRC" "$UPDATER_DST"
+cat > "$UPDATER_DST" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+exec /home/trent/apps/HiveWright/scripts/hivewright-operational-update-root.sh "$@"
+WRAPPER
+chown root:root "$UPDATER_DST"
+chmod 0755 "$UPDATER_DST"
 
 cat > "$SERVICE_PATH" <<'UNIT'
 [Unit]

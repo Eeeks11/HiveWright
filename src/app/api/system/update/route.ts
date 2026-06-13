@@ -15,7 +15,7 @@ const SYSTEMCTL = process.env.HIVEWRIGHT_SYSTEMCTL ?? "/usr/bin/systemctl";
 const SUDO = process.env.HIVEWRIGHT_SUDO ?? "/usr/bin/sudo";
 const UPDATE_SERVICE = process.env.HIVEWRIGHT_UPDATE_SERVICE ?? "hivewright-update.service";
 const INSTALL_DIR = process.env.HIVEWRIGHT_INSTALL_DIR ?? process.cwd();
-const DASHBOARD_URL = process.env.HIVEWRIGHT_DASHBOARD_HEALTH_URL ?? "http://localhost:3002";
+const DASHBOARD_URL = process.env.HIVEWRIGHT_DASHBOARD_HEALTH_URL ?? "http://127.0.0.1:3002";
 
 function updateLogPath() {
   const dir = resolveUpdateLogDirectory();

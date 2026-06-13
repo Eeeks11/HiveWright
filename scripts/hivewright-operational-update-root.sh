@@ -8,7 +8,9 @@ LOG_DIR="$RUNTIME_ROOT/logs/updates"
 DEPLOYMENT_DIR="$RUNTIME_ROOT/logs/deployments"
 CUTOVER_FILE="$DEPLOYMENT_DIR/latest-runtime-cutover.json"
 SERVICE_USER="${HIVEWRIGHT_SERVICE_USER:-trent}"
-DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://localhost:3002}"
+DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://127.0.0.1:3002}"
+HEALTH_RETRY_COUNT="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_COUNT:-15}"
+HEALTH_RETRY_DELAY_SECONDS="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_DELAY_SECONDS:-2}"
 CANONICAL_REMOTE_URL="${HIVEWRIGHT_CANONICAL_REMOTE_URL:-https://github.com/Eeeks11/HiveWright.git}"
 MODE="${1:-status-json}"
 
@@ -36,6 +38,32 @@ json_or_null() {
 
 extract_health_build_hash() {
   node -e 'let data=""; process.stdin.on("data", (chunk) => data += chunk); process.stdin.on("end", () => { try { const parsed = JSON.parse(data); const buildHash = parsed?.data?.buildHash ?? parsed?.buildHash ?? ""; process.stdout.write(String(buildHash || "")); } catch {} });'
+}
+
+verify_dashboard_health() {
+  local health_url="${DASHBOARD_URL%/}/api/health"
+  local attempt http_code tmp_file build_hash
+  tmp_file="$(mktemp)"
+  trap 'rm -f "$tmp_file"' RETURN
+
+  for attempt in $(seq 1 "$HEALTH_RETRY_COUNT"); do
+    : > "$tmp_file"
+    http_code="$(curl -sS -o "$tmp_file" -w '%{http_code}' "$health_url" || printf '000')"
+    build_hash="$(extract_health_build_hash < "$tmp_file")"
+    echo "dashboard_health_attempt=$attempt/$HEALTH_RETRY_COUNT dashboard_http=$http_code"
+    if [ "$http_code" = "200" ] && [ -n "$build_hash" ]; then
+      DASHBOARD_HTTP_CODE="$http_code"
+      DASHBOARD_BUILD_HASH="$build_hash"
+      return 0
+    fi
+    [ "$attempt" -lt "$HEALTH_RETRY_COUNT" ] && sleep "$HEALTH_RETRY_DELAY_SECONDS"
+  done
+
+  echo "Dashboard health verification failed after $HEALTH_RETRY_COUNT attempts: $health_url" >&2
+  if [ -s "$tmp_file" ]; then
+    echo "dashboard_health_body=$(tr '\n' ' ' < "$tmp_file")" >&2
+  fi
+  return 31
 }
 
 write_cutover_record() {
@@ -267,12 +295,15 @@ apply_update() {
         dispatcher_cwd="$cwd"
       fi
     done
-    dashboard_health_json="$(curl -fsS "$DASHBOARD_URL/api/health" || true)"
-    dashboard_build_hash="$(printf '%s' "$dashboard_health_json" | extract_health_build_hash)"
-    [ -n "$dashboard_build_hash" ] || dashboard_build_hash="$(git rev-parse HEAD)"
-    echo "dashboard_build_hash=$dashboard_build_hash"
     head_after="$(git rev-parse HEAD)"
-    write_cutover_record "$(date -Is)" "$head_after" "$dashboard_build_hash" "$dashboard_pid" "$dashboard_cwd" "$dispatcher_pid" "$dispatcher_cwd"
+    verify_dashboard_health
+    echo "dashboard_http=$DASHBOARD_HTTP_CODE"
+    echo "dashboard_build_hash=$DASHBOARD_BUILD_HASH"
+    [ "$DASHBOARD_BUILD_HASH" = "$head_after" ] || {
+      echo "Dashboard build hash does not match operational checkout head: expected $head_after, got $DASHBOARD_BUILD_HASH" >&2
+      exit 32
+    }
+    write_cutover_record "$(date -Is)" "$head_after" "$DASHBOARD_BUILD_HASH" "$dashboard_pid" "$dashboard_cwd" "$dispatcher_pid" "$dispatcher_cwd"
     echo "cutover_file=$CUTOVER_FILE"
     echo "head_after=$head_after"
     echo "completed=$(date -Is)"
