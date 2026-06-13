@@ -314,7 +314,12 @@ export function evaluateRuntimeCutover(
 }
 
 function compareField(reasons: string[], label: string, expected: string | null, actual: string | null) {
-  if (!expected || !actual || expected === actual) return;
+  if (!expected) return;
+  if (!actual) {
+    reasons.push(`${label} is missing from the runtime cutover record; expected ${expected}`);
+    return;
+  }
+  if (expected === actual) return;
   reasons.push(`${label} drift: expected ${expected}, recorded ${actual}`);
 }
 

@@ -188,6 +188,92 @@ describe("runtime cutover", () => {
     expect(status.reasons.join("\n")).toContain("/home/trent/apps/HiveWright");
     expect(status.reasons.join("\n")).toContain("18cacfaa6b8682bde5802e7b2b53f63470f63d3e");
   });
+
+  it("flags missing deployed commit and build hash as drift when the live runtime expects provenance", async () => {
+    const repoRoot = await makeRepoRoot();
+    const runtimeRoot = await makeRuntimeRoot();
+    const cutoverPath = path.join(runtimeRoot, "logs", "deployments", "latest-runtime-cutover.json");
+    await fs.mkdir(path.dirname(cutoverPath), { recursive: true });
+    await fs.writeFile(cutoverPath, JSON.stringify({
+      recordedAt: "2026-06-13T00:33:00.000Z",
+      runtimeMode: "locked-install",
+      installDir: "/home/trent/apps/HiveWright",
+      runtimeRoot,
+      envFile: `${runtimeRoot}/config/.env`,
+      dashboardHealthUrl: "http://127.0.0.1:3002",
+      dashboard: { pid: 101, cwd: "/home/trent/apps/HiveWright" },
+      dispatcher: { pid: 202, cwd: "/home/trent/apps/HiveWright" },
+    }));
+
+    const read = await readRuntimeCutoverRecord({
+      env: { HIVEWRIGHT_RUNTIME_ROOT: runtimeRoot },
+      repoRoot,
+    });
+    const status = evaluateRuntimeCutover({
+      ...read,
+      expected: {
+        runtimeMode: "locked-install",
+        installDir: "/home/trent/apps/HiveWright",
+        runtimeRoot,
+        envFile: `${runtimeRoot}/config/.env`,
+        dashboardHealthUrl: "http://127.0.0.1:3002",
+        currentCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+        currentBuildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+      },
+    });
+
+    expect(status.available).toBe(true);
+    expect(status.state).toBe("drift");
+    expect(status.reasons).toContain(
+      "deployedCommit is missing from the runtime cutover record; expected 18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+    );
+    expect(status.reasons).toContain(
+      "buildHash is missing from the runtime cutover record; expected 18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+    );
+  });
+
+  it("flags missing env file and dashboard health URL as drift when the live runtime expects them", async () => {
+    const repoRoot = await makeRepoRoot();
+    const runtimeRoot = await makeRuntimeRoot();
+    const cutoverPath = path.join(runtimeRoot, "logs", "deployments", "latest-runtime-cutover.json");
+    await fs.mkdir(path.dirname(cutoverPath), { recursive: true });
+    await fs.writeFile(cutoverPath, JSON.stringify({
+      recordedAt: "2026-06-13T00:33:00.000Z",
+      runtimeMode: "locked-install",
+      installDir: "/home/trent/apps/HiveWright",
+      runtimeRoot,
+      deployedCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+      buildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+      dashboard: { pid: 101, cwd: "/home/trent/apps/HiveWright" },
+      dispatcher: { pid: 202, cwd: "/home/trent/apps/HiveWright" },
+    }));
+
+    const read = await readRuntimeCutoverRecord({
+      env: { HIVEWRIGHT_RUNTIME_ROOT: runtimeRoot },
+      repoRoot,
+    });
+    const status = evaluateRuntimeCutover({
+      ...read,
+      expected: {
+        runtimeMode: "locked-install",
+        installDir: "/home/trent/apps/HiveWright",
+        runtimeRoot,
+        envFile: `${runtimeRoot}/config/.env`,
+        dashboardHealthUrl: "http://127.0.0.1:3002",
+        currentCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+        currentBuildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
+      },
+    });
+
+    expect(status.available).toBe(true);
+    expect(status.state).toBe("drift");
+    expect(status.reasons).toContain(
+      `envFile is missing from the runtime cutover record; expected ${runtimeRoot}/config/.env`,
+    );
+    expect(status.reasons).toContain(
+      "dashboardHealthUrl is missing from the runtime cutover record; expected http://127.0.0.1:3002",
+    );
+  });
 });
 
 async function makeRepoRoot() {
