@@ -38,6 +38,9 @@ export async function POST(
   if (body.note !== undefined && typeof body.note !== "string") {
     return jsonError("note must be a string when provided", 400);
   }
+  if (body.action === "needs_revision" && (!body.note || body.note.trim().length === 0)) {
+    return jsonError("needs_revision requires a revision note", 400);
+  }
 
   const [outcome] = await sql<{ hive_id: string }[]>`
     SELECT hive_id

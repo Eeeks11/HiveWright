@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import type { OwnerOutcomeRenderMode, OwnerOutcomeSummary } from "@/outcomes/types";
 
 const STATUS_CLASSES: Record<OwnerOutcomeSummary["status"], string> = {
@@ -21,9 +22,13 @@ const RENDER_LABELS: Record<OwnerOutcomeRenderMode, string> = {
   external_url: "Live URL",
 };
 
-function formatStatus(value: OwnerOutcomeSummary["status"]) {
-  return value.replace(/_/g, " ");
-}
+const STATUS_LABELS: Record<OwnerOutcomeSummary["status"], string> = {
+  new: "Needs review",
+  accepted: "Accepted",
+  needs_revision: "Needs revision",
+  archived: "Archived",
+  converted_to_process_candidate: "Reusable idea",
+};
 
 function isExternalUrl(value: string) {
   return /^https?:\/\//i.test(value);
@@ -39,9 +44,11 @@ export function OutcomeCardView({
   actionPending = false,
 }: {
   outcome: OwnerOutcomeSummary;
-  onReviewAction?: (action: OwnerOutcomeSummary["status"]) => void;
+  onReviewAction?: (action: OwnerOutcomeSummary["status"], note?: string) => void;
   actionPending?: boolean;
 }) {
+  const [showRevisionForm, setShowRevisionForm] = useState(false);
+  const [revisionNote, setRevisionNote] = useState("");
   const goalUrl = `/goals/${outcome.goalId}`;
   const hasPrimaryOutput = Boolean(outcome.primaryOpenUrl);
   const primaryUrl = outcome.primaryOpenUrl ?? goalUrl;
@@ -49,6 +56,7 @@ export function OutcomeCardView({
   const primaryRel = primaryTarget ? "noreferrer noopener" : undefined;
   const reviewUrl = outcome.primaryDetailUrl ?? goalUrl;
   const artifactLabel = outcome.primaryArtifactRenderMode ? RENDER_LABELS[outcome.primaryArtifactRenderMode] : null;
+  const trimmedRevisionNote = revisionNote.trim();
 
   return (
     <article className="flex h-full flex-col gap-4 rounded-lg border bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
@@ -63,7 +71,7 @@ export function OutcomeCardView({
             </span>
           )}
           <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${STATUS_CLASSES[outcome.status]}`}>
-            {formatStatus(outcome.status)}
+            {STATUS_LABELS[outcome.status]}
           </span>
         </div>
         <h3 className="text-base font-semibold text-zinc-950 dark:text-zinc-50">
@@ -107,7 +115,7 @@ export function OutcomeCardView({
         <button
           type="button"
           disabled={actionPending}
-          onClick={() => onReviewAction?.("needs_revision")}
+          onClick={() => setShowRevisionForm((current) => !current)}
           className="inline-flex items-center justify-center rounded-md border px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
         >
           Needs revision
@@ -118,7 +126,7 @@ export function OutcomeCardView({
           onClick={() => onReviewAction?.("converted_to_process_candidate")}
           className="inline-flex items-center justify-center rounded-md border px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
         >
-          Process candidate
+          Flag reusable idea
         </button>
         <button
           type="button"
@@ -129,6 +137,55 @@ export function OutcomeCardView({
           Archive outcome
         </button>
       </div>
+      <p className="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+        Accept moves this out of your review queue. Needs revision creates a bounded follow-up task with your note. Flag reusable idea only saves it for later review and does not create a process yet.
+      </p>
+
+      {showRevisionForm && (
+        <div className="space-y-3 rounded-md border border-amber-200/70 bg-amber-50/70 p-3 dark:border-amber-900/60 dark:bg-amber-950/20">
+          <div className="space-y-1">
+            <label htmlFor={`revision-note-${outcome.id}`} className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              Revision note
+            </label>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              This note is stored with the handoff and sent back with the bounded revision task.
+            </p>
+          </div>
+          <textarea
+            id={`revision-note-${outcome.id}`}
+            value={revisionNote}
+            onChange={(event) => setRevisionNote(event.target.value)}
+            rows={3}
+            className="w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm focus:border-amber-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100"
+            placeholder="Explain what should change before this comes back for review."
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={actionPending || trimmedRevisionNote.length === 0}
+              onClick={() => {
+                onReviewAction?.("needs_revision", trimmedRevisionNote);
+                setShowRevisionForm(false);
+                setRevisionNote("");
+              }}
+              className="inline-flex items-center justify-center rounded-md bg-amber-500 px-3 py-2 text-sm font-medium text-zinc-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Send revision request
+            </button>
+            <button
+              type="button"
+              disabled={actionPending}
+              onClick={() => {
+                setShowRevisionForm(false);
+                setRevisionNote("");
+              }}
+              className="inline-flex items-center justify-center rounded-md border px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-auto flex flex-wrap gap-2">
         <Link
