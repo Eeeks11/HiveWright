@@ -15,6 +15,7 @@ import {
   type DiagnosticStatus,
   type DiagnosticSummary,
 } from "./types";
+import { resolveHiveWrightBuildProvenance } from "./build-provenance";
 
 export type HiveWrightDiagnosticsSnapshot = {
   checkedAt: string;
@@ -42,14 +43,18 @@ const REQUIRED_ENV = ["DATABASE_URL", "ENCRYPTION_KEY", "INTERNAL_SERVICE_TOKEN"
 const DISPATCHER_STALE_AFTER_MS = 2 * 60 * 1000;
 const EXECUTION_RUN_STALE_AFTER_MS = 15 * 60 * 1000;
 
-export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date } = {}): HiveWrightHealthSnapshot {
-  const env = input.env ?? process.env;
+export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date; repoRoot?: string } = {}): HiveWrightHealthSnapshot {
+  const provenance = resolveHiveWrightBuildProvenance({
+    env: input.env,
+    now: input.now,
+    repoRoot: input.repoRoot,
+  });
   return {
     status: "ok",
     service: "hivewright",
-    version: env.npm_package_version ?? null,
-    buildHash: env.VERCEL_GIT_COMMIT_SHA ?? env.HIVEWRIGHT_BUILD_HASH ?? null,
-    checkedAt: (input.now ?? new Date()).toISOString(),
+    version: provenance.version,
+    buildHash: provenance.buildHash,
+    checkedAt: provenance.capturedAt,
   };
 }
 
@@ -118,14 +123,14 @@ function checkRuntimeConfig(env: NodeJS.ProcessEnv, now: Date): DiagnosticStatus
   });
 }
 
-function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
+export function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
   try {
-    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.W_OK);
+    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.X_OK);
     return buildDiagnosticStatus({
       id: "app.workspace",
       label: "Application workspace",
       severity: "ok",
-      summary: "Application workspace is readable and writable.",
+      summary: "Application workspace is readable and executable.",
       details: path.resolve(repoRoot),
       checkedAt: now,
     });
@@ -134,9 +139,9 @@ function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
       id: "app.workspace",
       label: "Application workspace",
       severity: "critical",
-      summary: "Application workspace is not readable and writable.",
+      summary: "Application workspace is not readable/executable.",
       details: err instanceof Error ? err.message : String(err),
-      recommendedAction: "Fix filesystem permissions or run HiveWright from a writable workspace.",
+      recommendedAction: "Fix filesystem permissions or run HiveWright from a readable application workspace.",
       requiresOwnerAction: true,
       checkedAt: now,
     });

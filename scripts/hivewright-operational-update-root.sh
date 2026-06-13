@@ -9,6 +9,7 @@ DEPLOYMENT_DIR="$RUNTIME_ROOT/logs/deployments"
 CUTOVER_FILE="$DEPLOYMENT_DIR/latest-runtime-cutover.json"
 SERVICE_USER="${HIVEWRIGHT_SERVICE_USER:-trent}"
 DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://localhost:3002}"
+CANONICAL_REMOTE_URL="${HIVEWRIGHT_CANONICAL_REMOTE_URL:-https://github.com/Eeeks11/HiveWright.git}"
 MODE="${1:-status-json}"
 
 SYSTEMCTL_USER_ENV() {
@@ -76,6 +77,30 @@ configure_root_git() {
   git config --global --add safe.directory "$INSTALL_DIR" 2>/dev/null || true
 }
 
+remote_matches_canonical() {
+  local remote
+  remote="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+  [ "$remote" = "$CANONICAL_REMOTE_URL" ]
+}
+
+ensure_canonical_remote() {
+  local remote
+  remote="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+  if [ "$remote" != "$CANONICAL_REMOTE_URL" ]; then
+    echo "Refusing update: origin remote is '$remote', expected '$CANONICAL_REMOTE_URL'." >&2
+    echo "Fix with: git -C $INSTALL_DIR remote set-url origin $CANONICAL_REMOTE_URL" >&2
+    exit 13
+  fi
+  local branch
+  branch="$(git -C "$INSTALL_DIR" branch --show-current 2>/dev/null || true)"
+  if [ "$branch" != "main" ]; then
+    echo "Refusing update: operational install must stay on main, currently '$branch'." >&2
+    exit 14
+  fi
+  git -C "$INSTALL_DIR" config branch.main.remote origin
+  git -C "$INSTALL_DIR" config branch.main.merge refs/heads/main
+}
+
 lock_repo() {
   chown -R root:root "$INSTALL_DIR"
   chmod -R u+rwX,go+rX,go-w "$INSTALL_DIR"
@@ -89,6 +114,22 @@ status_json() {
   ensure_root
   ensure_paths
   configure_root_git
+
+  local raw_remote
+  raw_remote="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+  if [ "$raw_remote" != "$CANONICAL_REMOTE_URL" ]; then
+    local version branch current dirty message
+    version="$(node -e "console.log(require('$INSTALL_DIR/package.json').version || '0.0.0')" 2>/dev/null || echo "0.0.0")"
+    branch="$(git -C "$INSTALL_DIR" branch --show-current 2>/dev/null || true)"
+    current="$(git -C "$INSTALL_DIR" rev-parse HEAD 2>/dev/null || true)"
+    dirty="false"; [ "$(repo_dirty_count)" = "0" ] || dirty="true"
+    message="Operational install origin remote is not the canonical GitHub remote; automatic updates are blocked until the remote is restored."
+    cat <<JSON
+{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":"","remoteUrl":$(json_escape "$raw_remote"),"expectedRemoteUrl":$(json_escape "$CANONICAL_REMOTE_URL"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":false,"state":"blocked-remote-misconfigured","message":$(json_escape "$message")},"plan":{"allowed":false,"commands":[],"message":$(json_escape "$message")}}
+JSON
+    return 0
+  fi
+  ensure_canonical_remote
   git -C "$INSTALL_DIR" fetch --tags --prune origin >/dev/null 2>&1 || true
 
   local version branch current upstream remote dirty state update_available message relation plan_allowed plan_message
@@ -138,7 +179,7 @@ status_json() {
   fi
 
   cat <<JSON
-{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":$(json_escape "$upstream"),"remoteUrl":$(json_escape "$remote"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":$update_available,"state":$(json_escape "$state"),"message":$(json_escape "$message")},"plan":{"allowed":$plan_allowed,"commands":["systemctl --no-block start hivewright-update.service"],"message":$(json_escape "$plan_message")}}
+{"status":{"currentVersion":$(json_escape "$version"),"currentCommit":$(json_escape "$current"),"upstreamCommit":$(json_escape "$upstream"),"remoteUrl":$(json_escape "$remote"),"branch":$(json_escape "$branch"),"dirty":$dirty,"updateAvailable":$update_available,"state":$(json_escape "$state"),"message":$(json_escape "$message")},"plan":{"allowed":$plan_allowed,"commands":["systemctl start hivewright-update.service"],"message":$(json_escape "$plan_message")}}
 JSON
 }
 
@@ -159,6 +200,7 @@ apply_update() {
 
     cd "$INSTALL_DIR"
     echo "== preflight =="
+    ensure_canonical_remote
     [ "$(git rev-parse --show-toplevel)" = "$INSTALL_DIR" ]
     echo "head_before=$(git rev-parse HEAD)"
     echo "branch=$(git branch --show-current)"
@@ -243,6 +285,6 @@ apply_update() {
 case "$MODE" in
   status-json) status_json ;;
   apply) apply_update ;;
-  lock) ensure_root; ensure_paths; lock_repo ;;
+  lock) ensure_root; ensure_paths; configure_root_git; ensure_canonical_remote; lock_repo ;;
   *) echo "Usage: $0 [status-json|apply|lock]" >&2; exit 2 ;;
 esac

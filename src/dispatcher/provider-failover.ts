@@ -27,6 +27,25 @@ export interface ProviderFailoverDecision {
  *   so known-bad runtime paths do not burn tokens or create recovery churn.
  */
 export function decideProviderFailoverRoute(input: ProviderFailoverInput): ProviderFailoverDecision {
+  if (input.primaryHealth.healthy) {
+    return {
+      adapterType: input.primaryAdapterType,
+      model: input.primaryModel,
+      canRun: true,
+      usedFallback: false,
+      clearFallbackModel: false,
+      reason: "primary_adapter_healthy",
+      diagnostic: buildDiagnostic(input, {
+        adapterType: input.primaryAdapterType,
+        model: input.primaryModel,
+        canRun: true,
+        usedFallback: false,
+        clearFallbackModel: false,
+        reason: "primary_adapter_healthy",
+      }),
+    };
+  }
+
   const fallbackDeclared = Boolean(input.fallbackAdapterType && input.fallbackModel);
 
   if (!fallbackDeclared) {
@@ -44,25 +63,6 @@ export function decideProviderFailoverRoute(input: ProviderFailoverInput): Provi
         usedFallback: false,
         clearFallbackModel: false,
         reason: "no_declared_fallback_route",
-      }),
-    };
-  }
-
-  if (input.primaryHealth.healthy) {
-    return {
-      adapterType: input.primaryAdapterType,
-      model: input.primaryModel,
-      canRun: true,
-      usedFallback: false,
-      clearFallbackModel: false,
-      reason: "primary_adapter_healthy",
-      diagnostic: buildDiagnostic(input, {
-        adapterType: input.primaryAdapterType,
-        model: input.primaryModel,
-        canRun: true,
-        usedFallback: false,
-        clearFallbackModel: false,
-        reason: "primary_adapter_healthy",
       }),
     };
   }

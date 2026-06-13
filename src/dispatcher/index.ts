@@ -56,6 +56,7 @@ import {
   type DispatcherModelRouteHealthDecision,
 } from "./adapter-health";
 import { decideProviderFailoverRoute } from "./provider-failover";
+import { buildRuntimeHealthGateForensics } from "./route-health-forensics";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
@@ -898,6 +899,15 @@ export class Dispatcher {
 
       if (!route.canRun) {
         const reason = `runtime_blocked: Runtime health gate blocked task before spawn. ${route.diagnostic}`;
+        const routeHealthForensics = buildRuntimeHealthGateForensics({
+          primaryAdapterType,
+          primaryModel: ctx.model,
+          fallbackAdapterType: ctx.fallbackAdapterType,
+          fallbackModel: ctx.fallbackModel,
+          primaryHealth,
+          fallbackHealth,
+          route,
+        });
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
         const run = await startExecutionRun(this.sql, {
           hiveId: task.hiveId,
@@ -905,16 +915,16 @@ export class Dispatcher {
           goalId: task.goalId,
           adapterType: route.adapterType,
           model: route.model,
+          sessionId: null,
           dispatcherPid: process.pid,
-          metadata: {
-            routeStage: "runtime_health_gate",
-            primaryAdapterType,
-            primaryHealthy: primaryHealth.healthy,
-            fallbackHealthy: fallbackHealth?.healthy ?? null,
-            routeReason: route.reason,
-          },
+          metadata: routeHealthForensics,
         });
-        await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
+        await markExecutionRunBlocked(this.sql, {
+          runId: run.id,
+          hiveId: run.hiveId,
+          reason,
+          evidence: routeHealthForensics,
+        });
         await writeTaskLog(this.sql, {
           taskId: task.id,
           goalId: task.goalId ?? undefined,

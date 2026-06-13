@@ -84,6 +84,13 @@ export interface FinishExecutionRunInput {
   logBytes?: number | null;
 }
 
+export interface MarkExecutionRunBlockedInput {
+  runId: string;
+  hiveId: string;
+  reason: string;
+  evidence?: Record<string, unknown> | null;
+}
+
 export interface ExecutionRunSignalSummary {
   running: number;
   interruptedRecovered: number;
@@ -247,7 +254,7 @@ export async function finishExecutionRun(sql: Sql, input: FinishExecutionRunInpu
 }
 
 
-export async function markExecutionRunBlocked(sql: Sql, input: { runId: string; hiveId: string; reason: string }): Promise<void> {
+export async function markExecutionRunBlocked(sql: Sql, input: MarkExecutionRunBlockedInput): Promise<void> {
   await finishExecutionRun(sql, {
     runId: input.runId,
     hiveId: input.hiveId,
@@ -255,6 +262,15 @@ export async function markExecutionRunBlocked(sql: Sql, input: { runId: string; 
     finalizationResult: "runtime_blocked",
     errorMessage: input.reason,
   });
+  if (input.evidence) {
+    await appendExecutionRunEvent(sql, {
+      runId: input.runId,
+      hiveId: input.hiveId,
+      eventType: "blocked",
+      message: input.reason,
+      payload: input.evidence,
+    });
+  }
 }
 
 export async function markInterruptedRunningExecutionRuns(
