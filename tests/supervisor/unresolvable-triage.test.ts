@@ -22,7 +22,8 @@ async function seedBase() {
     INSERT INTO role_templates (slug, name, type, adapter_type, active)
     VALUES
       ('triage-executor', 'Triage Executor', 'executor', 'codex', true),
-      ('doctor', 'Doctor', 'system', 'claude-code', true)
+      ('doctor', 'Doctor', 'system', 'claude-code', true),
+      ('hive-supervisor', 'Hive Supervisor', 'system', 'codex', true)
     ON CONFLICT (slug) DO NOTHING
   `;
 }
@@ -36,6 +37,8 @@ async function insertUnresolvable(input: {
   modelOverride?: string | null;
   parentTaskId?: string | null;
   goalId?: string | null;
+  assignedTo?: string;
+  createdBy?: string;
 }) {
   await sql`
     INSERT INTO tasks (
@@ -44,7 +47,7 @@ async function insertUnresolvable(input: {
       parent_task_id, goal_id
     )
     VALUES (
-      ${input.id}, ${HIVE_ID}, 'triage-executor', 'owner', ${input.title}, 'brief',
+      ${input.id}, ${HIVE_ID}, ${input.assignedTo ?? "triage-executor"}, ${input.createdBy ?? "owner"}, ${input.title}, 'brief',
       'unresolvable', ${input.failureReason},
       ${input.createdAt ?? "2026-05-01T00:00:00Z"}::timestamptz,
       ${input.createdAt ?? "2026-05-01T00:00:00Z"}::timestamptz,
@@ -360,6 +363,135 @@ describe("reconcileUnresolvableTasks", () => {
       failureReason: "probe failed",
     });
     expect(evidence.links.spawnedTaskId).toBe(doctorTask.id);
+  });
+
+  it("archives stale hive-supervisor heartbeat runtime residue when a newer heartbeat already exists", async () => {
+    const staleHeartbeatId = "12111111-1111-4111-8111-111111111111";
+    const newerHeartbeatId = "12222222-2222-4222-8222-222222222222";
+    await insertUnresolvable({
+      id: staleHeartbeatId,
+      title: "Hive supervisor heartbeat - 12 finding(s)",
+      failureReason: "Codex exited code 1: route unavailable",
+      assignedTo: "hive-supervisor",
+      createdBy: "dispatcher",
+      createdAt: "2026-05-01T00:00:00Z",
+    });
+    await sql`
+      INSERT INTO tasks (
+        id, hive_id, assigned_to, created_by, title, brief, status, created_at, updated_at
+      )
+      VALUES (
+        ${newerHeartbeatId}, ${HIVE_ID}, 'hive-supervisor', 'dispatcher',
+        'Hive supervisor heartbeat - 4 finding(s)', 'brief', 'pending',
+        '2026-05-01T00:15:00Z'::timestamptz, '2026-05-01T00:15:00Z'::timestamptz
+      )
+    `;
+
+    const result = await reconcileUnresolvableTasks(sql, HIVE_ID, {
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    expect(result.byOutcome.duplicate_historical).toBe(1);
+    const [task] = await sql<{ status: string }[]>`
+      SELECT status FROM tasks WHERE id = ${staleHeartbeatId}
+    `;
+    expect(task.status).toBe("superseded");
+    const doctorChildren = await sql<{ id: string }[]>`
+      SELECT id FROM tasks WHERE assigned_to = 'doctor' AND parent_task_id = ${staleHeartbeatId}
+    `;
+    expect(doctorChildren).toHaveLength(0);
+    const evidence = await taskEvidence(staleHeartbeatId);
+    expect(evidence.outcome).toBe("duplicate_historical");
+    expect(evidence.links.supersedingTaskId).toBe(newerHeartbeatId);
+  });
+
+  it("routes lone hive-supervisor heartbeat runtime failures to EA review instead of doctor", async () => {
+    const heartbeatId = "13333333-3333-4333-8333-333333333333";
+    await insertUnresolvable({
+      id: heartbeatId,
+      title: "Hive supervisor heartbeat - 9 finding(s)",
+      failureReason: "Codex exited code 1: model health probe failed",
+      assignedTo: "hive-supervisor",
+      createdBy: "dispatcher",
+      createdAt: "2026-05-01T00:00:00Z",
+    });
+
+    const result = await reconcileUnresolvableTasks(sql, HIVE_ID, {
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    expect(result.byOutcome.needs_ea_review).toBe(1);
+    const doctorChildren = await sql<{ id: string }[]>`
+      SELECT id FROM tasks WHERE assigned_to = 'doctor' AND parent_task_id = ${heartbeatId}
+    `;
+    expect(doctorChildren).toHaveLength(0);
+    const [decision] = await sql<{
+      status: string;
+      kind: string;
+      task_id: string;
+      title: string;
+    }[]>`
+      SELECT status, kind, task_id, title
+      FROM decisions
+      WHERE task_id = ${heartbeatId}
+    `;
+    expect(decision).toMatchObject({
+      status: "ea_review",
+      kind: "unresolvable_task_triage",
+      task_id: heartbeatId,
+    });
+    expect(decision.title).toContain("Hive supervisor heartbeat");
+  });
+
+  it("archives unresolvable rows after their triage decision is resolved as stale residue", async () => {
+    const taskId = "14444444-4444-4444-8444-444444444444";
+    const decisionId = "15555555-5555-4555-8555-555555555555";
+    await insertUnresolvable({
+      id: taskId,
+      title: "[Doctor] Diagnose: stale Whiston residue",
+      failureReason: "Recovery budget exhausted for task family.",
+      assignedTo: "doctor",
+      createdBy: "dispatcher",
+      createdAt: "2026-05-01T00:00:00Z",
+    });
+    await sql`
+      INSERT INTO decisions (
+        id, hive_id, task_id, title, context, recommendation, status, kind,
+        owner_response, resolved_at
+      )
+      VALUES (
+        ${decisionId}, ${HIVE_ID}, ${taskId}, 'Unresolvable task needs owner judgement',
+        'context', 'recommendation', 'resolved', 'unresolvable_task_triage',
+        'EA auto-resolved as duplicate/stale supervisor-runtime failure-loop residue. Canonical follow-up: system-health-auditor task b9d72391.',
+        '2026-05-02T00:00:00Z'::timestamptz
+      )
+    `;
+
+    const result = await reconcileUnresolvableTasks(sql, HIVE_ID, {
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    expect(result.scanned).toBe(1);
+    expect(result.byOutcome.duplicate_historical).toBe(1);
+    const [task] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM tasks WHERE id = ${taskId}
+    `;
+    expect(task.status).toBe("superseded");
+    expect(task.result_summary).toContain("duplicate historical recovery noise");
+    const evidence = await taskEvidence(taskId);
+    expect(evidence.outcome).toBe("duplicate_historical");
+    expect(evidence.links.decisionId).toBe(decisionId);
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${taskId}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      previousStatus: "unresolvable",
+      nextStatus: "superseded",
+      source: "supervisor.unresolvableTriage.duplicateHistorical",
+    });
   });
 
   it("stores decision-linked evidence for EA-review triage", async () => {
