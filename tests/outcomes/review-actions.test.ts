@@ -123,6 +123,15 @@ describe("owner outcome review actions", () => {
     expect(outcome.route_metadata.reviewAction?.revisionTaskId).toBe(tasks[0].id);
   });
 
+  it("rejects needs_revision when no revision note is provided", async () => {
+    await expect(applyOwnerOutcomeReviewAction(sql, {
+      outcomeId,
+      hiveId,
+      action: "needs_revision",
+      actorId: "owner-1",
+    })).rejects.toThrow(/revision note/i);
+  });
+
   it("marks process candidates without activating policies or pipelines", async () => {
     await applyOwnerOutcomeReviewAction(sql, {
       outcomeId,

@@ -83,6 +83,19 @@ describe("POST /api/outcomes/[id]/review", () => {
     expect(mocks.applyOwnerOutcomeReviewAction).not.toHaveBeenCalled();
   });
 
+  it("requires a revision note before creating revision follow-up work", async () => {
+    const response = await POST(
+      new Request(`http://localhost/api/outcomes/${OUTCOME_ID}/review`, {
+        method: "POST",
+        body: JSON.stringify({ action: "needs_revision" }),
+      }),
+      { params: Promise.resolve({ id: OUTCOME_ID }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.applyOwnerOutcomeReviewAction).not.toHaveBeenCalled();
+  });
+
   it("rejects callers without hive mutation access", async () => {
     mocks.canMutateHive.mockResolvedValueOnce(false);
 
