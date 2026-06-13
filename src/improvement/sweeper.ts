@@ -17,9 +17,10 @@ import { maybeCreateQualityDoctorForRoleWindow } from "../quality/doctor";
  *      a Tier 2 decision so the owner can either swap models, narrow
  *      brief quality, or retire the role.
  *
- * The sweeper is deliberately read-mostly — it never MUTATES roles,
- * skills, or memory directly. Every automated change goes through the
- * decisions table so the owner (or a higher agent) stays in the loop.
+ * The sweeper is deliberately read-mostly: it never mutates role runtime
+ * config. Model feedback belongs in task-quality/model-routing evidence and
+ * owner-visible decisions; dispatch-time auto routing chooses the concrete
+ * model per task.
  */
 
 export interface HiveSweepResult {
@@ -194,36 +195,15 @@ async function proposeReliabilityReview(
 
   const pct = Math.round(r.failureRate * 1000) / 10;
 
-  // Autonomous action: if the role has a fallback_model declared, promote
-  // it to primary so the next tasks run on the safer option. This is a
-  // reversible tweak — owner can flip it back from /roles.
-  const [row] = await sql<
-    { recommended_model: string | null; fallback_model: string | null }[]
-  >`
-    SELECT recommended_model, fallback_model
-    FROM role_templates WHERE slug = ${r.roleSlug}
-  `;
-  let action = "";
-  if (row?.fallback_model && row.recommended_model !== row.fallback_model) {
-    await sql`
-      UPDATE role_templates
-      SET recommended_model = ${row.fallback_model},
-          fallback_model = ${row.recommended_model},
-          updated_at = NOW()
-      WHERE slug = ${r.roleSlug}
-    `;
-    action = `Primary model swapped from ${row.recommended_model} → ${row.fallback_model}; the previous primary is now the fallback.`;
-  } else {
-    action = `No fallback_model declared on this role, so no automatic swap was possible — consider configuring one on /roles.`;
-  }
+  const action = "No role runtime config was changed. Auto routing will continue selecting the concrete model per task using route health, task profile, hive policy, and accumulated quality feedback.";
 
   await sql`
     INSERT INTO decisions (hive_id, title, context, recommendation, priority, status)
     VALUES (
       ${hiveId}::uuid,
       ${title},
-      ${`${r.roleSlug} attempted ${r.attempted} tasks in the last 7 days and ${r.failed} failed (${pct}% failure rate). Threshold is 40%.\n\nAuto-applied: ${action}`},
-      'Reject to revert the model swap. Approve (no-op) to confirm.',
+      ${`${r.roleSlug} attempted ${r.attempted} tasks in the last 7 days and ${r.failed} failed (${pct}% failure rate). Threshold is 40%.\n\nObserved: ${action}`},
+      'Review task briefs, role instructions, routing policy, or model health if failures persist. Do not pin the role to a model unless there is a specific runtime constraint.',
       'normal',
       'auto_approved'
     )
@@ -306,45 +286,17 @@ async function proposeEfficiencyReview(
   const totalDollar = (c.totalCostCents / 100).toFixed(2);
   const cheaperModel = suggestCheaperModel(c.modelUsed);
 
-  // Autonomous action: if we have a cheaper peer-model suggestion AND the
-  // role's current primary is the expensive one, swap it. A persisted watch
-  // records the prior model and checks the next 5 completed tasks against the
-  // applicable composite quality floor.
-  let action: string;
-  if (cheaperModel && cheaperModel !== c.modelUsed && !cheaperModel.includes(" ")) {
-    const swapped = await sql<{ recommended_model: string | null }[]>`
-      UPDATE role_templates
-      SET fallback_model = recommended_model,
-          recommended_model = ${cheaperModel},
-          updated_at = NOW()
-      WHERE slug = ${c.roleSlug}
-        AND recommended_model = ${c.modelUsed}
-      RETURNING recommended_model
-    `;
-    if (swapped.length > 0) {
-      await sql`
-        INSERT INTO role_model_swap_watches (
-          hive_id, role_slug, from_model, to_model, tasks_to_watch, quality_floor
-        )
-        VALUES (${hiveId}::uuid, ${c.roleSlug}, ${c.modelUsed}, ${cheaperModel}, 5, ${floor})
-      `;
-      action = `Primary model swapped from ${c.modelUsed} → ${cheaperModel}; the next 5 completed tasks are being watched against quality floor ${floor.toFixed(2)}.`;
-    } else {
-      action = `No automatic swap was applied because the role's current model no longer matched ${c.modelUsed}.`;
-    }
-  } else {
-    action = cheaperModel
-      ? `No deterministic swap candidate (suggestion was "${cheaperModel}"). Review /roles manually.`
-      : `No peer-model suggestion available — review /roles manually if this spend is not acceptable.`;
-  }
+  const action = cheaperModel
+    ? `No role runtime config was changed. Candidate cheaper peer model ${cheaperModel} should be considered by auto-routing only if hive policy, model health, and task-profile outcome feedback support it.`
+    : `No role runtime config was changed. No deterministic peer-model suggestion is available; auto routing should continue using model health, task profile, hive policy, and outcome feedback.`;
 
   await sql`
     INSERT INTO decisions (hive_id, title, context, recommendation, priority, status)
     VALUES (
       ${hiveId}::uuid,
       ${title},
-      ${`${c.roleSlug} (running ${c.modelUsed || "unknown model"}) completed ${c.completed} tasks in the last 30 days at an average of $${avgDollar}/task (${totalDollar} total). Above the $0.50/task threshold.\n\nQuality gate: current composite score ${quality.qualityScore.toFixed(3)} is below floor ${floor.toFixed(2)} (${quality.basis}).\n\nAuto-applied: ${action}`},
-      'Reject to revert the swap. Approve (no-op) to confirm.',
+      ${`${c.roleSlug} (running ${c.modelUsed || "unknown model"}) completed ${c.completed} tasks in the last 30 days at an average of $${avgDollar}/task (${totalDollar} total). Above the $0.50/task threshold.\n\nQuality gate: current composite score ${quality.qualityScore.toFixed(3)} is below floor ${floor.toFixed(2)} (${quality.basis}).\n\nObserved: ${action}`},
+      'Leave the role on Auto. Review hive routing policy/model allowlists only if the router keeps selecting poor-value models after enough outcome evidence accumulates.',
       'normal',
       'auto_approved'
     )
@@ -393,30 +345,22 @@ async function processModelSwapWatches(sql: Sql, hiveId: string): Promise<void> 
     const watchedTaskIds = watchedTasks.map((task) => task.id);
     const quality = await calculateRoleQualityScoreForTaskIds(sql, hiveId, watch.role_slug, watchedTaskIds);
     if (quality.qualityScore < Number(watch.quality_floor) && watch.from_model) {
-      await sql`
-        UPDATE role_templates
-        SET recommended_model = ${watch.from_model},
-            fallback_model = ${watch.to_model},
-            updated_at = NOW()
-        WHERE slug = ${watch.role_slug}
-          AND recommended_model = ${watch.to_model}
-      `;
       const [decision] = await sql<{ id: string }[]>`
         INSERT INTO decisions (hive_id, title, context, recommendation, priority, status, kind)
         VALUES (
           ${hiveId}::uuid,
-          ${`Model swap reverted: ${watch.role_slug}`},
-          ${`The model-efficiency sweeper changed ${watch.role_slug} from ${watch.from_model} to ${watch.to_model}. After ${count} completed watched tasks, composite quality was ${quality.qualityScore.toFixed(3)} below floor ${Number(watch.quality_floor).toFixed(2)}. The role was reverted to ${watch.from_model}.`},
-          'Review the failed swap before attempting another demotion for this role.',
+          ${`Model swap watch failed: ${watch.role_slug}`},
+          ${`A legacy model-swap watch compared ${watch.from_model} against ${watch.to_model}. After ${count} completed watched tasks, composite quality was ${quality.qualityScore.toFixed(3)} below floor ${Number(watch.quality_floor).toFixed(2)}. No role runtime config was changed; leave the role on Auto and use this evidence in routing policy/outcome scoring.`},
+          'Review model health, hive routing policy, and task-profile outcome evidence before pinning any role to a model.',
           'normal',
           'pending',
-          'model_swap_reverted'
+          'model_swap_watch_failed'
         )
         RETURNING id
       `;
       await sql`
         UPDATE role_model_swap_watches
-        SET status = 'reverted',
+        SET status = 'failed',
             tasks_seen = ${count},
             decision_id = ${decision.id},
             updated_at = NOW()

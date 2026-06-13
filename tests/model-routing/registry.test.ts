@@ -215,4 +215,56 @@ describe("model routing registry view", () => {
     });
     expect(view.policy.candidates[0].roleSlugs).toBeUndefined();
   });
+
+  it("adds recent internal outcome scores to routing candidates by classified task profile", async () => {
+    await sql`
+      INSERT INTO role_templates (slug, name, type, adapter_type)
+      VALUES ('dev-agent', 'Dev Agent', 'executor', 'auto')
+      ON CONFLICT (slug) DO NOTHING
+    `;
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        benchmark_quality_score,
+        routing_cost_score,
+        enabled
+      )
+      VALUES (${HIVE_ID}, 'openai', 'openai-codex/gpt-5.4', 'codex', 88, 25, true)
+    `;
+
+    for (let i = 0; i < 3; i++) {
+      const [task] = await sql<{ id: string }[]>`
+        INSERT INTO tasks (
+          hive_id, assigned_to, created_by, status, priority, title, brief,
+          model_used, adapter_used, completed_at
+        )
+        VALUES (
+          ${HIVE_ID}, 'dev-agent', 'owner', 'completed', 5,
+          ${`Implement routing fix ${i}`}, 'TypeScript implementation and test coverage',
+          'openai-codex/gpt-5.4', 'codex', NOW()
+        )
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO task_quality_signals (task_id, hive_id, signal_type, source, evidence, confidence, rating)
+        VALUES (${task.id}, ${HIVE_ID}, 'positive', 'explicit_owner_feedback', 'good output', 1, 9)
+      `;
+    }
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+
+    expect(view.policy.candidates[0]).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.4",
+      outcomeScores: {
+        coding: {
+          score: 0.9,
+          sampleSize: 3,
+        },
+      },
+    });
+  });
 });

@@ -249,6 +249,52 @@ describe("resolveConfiguredModelRoute", () => {
     expect(route.reason).not.toContain("quality>=");
   });
 
+  it("uses internal outcome feedback for the classified task profile", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 70 },
+      candidates: [
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.5",
+          qualityScore: 95,
+          costScore: 30,
+          outcomeScores: {
+            coding: { score: 0.42, sampleSize: 12 },
+          },
+        },
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.4",
+          qualityScore: 88,
+          costScore: 30,
+          outcomeScores: {
+            coding: { score: 0.94, sampleSize: 12 },
+          },
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "dev-agent",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+      taskContext: {
+        taskTitle: "Fix the failing checkout test",
+        taskBrief: "Implement the bug fix in TypeScript and add coverage.",
+      },
+    });
+
+    expect(route).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.4",
+      source: "auto_policy",
+    });
+    expect(route.explanation).toContain("internal outcome feedback");
+    expect(route.scoreBreakdown?.candidates.find((candidate) => candidate.selected)?.outcomeScore).toBe(0.94);
+  });
+
   it("does not filter candidates by minimum quality from legacy policies", () => {
     const policy = normalizeModelRoutingPolicy({
       preferences: {
