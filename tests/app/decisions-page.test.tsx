@@ -119,7 +119,7 @@ describe("DecisionsPage", () => {
     render(<DecisionsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Approve fallback decision?")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Approve fallback decision?" })).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));

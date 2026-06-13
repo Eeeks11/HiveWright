@@ -36,6 +36,12 @@ function compactText(value: string | undefined, maxLength: number): string | nul
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}...` : text;
 }
 
+function assertRevisionNote(note: string | null) {
+  if (!note) {
+    throw new Error("A revision note is required before returning this output to the work queue.");
+  }
+}
+
 function extractRevisionTaskId(metadata: Record<string, unknown>): string | undefined {
   const existing = metadata.reviewAction;
   if (
@@ -172,6 +178,7 @@ export async function applyOwnerOutcomeReviewAction(
     };
 
     if (input.action === "needs_revision") {
+      assertRevisionNote(note);
       revisionTaskId = await createRevisionFollowup(tx, outcome, input.actorId, note);
       metadata = {
         ...metadata,

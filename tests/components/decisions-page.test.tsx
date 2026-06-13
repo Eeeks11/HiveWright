@@ -95,10 +95,15 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
+    expect((await screen.findAllByText("Question")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Recommended answer")).toBeTruthy();
+    expect(screen.getByText("What happens next")).toBeTruthy();
+    expect(screen.getByText("Context / evidence")).toBeTruthy();
     expect(await screen.findByRole("button", { name: /Use service account/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Use GCA login/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /Defer adapter work/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Discuss" })).toBeTruthy();
+    expect(screen.getByText(/HiveWright will record your answer and continue the blocked work/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
 
@@ -155,7 +160,7 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
-    await screen.findByText("Choose Gemini CLI authentication");
+    await screen.findByRole("link", { name: "Choose Gemini CLI authentication" });
 
     const listCallsBeforeToggle = fetchMock.mock.calls
       .map(([url]) => String(url))
@@ -170,6 +175,31 @@ describe("<DecisionsPage>", () => {
         .filter((url) => url.startsWith("/api/decisions?"));
       expect(listCalls.at(-1)).toContain("includeInternalSystem=true");
     });
+  });
+
+  it("keeps raw internal kinds out of the owner-readable row metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.startsWith("/api/decisions?")) {
+          return okJson({ data: [decision({ kind: "supervisor_flagged" })] });
+        }
+        if (url === "/api/decisions/decision-1/activity") {
+          return okJson({ data: [] });
+        }
+        if (url === "/api/decisions/decision-1/messages") {
+          return okJson({ data: [] });
+        }
+        return okJson({ data: [] });
+      }),
+    );
+
+    render(<DecisionsPage />);
+
+    await screen.findByRole("link", { name: "Choose Gemini CLI authentication" });
+    expect(screen.queryByText(/^supervisor_flagged$/i)).toBeNull();
+    expect(screen.queryByText(/^decision$/i)).toBeNull();
   });
 
   it("renders decision activity from all timeline sources", async () => {
@@ -254,7 +284,7 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
-    expect(await screen.findByText("Choose Gemini CLI authentication")).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "Choose Gemini CLI authentication" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Discuss" }));
     const input = await screen.findByPlaceholderText("Type a message...");
     fireEvent.change(input, {
