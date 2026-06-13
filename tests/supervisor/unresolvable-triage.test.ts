@@ -443,6 +443,57 @@ describe("reconcileUnresolvableTasks", () => {
     expect(decision.title).toContain("Hive supervisor heartbeat");
   });
 
+  it("archives unresolvable rows after their triage decision is resolved as stale residue", async () => {
+    const taskId = "14444444-4444-4444-8444-444444444444";
+    const decisionId = "15555555-5555-4555-8555-555555555555";
+    await insertUnresolvable({
+      id: taskId,
+      title: "[Doctor] Diagnose: stale Whiston residue",
+      failureReason: "Recovery budget exhausted for task family.",
+      assignedTo: "doctor",
+      createdBy: "dispatcher",
+      createdAt: "2026-05-01T00:00:00Z",
+    });
+    await sql`
+      INSERT INTO decisions (
+        id, hive_id, task_id, title, context, recommendation, status, kind,
+        owner_response, resolved_at
+      )
+      VALUES (
+        ${decisionId}, ${HIVE_ID}, ${taskId}, 'Unresolvable task needs owner judgement',
+        'context', 'recommendation', 'resolved', 'unresolvable_task_triage',
+        'EA auto-resolved as duplicate/stale supervisor-runtime failure-loop residue. Canonical follow-up: system-health-auditor task b9d72391.',
+        '2026-05-02T00:00:00Z'::timestamptz
+      )
+    `;
+
+    const result = await reconcileUnresolvableTasks(sql, HIVE_ID, {
+      now: new Date("2026-05-05T00:00:00Z"),
+    });
+
+    expect(result.scanned).toBe(1);
+    expect(result.byOutcome.duplicate_historical).toBe(1);
+    const [task] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM tasks WHERE id = ${taskId}
+    `;
+    expect(task.status).toBe("superseded");
+    expect(task.result_summary).toContain("duplicate historical recovery noise");
+    const evidence = await taskEvidence(taskId);
+    expect(evidence.outcome).toBe("duplicate_historical");
+    expect(evidence.links.decisionId).toBe(decisionId);
+    const [event] = await sql<{ metadata: Record<string, unknown> }[]>`
+      SELECT metadata
+      FROM agent_audit_events
+      WHERE task_id = ${taskId}
+        AND event_type = 'task.lifecycle_transition'
+    `;
+    expect(event.metadata).toMatchObject({
+      previousStatus: "unresolvable",
+      nextStatus: "superseded",
+      source: "supervisor.unresolvableTriage.duplicateHistorical",
+    });
+  });
+
   it("stores decision-linked evidence for EA-review triage", async () => {
     const taskId = "77777777-7777-4777-8777-777777777777";
     await insertUnresolvable({
