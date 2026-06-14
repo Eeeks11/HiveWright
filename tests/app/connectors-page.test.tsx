@@ -149,6 +149,25 @@ describe("ConnectorsPage", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("continues resolving when a stale non-empty hive list does not contain the requested connector target", () => {
+    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value = {
+      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      hives: [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }],
+      loading: true,
+      selectHive: () => {},
+      hasProvider: true,
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConnectorsPage />);
+
+    expect(screen.getByText("Resolving hive target...")).toBeTruthy();
+    expect(screen.queryByText(/Hive target/)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("requires destination-named confirmation before cross-hive connector writes", async () => {
     navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
     hiveContextMock.value = {

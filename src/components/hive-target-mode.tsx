@@ -43,9 +43,10 @@ export function useResolvedHiveTarget(routeHiveId: string | null | undefined) {
   return useMemo(() => {
     const targetHive = routeId ? hives.find((hive) => hive.id === routeId) ?? null : null;
     const providerHasDirectory = Boolean(hasProvider && !loading && hives.length > 0);
+    const isResolvingTarget = Boolean(hasProvider && loading && routeId && !targetHive);
     const isUnresolvedTarget = Boolean(providerHasDirectory && routeId && !targetHive);
     const isTargetingDifferentHive = Boolean(targetHive && activeHive && targetHive.id !== activeHive.id);
-    const effectiveHiveId = isUnresolvedTarget ? null : routeId;
+    const effectiveHiveId = isUnresolvedTarget || isResolvingTarget ? null : routeId;
     const targetQueryHiveId = isTargetingDifferentHive ? targetHive?.id ?? null : null;
     const section = currentSection(pathname);
     const exitTargetHref = activeHive
@@ -58,7 +59,7 @@ export function useResolvedHiveTarget(routeHiveId: string | null | undefined) {
       effectiveHiveId,
       isTargetingDifferentHive,
       isUnresolvedTarget,
-      isResolvingTarget: Boolean(hasProvider && loading && hives.length === 0),
+      isResolvingTarget,
       targetQueryHiveId,
       exitTargetHref,
       withTargetHiveId: (path: string) => appendHiveTargetParams(path, routeId, targetQueryHiveId),

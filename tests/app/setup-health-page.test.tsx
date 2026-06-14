@@ -230,6 +230,25 @@ describe("SetupHealthPage", () => {
     expect(screen.getByText("Checking setup health...")).toBeTruthy();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("continues resolving when a stale non-empty hive list does not contain the requested setup-health target", () => {
+    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value = {
+      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      hives: [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }],
+      loading: true,
+      selectHive: () => {},
+      hasProvider: true,
+    };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    expect(screen.getByText("Checking setup health...")).toBeTruthy();
+    expect(screen.queryByText(/Hive target/)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 function row(
