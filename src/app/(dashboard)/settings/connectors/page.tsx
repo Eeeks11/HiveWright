@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
+import {
+  TargetHiveBanner,
+  UnresolvedHiveTargetMessage,
+  useResolvedHiveTarget,
+} from "@/components/hive-target-mode";
 
 interface SetupField {
   key: string;
@@ -62,7 +68,13 @@ interface ConnectorAction {
 }
 
 export default function ConnectorsPage() {
-  const { selected } = useHiveContext();
+  const { selected, loading: hivesLoading } = useHiveContext();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId);
+  const effectiveHive = requestedTargetHiveId ? target.targetHive : selected;
+  const effectiveHiveId = requestedTargetHiveId ? target.effectiveHiveId : selected?.id ?? null;
   const [catalog, setCatalog] = useState<Connector[]>([]);
   const [installs, setInstalls] = useState<Install[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -86,21 +98,28 @@ export default function ConnectorsPage() {
   }, []);
 
   useEffect(() => {
+    if (!effectiveHiveId) {
+      setCatalog([]);
+      return;
+    }
     fetch("/api/connectors")
       .then((r) => r.json())
       .then((b) => setCatalog(b.data ?? []))
       .catch(() => {});
-  }, []);
+  }, [effectiveHiveId]);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!effectiveHiveId) {
+      setInstalls([]);
+      return;
+    }
     const load = () =>
-      fetch(`/api/connector-installs?hiveId=${selected.id}`)
+      fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`)
         .then((r) => r.json())
         .then((b) => setInstalls(b.data ?? []))
         .catch(() => {});
     load();
-  }, [selected]);
+  }, [effectiveHiveId]);
 
   useEffect(() => {
     if (installs.length === 0) {
@@ -138,14 +157,15 @@ export default function ConnectorsPage() {
   }
 
   async function submitInstall(c: Connector) {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!confirmTargetWrite(`Install ${displayName || c.name}`)) return;
     setBusy(c.slug);
     try {
       const res = await fetch("/api/connector-installs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selected.id,
+          hiveId: effectiveHiveId,
           connectorSlug: c.slug,
           displayName: displayName || c.name,
           fields: form,
@@ -156,7 +176,7 @@ export default function ConnectorsPage() {
       if (!res.ok) throw new Error(body.error ?? "install failed");
 
       // Refresh the install list so we can find the row we just created.
-      const refreshed = await fetch(`/api/connector-installs?hiveId=${selected.id}`).then((r) => r.json());
+      const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
       const newInstalls: Install[] = refreshed.data ?? [];
       setInstalls(newInstalls);
 
@@ -189,7 +209,7 @@ export default function ConnectorsPage() {
             });
           }
           // Refresh again so last_tested_at / last_error reflect the auto-test.
-          const reRefreshed = await fetch(`/api/connector-installs?hiveId=${selected.id}`).then((r) => r.json());
+          const reRefreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
           setInstalls(reRefreshed.data ?? []);
         } catch (testErr) {
           setFlash({
@@ -210,6 +230,7 @@ export default function ConnectorsPage() {
   }
 
   async function activateInstall(install: Install) {
+    if (!confirmTargetWrite(`Restart dispatcher for ${install.displayName}`)) return;
     if (!window.confirm(
       `Restart the dispatcher to bring ${install.displayName} online? In-flight tasks will be interrupted and resumed after boot.`,
     )) {
@@ -232,6 +253,7 @@ export default function ConnectorsPage() {
   }
 
   async function testInstall(install: Install) {
+    if (!confirmTargetWrite(`Test ${install.displayName}`)) return;
     setBusy(install.id);
     setFlash(null);
     try {
@@ -243,8 +265,8 @@ export default function ConnectorsPage() {
         : `Failed: ${r.error ?? "unknown"}`;
       setFlash({ slug: install.id, text: msg, kind: r.success ? "ok" : "err" });
       // Refresh install list (so last_tested_at / last_error update).
-      if (selected) {
-        const refreshed = await fetch(`/api/connector-installs?hiveId=${selected.id}`).then((r) => r.json());
+      if (effectiveHiveId) {
+        const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
         setInstalls(refreshed.data ?? []);
       }
     } catch (e) {
@@ -255,14 +277,15 @@ export default function ConnectorsPage() {
   }
 
   async function removeInstall(install: Install) {
+    if (!confirmTargetWrite(`Remove ${install.displayName}`)) return;
     if (!window.confirm(`Remove ${install.displayName}? Existing agent calls using it will start failing.`)) {
       return;
     }
     setBusy(install.id);
     try {
       await fetch(`/api/connector-installs/${install.id}`, { method: "DELETE" });
-      if (selected) {
-        const refreshed = await fetch(`/api/connector-installs?hiveId=${selected.id}`).then((r) => r.json());
+      if (effectiveHiveId) {
+        const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
         setInstalls(refreshed.data ?? []);
       }
     } finally {
@@ -273,6 +296,7 @@ export default function ConnectorsPage() {
   async function toggleInstallStatus(install: Install) {
     const targetStatus = install.status === "active" ? "disabled" : "active";
     const action = targetStatus === "disabled" ? "Disable" : "Enable";
+    if (!confirmTargetWrite(`${action} ${install.displayName}`)) return;
     if (!window.confirm(`${action} ${install.displayName}? ${targetStatus === "disabled" ? "Agents will not be able to use this connector until re-enabled." : "This connector will become available to agents again."}`)) {
       return;
     }
@@ -290,8 +314,8 @@ export default function ConnectorsPage() {
         return;
       }
       setFlash({ slug: install.id, text: `${action}d successfully.`, kind: "ok" });
-      if (selected) {
-        const refreshed = await fetch(`/api/connector-installs?hiveId=${selected.id}`).then((r) => r.json());
+      if (effectiveHiveId) {
+        const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
         setInstalls(refreshed.data ?? []);
       }
     } catch (e) {
@@ -301,22 +325,49 @@ export default function ConnectorsPage() {
     }
   }
 
-  if (!selected) return <p className="text-amber-400/60">Select a hive first.</p>;
+  function confirmTargetWrite(action: string): boolean {
+    if (!target.isTargetingDifferentHive || !target.targetHive || !target.activeHive) return true;
+    const typed = window.prompt(
+      `${action} will update ${target.targetHive.name}, not your active hive ${target.activeHive.name}. Type ${target.targetHive.name} to continue.`,
+    );
+    return typed === target.targetHive.name;
+  }
+
+  function connectorSettingsHref(path: string): string {
+    if (!target.targetQueryHiveId) return path;
+    return target.withTargetHiveId(path);
+  }
+
+  function oauthStartHref(c: Connector): string {
+    if (!effectiveHiveId) return "#";
+    const params = new URLSearchParams({
+      hiveId: effectiveHiveId,
+      displayName: c.name,
+      redirectTo: connectorSettingsHref(pathname || "/settings/connectors"),
+    });
+    return `/api/oauth/${c.slug}/start?${params.toString()}`;
+  }
+
+  if (target.isUnresolvedTarget) return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  if (!effectiveHive && !hivesLoading) return <p className="text-amber-400/60">Select a hive first.</p>;
 
   return (
     <div className="space-y-8">
+      {target.isTargetingDifferentHive ? (
+        <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={pathname || "/settings/connectors"} />
+      ) : null}
       <div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold text-amber-50">Connectors</h1>
           <a
-            href="/setup/action-policies"
+            href={connectorSettingsHref("/setup/action-policies")}
             className="rounded border border-amber-500/30 px-3 py-1 text-sm text-amber-100 hover:bg-amber-500/10"
           >
             Action policies
           </a>
         </div>
         <p className="text-sm text-amber-600/70">
-          Wire {selected.name} up to the outside world. Each connector uses encrypted
+          Wire {effectiveHive?.name ?? "this hive"} up to the outside world. Each connector uses encrypted
           credentials and is scoped to this hive only.
         </p>
         {oauthBanner && (
@@ -486,7 +537,12 @@ export default function ConnectorsPage() {
                   >
                     {c.authType === "oauth2" ? (
                       <a
-                        href={`/api/oauth/${c.slug}/start?hiveId=${selected.id}&displayName=${encodeURIComponent(c.name)}`}
+                        href={oauthStartHref(c)}
+                        onClick={(event) => {
+                          if (!confirmTargetWrite(`Start OAuth for ${c.name}`)) {
+                            event.preventDefault();
+                          }
+                        }}
                         className="flex w-full items-start gap-3 text-left"
                       >
                         <span className="text-2xl">{c.icon ?? "🔌"}</span>

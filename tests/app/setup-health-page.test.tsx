@@ -11,20 +11,34 @@ const hiveContextMock = vi.hoisted(() => ({
     hives: [] as Array<{ id: string; slug: string; name: string; type: string }>,
     loading: false,
     selectHive: () => {},
+    hasProvider: true,
   },
+}));
+
+const navigationMock = vi.hoisted(() => ({
+  pathname: "/settings/setup-health",
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => hiveContextMock.value,
 }));
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => navigationMock.pathname,
+  useSearchParams: () => navigationMock.searchParams,
+}));
+
 describe("SetupHealthPage", () => {
   beforeEach(() => {
+    navigationMock.pathname = "/settings/setup-health";
+    navigationMock.searchParams = new URLSearchParams();
     hiveContextMock.value = {
       selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
       hives: [],
       loading: false,
       selectHive: () => {},
+    hasProvider: true,
     };
   });
 
@@ -38,6 +52,7 @@ describe("SetupHealthPage", () => {
       hives: [],
       loading: false,
       selectHive: () => {},
+    hasProvider: true,
     };
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -64,20 +79,14 @@ describe("SetupHealthPage", () => {
     expect(screen.queryByText("1 of 1 ready")).toBeNull();
 
     resolveFetch(
-      new Response(
-        JSON.stringify({
-          data: {
-            hiveId: "hive-1",
-            rows: [
-              row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
-            ],
-          },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+      jsonResponse({
+        data: {
+          hiveId: "hive-1",
+          rows: [
+            row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
+          ],
         },
-      ),
+      }),
     );
 
     await waitFor(() => expect(screen.getByText("1 of 1 ready")).toBeTruthy());
@@ -89,35 +98,29 @@ describe("SetupHealthPage", () => {
       "fetch",
       vi.fn(() =>
         Promise.resolve(
-          new Response(
-            JSON.stringify({
-              data: {
-                hiveId: "hive-1",
-                rows: [
-                  row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
-                  row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
-                  row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
-                  row(
-                    "dashboard",
-                    "Dashboard",
-                    "ready",
-                    "Ready",
-                    "/setup/health",
-                    "Review dashboard health",
-                    "Dashboard responded at http://localhost:3002.",
-                  ),
-                  row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
-                  row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
-                  row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
-                  row("memory", "Memory search", "needs_attention", "Needs attention", "/setup/embeddings", "Fix memory search"),
-                ],
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
+          jsonResponse({
+            data: {
+              hiveId: "hive-1",
+              rows: [
+                row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
+                row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
+                row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
+                row(
+                  "dashboard",
+                  "Dashboard",
+                  "ready",
+                  "Ready",
+                  "/setup/health",
+                  "Review dashboard health",
+                  "Dashboard responded at http://localhost:3002.",
+                ),
+                row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
+                row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
+                row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
+                row("memory", "Memory search", "needs_attention", "Needs attention", "/setup/embeddings", "Fix memory search"),
+              ],
             },
-          ),
+          }),
         ),
       ),
     );
@@ -157,6 +160,57 @@ describe("SetupHealthPage", () => {
     expect(pageText).not.toMatch(/3000\/3001|localhost:3000|localhost:3001/);
     expect(within(screen.getByText("Service connections").closest("article")!).getByText("Pending/not checked")).toBeTruthy();
   });
+
+  it("uses the query-backed target hive for setup-health and preserves target links", async () => {
+    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value = {
+      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      hives: [
+        { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+        { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+      ],
+      loading: false,
+      selectHive: () => {},
+    hasProvider: true,
+    };
+    const fetchSpy = vi.fn(() => Promise.resolve(jsonResponse({
+      data: {
+        hiveId: "hive-2",
+        rows: [row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections")],
+      },
+    })));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/setup-health?hiveId=hive-2",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+    expect(screen.getByText(/Target mode: viewing/)).toBeTruthy();
+    expect(screen.getByText("Hive Two")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Return to active hive" }).getAttribute("href")).toBe("/settings/setup-health");
+    expect(screen.getByRole("link", { name: "Test connections" }).getAttribute("href")).toBe("/setup/connectors?targetHiveId=hive-2");
+  });
+
+  it("fails closed for an unresolved setup-health target without querying the active hive", () => {
+    navigationMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
+    hiveContextMock.value = {
+      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      hives: [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }],
+      loading: false,
+      selectHive: () => {},
+    hasProvider: true,
+    };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    expect(screen.getByText(/Hive target/)).toBeTruthy();
+    expect(screen.getByText("missing-hive")).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 function row(
@@ -177,4 +231,11 @@ function row(
     href,
     hrefLabel,
   };
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
 }

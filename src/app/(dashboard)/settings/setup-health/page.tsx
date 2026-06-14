@@ -2,8 +2,14 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, CircleDashed, Clock3 } from "lucide-react";
 import { useHiveContext } from "@/components/hive-context";
+import {
+  TargetHiveBanner,
+  UnresolvedHiveTargetMessage,
+  useResolvedHiveTarget,
+} from "@/components/hive-target-mode";
 import type { SetupHealthRow, SetupHealthStatus } from "@/setup-health/status";
 
 type SetupHealthResponse = {
@@ -28,15 +34,21 @@ const statusIcon = {
 
 export default function SetupHealthPage() {
   const { selected, hives, loading: hivesLoading } = useHiveContext();
-  const hive = selected ?? hives[0] ?? null;
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId);
+  const hive = requestedTargetHiveId ? target.targetHive : selected ?? hives[0] ?? null;
+  const effectiveHiveId = requestedTargetHiveId ? target.effectiveHiveId : hive?.id ?? null;
   const [health, setHealth] = useState<SetupHealthResponse | null>(null);
   const [error, setError] = useState<{ hiveId: string; message: string } | null>(null);
 
   useEffect(() => {
-    if (!hive?.id) return;
+    if (!effectiveHiveId) {
+      return;
+    }
 
     const controller = new AbortController();
-    fetch(`/api/setup-health?hiveId=${hive.id}`, { signal: controller.signal })
+    fetch(`/api/setup-health?hiveId=${effectiveHiveId}`, { signal: controller.signal })
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error || "Could not load setup health.");
@@ -47,25 +59,25 @@ export default function SetupHealthPage() {
         if ((err as Error).name !== "AbortError") {
           setHealth(null);
           setError({
-            hiveId: hive.id,
+            hiveId: effectiveHiveId,
             message: err instanceof Error ? err.message : "Could not load setup health.",
           });
         }
       });
 
     return () => controller.abort();
-  }, [hive?.id]);
+  }, [effectiveHiveId]);
 
   const rows = useMemo(
-    () => (health && hive?.id && health.hiveId === hive.id ? health.rows ?? [] : []),
-    [health, hive],
+    () => (health && effectiveHiveId && health.hiveId === effectiveHiveId ? health.rows ?? [] : []),
+    [health, effectiveHiveId],
   );
   const readyCount = useMemo(
     () => rows.filter((row) => row.status === "ready").length,
     [rows],
   );
-  const errorMessage = error && hive?.id && error.hiveId === hive.id ? error.message : null;
-  const loading = Boolean(hive?.id) && !errorMessage && health?.hiveId !== hive?.id;
+  const errorMessage = error && effectiveHiveId && error.hiveId === effectiveHiveId ? error.message : null;
+  const loading = Boolean(effectiveHiveId) && !errorMessage && health?.hiveId !== effectiveHiveId;
 
   return (
     <div className="space-y-6">
@@ -86,7 +98,13 @@ export default function SetupHealthPage() {
         </div>
       </header>
 
-      {!hive && !hivesLoading ? (
+      {target.isTargetingDifferentHive ? (
+        <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/settings/setup-health" />
+      ) : null}
+
+      {target.isUnresolvedTarget ? <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} /> : null}
+
+      {!hive && !hivesLoading && !target.isUnresolvedTarget ? (
         <section className="rounded-lg border border-dashed p-5">
           <h2 className="text-lg font-medium">No hive selected</h2>
           <p className="mt-1 text-sm text-muted-foreground">Create or select a hive before checking setup health.</p>
@@ -96,7 +114,7 @@ export default function SetupHealthPage() {
         </section>
       ) : null}
 
-      {loading || hivesLoading ? (
+      {loading || hivesLoading || target.isResolvingTarget ? (
         <section className="rounded-lg border p-5 text-sm text-muted-foreground">
           Checking setup health...
         </section>
@@ -129,7 +147,7 @@ export default function SetupHealthPage() {
                     ) : null}
                   </div>
                   <Link
-                    href={row.href}
+                    href={settingsTargetHref(row.href, target)}
                     className="inline-flex w-fit items-center justify-center rounded-md border border-amber-200/70 px-3 py-2 text-sm font-medium transition-colors hover:bg-amber-100/70 focus-visible:ring-2 focus-visible:ring-amber-500/45 dark:border-white/[0.1] dark:hover:bg-white/[0.06]"
                   >
                     {row.hrefLabel}
@@ -142,4 +160,13 @@ export default function SetupHealthPage() {
       ) : null}
     </div>
   );
+}
+
+function settingsTargetHref(
+  href: string,
+  target: ReturnType<typeof useResolvedHiveTarget>,
+): string {
+  if (!target.targetQueryHiveId) return href;
+  if (!href.startsWith("/settings") && !href.startsWith("/setup")) return href;
+  return target.withTargetHiveId(href);
 }
