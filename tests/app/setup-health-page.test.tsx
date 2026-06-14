@@ -44,6 +44,7 @@ describe("SetupHealthPage", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("renders without crashing when no hive is selected and the context is empty", () => {
@@ -209,6 +210,24 @@ describe("SetupHealthPage", () => {
 
     expect(screen.getByText(/Hive target/)).toBeTruthy();
     expect(screen.getByText("missing-hive")).toBeTruthy();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("waits for target hive resolution before fetching setup health", () => {
+    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value = {
+      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      hives: [],
+      loading: true,
+      selectHive: () => {},
+      hasProvider: true,
+    };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    expect(screen.getByText("Checking setup health...")).toBeTruthy();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

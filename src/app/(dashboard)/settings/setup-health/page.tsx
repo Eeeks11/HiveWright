@@ -37,8 +37,11 @@ export default function SetupHealthPage() {
   const searchParams = useSearchParams();
   const requestedTargetHiveId = searchParams.get("targetHiveId");
   const target = useResolvedHiveTarget(requestedTargetHiveId);
-  const hive = requestedTargetHiveId ? target.targetHive : selected ?? hives[0] ?? null;
-  const effectiveHiveId = requestedTargetHiveId ? target.effectiveHiveId : hive?.id ?? null;
+  const isBlockedTarget = Boolean(requestedTargetHiveId && (target.isResolvingTarget || target.isUnresolvedTarget));
+  const hive = requestedTargetHiveId ? (isBlockedTarget ? null : target.targetHive) : selected ?? hives[0] ?? null;
+  const effectiveHiveId = requestedTargetHiveId
+    ? (isBlockedTarget ? null : target.effectiveHiveId)
+    : hive?.id ?? null;
   const [health, setHealth] = useState<SetupHealthResponse | null>(null);
   const [error, setError] = useState<{ hiveId: string; message: string } | null>(null);
 

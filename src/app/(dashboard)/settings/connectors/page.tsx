@@ -73,8 +73,12 @@ export default function ConnectorsPage() {
   const searchParams = useSearchParams();
   const requestedTargetHiveId = searchParams.get("targetHiveId");
   const target = useResolvedHiveTarget(requestedTargetHiveId);
-  const effectiveHive = requestedTargetHiveId ? target.targetHive : selected;
-  const effectiveHiveId = requestedTargetHiveId ? target.effectiveHiveId : selected?.id ?? null;
+  const isResolvingRequestedTarget = Boolean(requestedTargetHiveId && target.isResolvingTarget);
+  const isBlockedTarget = Boolean(requestedTargetHiveId && (target.isResolvingTarget || target.isUnresolvedTarget));
+  const effectiveHive = requestedTargetHiveId ? (isBlockedTarget ? null : target.targetHive) : selected;
+  const effectiveHiveId = requestedTargetHiveId
+    ? (isBlockedTarget ? null : target.effectiveHiveId)
+    : selected?.id ?? null;
   const [catalog, setCatalog] = useState<Connector[]>([]);
   const [installs, setInstalls] = useState<Install[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -346,6 +350,14 @@ export default function ConnectorsPage() {
       redirectTo: connectorSettingsHref(pathname || "/settings/connectors"),
     });
     return `/api/oauth/${c.slug}/start?${params.toString()}`;
+  }
+
+  if (isResolvingRequestedTarget) {
+    return (
+      <section className="rounded-lg border p-5 text-sm text-muted-foreground">
+        Resolving hive target...
+      </section>
+    );
   }
 
   if (target.isUnresolvedTarget) return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
