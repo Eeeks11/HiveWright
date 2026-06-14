@@ -69,6 +69,11 @@ export const OUT_OF_JOURNAL_MIGRATIONS = [
   "0127_fix_creation_pause_trigger_scope.sql",
   "0096_voice_sessions_transport.sql",
   "0097_voice_ea_connector_rename.sql",
+  // 0134 was added with a timestamp older than already-applied hotfix
+  // migrations in production. Drizzle skips such backfilled journal entries
+  // once a newer created_at is present, so keep it in the idempotent app
+  // migration pass as well.
+  "0134_role_swap_watch_failed_status.sql",
 ] as const;
 
 async function ensureAppMigrationMetadata(sql: Sql): Promise<void> {
