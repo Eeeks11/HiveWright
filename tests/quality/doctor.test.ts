@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import {
+  QUALITY_DOCTOR_DECISION_KIND,
+  QUALITY_DOCTOR_DIAGNOSIS_CONTRACT,
   QUALITY_DOCTOR_MODEL,
   applyQualityDoctorDiagnosis,
   maybeCreateQualityDoctorForRoleWindow,
   maybeCreateQualityDoctorForSignal,
   parseQualityDoctorDiagnosis,
+  parseQualityDoctorDiagnosisResult,
+  recordQualityDoctorContaminationHandoff,
 } from "@/quality/doctor";
 
 const HIVE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -234,6 +238,7 @@ describe("quality doctor routing", () => {
     const parsed = parseQualityDoctorDiagnosis([
       "```json",
       JSON.stringify({
+        contract: QUALITY_DOCTOR_DIAGNOSIS_CONTRACT,
         cause: "missing_tool_connector_credential",
         details: "The agent lacked access.",
         recommendation: "Connect the account.",
@@ -395,5 +400,97 @@ describe("quality doctor routing", () => {
     `;
     expect(decisions[0].recommendation).toContain("model-efficiency sweeper guardrails");
     expect(decisions[1].recommendation).toContain("supervisor");
+  });
+
+  it("accepts the canonical quality diagnosis response contract", () => {
+    const parsed = parseQualityDoctorDiagnosisResult([
+      "```json",
+      JSON.stringify({
+        contract: QUALITY_DOCTOR_DIAGNOSIS_CONTRACT,
+        cause: "wrong_role_or_brief",
+        details: "The quality complaint is about brief shape, not model capability.",
+        recommendation: "Send a clean rewrite request to the supervisor.",
+        options: [
+          {
+            key: "reuse-supervisor",
+            label: "Reuse supervisor path",
+            consequence: "Keeps the retry inside existing governance.",
+            response: "approved",
+          },
+        ],
+      }),
+      "```",
+    ].join("\n"));
+
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.diagnosis.contract).toBe(QUALITY_DOCTOR_DIAGNOSIS_CONTRACT);
+      expect(parsed.diagnosis.cause).toBe("wrong_role_or_brief");
+      expect(parsed.diagnosis.options?.[0]?.key).toBe("reuse-supervisor");
+    }
+  });
+
+  it("rejects SupervisorActions-style output instead of accepting it as the quality diagnosis", () => {
+    const parsed = parseQualityDoctorDiagnosisResult([
+      "```json",
+      JSON.stringify({
+        action: "rewrite_brief",
+        details: "Retry with a cleaner brief.",
+        newBrief: "Do the real product work instead of judging the wrapper task.",
+      }),
+      "```",
+    ].join("\n"));
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.kind).toBe("contaminated");
+      expect(parsed.reason).toMatch(/SupervisorActions|reference-only/i);
+    }
+  });
+
+  it("rejects copied source-task/prior-attempt payloads in the active deliverable slot", () => {
+    const parsed = parseQualityDoctorDiagnosisResult([
+      "```json",
+      JSON.stringify({
+        contract: QUALITY_DOCTOR_DIAGNOSIS_CONTRACT,
+        cause: "wrong_role_or_brief",
+        details: "The retry echoed a previous payload.",
+        recommendation: "Try again.",
+        priorAttemptPayload: {
+          action: "rewrite_brief",
+          newBrief: "stale prior JSON that must remain reference-only",
+        },
+      }),
+      "```",
+    ].join("\n"));
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.kind).toBe("contaminated");
+      expect(parsed.reason).toMatch(/reference-only|active diagnosis deliverable/i);
+    }
+  });
+
+  it("records a durable handoff before another same-family retry is authorized", async () => {
+    const taskId = await seedCompletedTask("Owner-visible product complaint");
+
+    await recordQualityDoctorContaminationHandoff(
+      sql,
+      taskId,
+      "doctor-task-1",
+      "contaminated SupervisorActions payload",
+      "```json\n{\"action\":\"rewrite_brief\"}\n```",
+    );
+
+    const [decision] = await sql<{ title: string; context: string; kind: string; status: string }[]>`
+      SELECT title, context, kind, status
+      FROM decisions
+      WHERE task_id = ${taskId}
+    `;
+    expect(decision.kind).toBe(QUALITY_DOCTOR_DECISION_KIND);
+    expect(decision.status).toBe("ea_review");
+    expect(decision.title).toContain("Quality diagnosis retry needs clean handoff");
+    expect(decision.context).toContain("before authorizing another same-family quality-diagnosis retry");
+    expect(decision.context).toContain("doctor-task-1");
   });
 });
