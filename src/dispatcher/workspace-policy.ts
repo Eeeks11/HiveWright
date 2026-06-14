@@ -45,8 +45,18 @@ const NON_CODE_RECOVERY_PATTERN = /\b(qa failure re-planning|replan|diagnosis on
 const COMPLIANCE_READ_ONLY_ARTIFACT_PATTERN = /\b(oaic|privacy|compliance|risk)\b.{0,160}\b(checklist\/table|checklist|finite table|internal artifacts|source references)\b|\b(checklist\/table|checklist|finite table|internal artifacts|source references)\b.{0,160}\b(oaic|privacy|compliance|risk)\b/i;
 const EXPLICIT_NON_IMPLEMENTATION_PATTERN = /\b(do not|don't)\b.{0,120}\b(live probes|production\/?customer data|configuration changes|config changes|vendor contact|external-facing policy text)\b|\bmark it as unknown or defer\b|\bmitigation(?:s)?\b.{0,80}\b(internal-safe|implementation-later|owner-gated|defer)\b/i;
 const QA_REVIEW_ONLY_PATTERN = /\b(review|evaluate|verify)\b.{0,120}\b(deliverable|artifact|acceptance criteria|pass|fail)\b|\bfirst non-empty line\b.{0,80}\b(pass|fail)\b/i;
-const EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|route)\b/i;
-const POSITIVE_SOURCE_EDIT_PATTERN = /\b(patch|modify|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|(?<!do not )(?<!don't )\b(edit|change)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|route)\b/i;
+const QA_WRAPPER_PATTERN = /^\[QA\]\s*Review:|##\s*QA Review/i;
+const QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,100}\b(HiveWright\s+)?(dashboard\/API\s+)?(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\badd\b.{0,80}\b(Vitest|test|regression)\b/i;
+const DOCUMENT_ONLY_ARTIFACT_PATTERN = /\b(document-only|markdown artifact|final markdown artifact|decision-ready remediation artifact|route\/flow evidence table|route\/flow matrix|evidence matrix|documented route\/flow matrix|synthesis)\b/i;
+const NON_CODE_ARTIFACT_ROLES = new Set([
+  "document-manager",
+  "reference-document-reviewer",
+  "research-analyst",
+  "financial-analyst",
+  "operations-coordinator",
+]);
+const EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|api route)\b/i;
+const POSITIVE_SOURCE_EDIT_PATTERN = /\b(patch|modify|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|(?<!do not )(?<!don't )\b(edit|change)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|api route)\b/i;
 const NEGATED_SOURCE_EDIT_PATTERN = /\b(do not|don't|without)\b.{0,30}\b(edit|change|modify|patch|write|touch|inspect or modify)\b.{0,100}\b(code|repo|repository|repositories|source|implementation code|source implementation|codebase|component|typescript|migration|schema|dashboard|api route)\b/gi;
 
 export function evaluateTaskWorkspacePolicy(
@@ -145,10 +155,17 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const complianceReadOnlyArtifactIntent = COMPLIANCE_READ_ONLY_ARTIFACT_PATTERN.test(text)
     && explicitNonImplementationIntent
     && !explicitSourceEditIntent;
-  const qaReviewOnlyIntent = task.assignedTo.trim().toLowerCase() === "qa" && QA_REVIEW_ONLY_PATTERN.test(text) && !explicitSourceEditIntent;
+  const assignedRole = task.assignedTo.trim().toLowerCase();
+  const qaReviewOnlyIntent = assignedRole === "qa"
+    && (QA_WRAPPER_PATTERN.test(text) || QA_REVIEW_ONLY_PATTERN.test(text))
+    && !QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN.test(sourceIntentText);
+  const nonCodeArtifactIntent = NON_CODE_ARTIFACT_ROLES.has(assignedRole)
+    && DOCUMENT_ONLY_ARTIFACT_PATTERN.test(text)
+    && !explicitSourceEditIntent;
 
   if (doctorRole) return false;
   if (qaReviewOnlyIntent) return false;
+  if (nonCodeArtifactIntent) return false;
   if ((readOnlyNonCodeIntent || recoveryNonCodeIntent || complianceReadOnlyArtifactIntent) && !explicitSourceEditIntent && !positiveSourceEditIntent) return false;
 
   return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));

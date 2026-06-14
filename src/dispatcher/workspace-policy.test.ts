@@ -437,6 +437,60 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }))).toMatchObject({ allowed: true });
   });
 
+  it("does not block Short Stay Sales QA wrappers that review read-only evidence", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "qa",
+      title: "[QA] Review: [Sprint 2 Recovery] Read-only live endpoint and network posture audit",
+      brief: "## QA Review\n\n[lean-context] QA must verify only the latest deliverable evidence. Do not restate full transcripts unless needed.\n\n**Original Task:** [Sprint 2 Recovery] Read-only live endpoint and network posture audit\n\n### Original Brief\nCollect fresh read-only live endpoint and network posture evidence for shortstaysales.com.au using current UTC timestamps and no side effects. Audit only public network and endpoint posture.",
+      acceptanceCriteria: "Pass/fail the deliverable evidence; do not patch source code.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
+  it("does not let QA wrapper wording suppress explicit source-edit requests", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "qa",
+      title: "[QA] Review: Dashboard API source-code fix",
+      brief: "## QA Review\n\nPatch the HiveWright dashboard/API source code and add a Vitest regression for the route.",
+      acceptanceCriteria: "Code changes and tests are committed.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(true);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/review",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/review",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: false });
+  });
+
+  it("does not block Short Stay Sales document-only remediation artifacts", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "document-manager",
+      title: "Finalize remediation artifact with provenance gating and finance-gated backlog",
+      brief: "Replace the blocked remediation brief with a document-only task that turns the evidence matrix and completed engineering report into the final decision-ready remediation artifact. Keep the inventory-separation states limited to safety, provenance, and publication-readiness. Label any revenue/payment/admin monetization work as owner/finance-gated backlog only. Required output: A final markdown artifact that includes the route/flow matrix, placeholder-vs-real inventory assessment, and minimum remediation backlog.",
+      acceptanceCriteria: "Markdown artifact only; no implementation or source-code changes.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("does not let repository-neutral wording override explicit implementation requests", () => {
     for (const phrase of [
       "patch the HiveWright dashboard/API source code",
