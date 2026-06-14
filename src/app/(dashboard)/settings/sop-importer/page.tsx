@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 const EXAMPLE = `# Handle Lakes Bushland refund request
 
@@ -27,7 +29,14 @@ inside our published refund policy.
 - Do not refund if the guest has an outstanding damage claim open.`;
 
 export default function SopImporterPage() {
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
   const { selected } = useHiveContext();
+  const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : selected?.id;
+  const effectiveHiveName = targetHiveId && target.targetHive ? target.targetHive.name : selected?.name;
   const [title, setTitle] = useState("");
   const [scope, setScope] = useState<"hive" | "system">("hive");
   const [content, setContent] = useState("");
@@ -35,7 +44,8 @@ export default function SopImporterPage() {
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   async function submit() {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite(`Importing SOP "${title}"`)) return;
     setBusy(true);
     setFlash(null);
     try {
@@ -43,7 +53,7 @@ export default function SopImporterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selected.id,
+          hiveId: effectiveHiveId,
           title,
           scope,
           content,
@@ -65,7 +75,11 @@ export default function SopImporterPage() {
     }
   }
 
-  if (!selected)
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={targetHiveId} />;
+  }
+
+  if (!selected && !effectiveHiveId)
     return <p className="text-amber-400/60">Select a hive to import an SOP.</p>;
 
   return (
@@ -79,11 +93,13 @@ export default function SopImporterPage() {
         </p>
       </div>
 
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/sop-importer" />
+
       <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 p-4">
         <p className="text-sm text-amber-200/80">
           Prefer to record rather than write?{" "}
           <Link
-            href="/setup/workflow-capture"
+            href={withTargetHiveId("/setup/workflow-capture", targetHiveId)}
             className="text-amber-400 underline hover:text-amber-200"
           >
             Use browser capture
@@ -118,7 +134,7 @@ export default function SopImporterPage() {
             onChange={(e) => setScope(e.target.value as "hive" | "system")}
             className="mt-1 rounded border border-border bg-background px-2 py-1 text-sm text-amber-50"
           >
-            <option value="hive">This hive only ({selected.name})</option>
+            <option value="hive">This hive only ({effectiveHiveName ?? "selected hive"})</option>
             <option value="system">System-wide (all hives)</option>
           </select>
         </div>
@@ -167,4 +183,12 @@ export default function SopImporterPage() {
       </div>
     </div>
   );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
 }

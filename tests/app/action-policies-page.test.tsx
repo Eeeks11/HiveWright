@@ -8,24 +8,39 @@ const hiveContextMock = vi.hoisted(() => ({
     selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" } as
       | { id: string; slug: string; name: string; type: string }
       | null,
-    hives: [] as Array<{ id: string; slug: string; name: string; type: string }>,
+    hives: [
+      { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+    ] as Array<{ id: string; slug: string; name: string; type: string }>,
     loading: false,
+    hasProvider: true,
     selectHive: () => {},
   },
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => hiveContextMock.value,
 }));
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/setup/action-policies",
+  useSearchParams: () => hiveContextMock.searchParams,
+}));
+
 describe("ActionPoliciesPage", () => {
   beforeEach(() => {
     hiveContextMock.value = {
       selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [],
+      hives: [
+        { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+        { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+      ],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
     };
+    hiveContextMock.searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -56,6 +71,56 @@ describe("ActionPoliciesPage", () => {
     expect(screen.getAllByText("Discord webhook").length).toBeGreaterThan(0);
     expect(screen.getByText("Send message")).toBeTruthy();
     expect(screen.getAllByText(/notify · default require_approval/i).length).toBeGreaterThan(0);
+  });
+
+  it("uses targetHiveId for action-policy reads and destination-confirmed saves", async () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/action-policies") && init?.method === "PATCH") {
+        return jsonResponse({ data: { policies: [] } });
+      }
+      if (url.includes("/api/action-policies?hiveId=hive-2")) {
+        return jsonResponse({ data: { policies: [policyFixture()], connectors: [connectorFixture()] } });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    render(<ActionPoliciesPage />);
+
+    expect(await screen.findByText(/Target mode: viewing/i)).toBeTruthy();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/action-policies?hiveId=hive-2",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save policies" }));
+    expect(confirm).toHaveBeenCalledWith(
+      "Saving action policies will update Hive Two, not your active hive Hive One. Continue?",
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/action-policies", expect.objectContaining({ method: "PATCH" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save policies" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/action-policies",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.stringContaining("\"hiveId\":\"hive-2\""),
+      }),
+    ));
+  });
+
+  it("fails closed for invalid targetHiveId without loading action policies", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ActionPoliciesPage />);
+
+    expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("adds, deletes, edits, and saves a generic policy array", async () => {
@@ -153,6 +218,7 @@ describe("ActionPoliciesPage", () => {
       selected: null,
       hives: [],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
     };
     const fetchMock = vi.fn();
