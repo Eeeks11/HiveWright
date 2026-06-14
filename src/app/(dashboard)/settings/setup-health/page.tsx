@@ -111,7 +111,7 @@ function SetupHealthPageContent() {
         </section>
       ) : null}
 
-      {loading || hivesLoading ? (
+      {loading || hivesLoading || target.isResolvingTarget ? (
         <section className="rounded-lg border p-5 text-sm text-muted-foreground">
           Checking setup health...
         </section>

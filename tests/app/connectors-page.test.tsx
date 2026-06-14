@@ -36,6 +36,7 @@ describe("ConnectorsPage", () => {
       { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
     ];
     hiveContextMock.value.hasProvider = true;
+    hiveContextMock.value.loading = false;
     hiveContextMock.searchParams = new URLSearchParams();
   });
 
@@ -127,6 +128,20 @@ describe("ConnectorsPage", () => {
 
     expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
     expect(fetchMock).not.toHaveBeenCalledWith("/api/connector-installs?hiveId=hive-1");
+  });
+
+  it("continues resolving when a stale non-empty hive list does not contain the requested connector target", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value.hives = [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }];
+    hiveContextMock.value.loading = true;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConnectorsPage />);
+
+    expect(screen.getByText("Resolving hive target...")).toBeTruthy();
+    expect(screen.queryByText(/Hive target/)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

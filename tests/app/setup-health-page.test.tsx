@@ -211,6 +211,20 @@ describe("SetupHealthPage", () => {
     expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("continues resolving when a stale non-empty hive list does not contain the requested setup-health target", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value.hives = [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }];
+    hiveContextMock.value.loading = true;
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    expect(screen.getByText("Checking setup health...")).toBeTruthy();
+    expect(screen.queryByText(/Hive target/)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });
 
 function row(

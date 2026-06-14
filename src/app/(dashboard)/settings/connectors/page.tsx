@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
 import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 interface SetupField {
   key: string;
@@ -65,6 +65,7 @@ interface ConnectorAction {
 
 function ConnectorsPageContent() {
   const { selected } = useHiveContext();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
   const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
@@ -98,14 +99,21 @@ function ConnectorsPageContent() {
   }, []);
 
   useEffect(() => {
+    if (!effectiveHiveId) {
+      setCatalog([]);
+      return;
+    }
     fetch("/api/connectors")
       .then((r) => r.json())
       .then((b) => setCatalog(b.data ?? []))
       .catch(() => {});
-  }, []);
+  }, [effectiveHiveId]);
 
   useEffect(() => {
-    if (!effectiveHiveId) return;
+    if (!effectiveHiveId) {
+      setInstalls([]);
+      return;
+    }
     const load = () =>
       fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`)
         .then((r) => r.json())
@@ -318,6 +326,32 @@ function ConnectorsPageContent() {
     }
   }
 
+  function connectorSettingsHref(path: string): string {
+    if (!targetHiveId) return path;
+    const [base, query = ""] = path.split("?");
+    const params = new URLSearchParams(query);
+    params.set("targetHiveId", targetHiveId);
+    return `${base}?${params.toString()}`;
+  }
+
+  function oauthStartHref(c: Connector): string {
+    if (!effectiveHiveId) return "#";
+    const params = new URLSearchParams({
+      hiveId: effectiveHiveId,
+      displayName: c.name,
+      redirectTo: connectorSettingsHref(pathname || "/settings/connectors"),
+    });
+    return `/api/oauth/${c.slug}/start?${params.toString()}`;
+  }
+
+  if (targetHiveId && target.isResolvingTarget) {
+    return (
+      <section className="rounded-lg border p-5 text-sm text-muted-foreground">
+        Resolving hive target...
+      </section>
+    );
+  }
+
   if (targetHiveId && target.isUnresolvedTarget) {
     return <UnresolvedHiveTargetMessage hiveId={targetHiveId} />;
   }
@@ -509,7 +543,7 @@ function ConnectorsPageContent() {
                   >
                     {c.authType === "oauth2" ? (
                       <a
-                        href={`/api/oauth/${c.slug}/start?hiveId=${effectiveHiveId}&displayName=${encodeURIComponent(c.name)}`}
+                        href={oauthStartHref(c)}
                         onClick={(event) => {
                           if (!target.confirmCrossHiveWrite(`Installing ${c.name}`)) event.preventDefault();
                         }}
