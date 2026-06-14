@@ -481,7 +481,7 @@ function benchLmCapabilityScore(
     sourceUrl: BENCHLM_LEADERBOARD_URL,
     benchmarkName,
     modelVersionMatched: match.modelVersionMatched,
-    confidence: "high",
+    confidence: confidenceForBenchmarkMatch(model, match.modelVersionMatched),
   };
 }
 
@@ -493,6 +493,38 @@ function parseBenchLmCategoryScores(value: unknown): Record<string, number> {
     scores[key] = Math.max(0, Math.min(100, raw));
   }
   return scores;
+}
+
+function confidenceForBenchmarkMatch(
+  target: LiveMetadataTarget,
+  modelVersionMatched: string,
+): "high" | "medium" | "low" {
+  const matchedExact = normalizeExactModelMatchName(modelVersionMatched);
+  const displayExact = normalizeExactModelMatchName(target.displayName);
+  const canonicalId = canonicalModelIdForAdapter(target.adapterType, target.modelId);
+  const canonicalExact = normalizeExactModelMatchName(canonicalId);
+  const bareExact = normalizeExactModelMatchName(canonicalId.split("/").at(-1) ?? target.modelId);
+
+  if (matchedExact && (matchedExact === displayExact || matchedExact === canonicalExact || matchedExact === bareExact)) {
+    return "high";
+  }
+
+  const matched = normalizeBenchLmName(modelVersionMatched);
+  const candidateNames = modelNameCandidates(target).map(normalizeBenchLmName).filter(Boolean);
+  if (candidateNames.includes(matched)) return "medium";
+  return "low";
+}
+
+function normalizeExactModelMatchName(value: string) {
+  return value
+    .replace(/^openai-codex\//i, "")
+    .replace(/^anthropic\//i, "")
+    .replace(/^google\//i, "")
+    .replace(/^ollama\//i, "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9.]+/gi, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function benchLmCreatorForTarget(target: LiveMetadataTarget): string | null {
@@ -566,7 +598,7 @@ function parseLlmStatsFullLeaderboardCapabilityScores(
         sourceUrl: LLM_STATS_FULL_LEADERBOARD_URL,
         benchmarkName: column.name,
         modelVersionMatched: matched?.label ?? model.displayName,
-        confidence: "high",
+        confidence: confidenceForBenchmarkMatch(model, matched?.label ?? model.displayName),
       });
     }
   }
@@ -606,6 +638,7 @@ function parseLlmStatsJsonCapabilityScores(
     const row = findLlmStatsJsonRow(rows, model);
     if (!row) continue;
     const modelVersionMatched = typeof row.name === "string" ? row.name : model.displayName;
+    const matchConfidence = confidenceForBenchmarkMatch(model, modelVersionMatched);
     const modelId = canonicalModelIdForAdapter(model.adapterType, model.modelId);
 
     for (const column of LLM_STATS_JSON_CAPABILITY_FIELDS) {
@@ -629,7 +662,7 @@ function parseLlmStatsJsonCapabilityScores(
         sourceUrl: LLM_STATS_FULL_LEADERBOARD_URL,
         benchmarkName: column.name,
         modelVersionMatched,
-        confidence: "high",
+        confidence: matchConfidence,
       });
     }
   }

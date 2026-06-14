@@ -396,7 +396,7 @@ async function loadCapabilityScoresByModel(
       benchmark_name ASC
   `;
 
-  const bestScoresByModelAxis = new Map<string, ModelCapabilityScoreView>();
+  const scoresByModel = new Map<string, ModelCapabilityScoreView[]>();
   for (const row of scoreRows) {
     const key = capabilityScoreKey({
       provider: row.provider,
@@ -406,18 +406,9 @@ async function loadCapabilityScoresByModel(
     if (!keySet.has(key)) continue;
 
     const score = capabilityScoreViewFromRow(row);
-    const axisKey = `${key}:${score.axis}`;
-    const current = bestScoresByModelAxis.get(axisKey);
-    if (!current || compareCapabilityScores(score, current) > 0) {
-      bestScoresByModelAxis.set(axisKey, score);
-    }
+    scoresByModel.set(key, [...(scoresByModel.get(key) ?? []), score]);
   }
 
-  const scoresByModel = new Map<string, ModelCapabilityScoreView[]>();
-  for (const [axisKey, score] of bestScoresByModelAxis) {
-    const modelKey = axisKey.slice(0, axisKey.lastIndexOf(":"));
-    scoresByModel.set(modelKey, [...(scoresByModel.get(modelKey) ?? []), score]);
-  }
   for (const [key, scores] of scoresByModel) {
     scoresByModel.set(key, scores.sort(compareCapabilityScoreViewsForOutput));
   }
@@ -452,21 +443,6 @@ function compareCapabilityScoreViewsForOutput(
     a.benchmarkName.localeCompare(b.benchmarkName);
 }
 
-function compareCapabilityScores(
-  a: ModelCapabilityScoreView,
-  b: ModelCapabilityScoreView,
-): number {
-  return confidenceRank(a.confidence) - confidenceRank(b.confidence) ||
-    Number(a.updatedAt?.getTime() ?? 0) - Number(b.updatedAt?.getTime() ?? 0) ||
-    b.source.localeCompare(a.source) ||
-    b.benchmarkName.localeCompare(a.benchmarkName);
-}
-
-function confidenceRank(confidence: ModelCapabilityConfidence): number {
-  if (confidence === "high") return 3;
-  if (confidence === "medium") return 2;
-  return 1;
-}
 
 function capabilityScoreKey(input: {
   provider: string;

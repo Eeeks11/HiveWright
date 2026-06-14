@@ -90,6 +90,44 @@ describe("model catalog capability scores", () => {
     }));
   });
 
+  it("marks alias-only BenchLM capability matches below high confidence", async () => {
+    const targets = [
+      {
+        provider: "openai",
+        adapterType: "codex",
+        modelId: "openai-codex/gpt-5.4-pro-20260501",
+        displayName: "GPT 5.4 Pro Latest",
+        family: "gpt-5",
+        capabilities: ["text", "code", "reasoning"],
+        local: false,
+      },
+    ];
+    const benchLm = JSON.stringify({
+      models: [
+        {
+          model: "GPT-5.4 Pro",
+          creator: "OpenAI",
+          overallScore: 91,
+          categoryScores: { coding: 89 },
+        },
+      ],
+    });
+
+    const fetchImpl = async (url: string | URL) => {
+      const href = String(url);
+      return new Response(href.includes("benchlm.ai/api/data/leaderboard") ? benchLm : "");
+    };
+
+    const scores = await buildLiveModelCapabilityScores(fetchImpl, targets);
+
+    expect(scores).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.4-pro-20260501",
+      axis: "coding",
+      modelVersionMatched: "GPT-5.4 Pro",
+      confidence: "medium",
+    }));
+  });
+
   it("does not apply BenchLM scores when the model name matches a different provider", async () => {
     const targets = [
       {
@@ -1426,5 +1464,49 @@ GPT-5 Mini Closed 400k $0.25 $2.00 300 c/s 980 41.0 35.0 52.0 31.0 28.0 33.0 30.
       score: "41.00",
       model_version_matched: "GPT-5 Mini",
     });
+  });
+  it("preserves raw speed values above 100 while bounding non-speed scores", async () => {
+    await upsertModelCapabilityScores(sql, [
+      {
+        modelCatalogId: null,
+        provider: "local",
+        adapterType: "ollama",
+        modelId: "qwen3:32b",
+        canonicalModelId: "qwen3:32b",
+        axis: "speed",
+        score: 220.25,
+        rawScore: "220.25",
+        source: "LLM Stats",
+        sourceUrl: "https://example.test",
+        benchmarkName: "Throughput",
+        modelVersionMatched: "Qwen3 32B",
+        confidence: "high",
+      },
+      {
+        modelCatalogId: null,
+        provider: "local",
+        adapterType: "ollama",
+        modelId: "qwen3:32b",
+        canonicalModelId: "qwen3:32b",
+        axis: "coding",
+        score: 120,
+        rawScore: "120",
+        source: "LLM Stats",
+        sourceUrl: "https://example.test",
+        benchmarkName: "Code Index",
+        modelVersionMatched: "Qwen3 32B",
+        confidence: "high",
+      },
+    ]);
+
+    const rows = await sql<{ axis: string; score: number }[]>`
+      SELECT axis, score
+      FROM model_capability_scores
+      WHERE canonical_model_id = 'qwen3:32b'
+      ORDER BY axis ASC
+    `;
+
+    expect(rows).toContainEqual({ axis: "coding", score: "100.00" });
+    expect(rows).toContainEqual({ axis: "speed", score: "220.25" });
   });
 });
