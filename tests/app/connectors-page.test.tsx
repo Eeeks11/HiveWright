@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ConnectorsPage from "../../src/app/(dashboard)/setup/connectors/page";
 
@@ -8,19 +8,35 @@ const hiveContextMock = vi.hoisted(() => ({
     selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" } as
       | { id: string; slug: string; name: string; type: string }
       | null,
-    hives: [],
+    hives: [
+      { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+    ],
     loading: false,
+    hasProvider: true,
     selectHive: () => {},
   },
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => hiveContextMock.value,
 }));
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => hiveContextMock.searchParams,
+  usePathname: () => "/setup/connectors",
+}));
+
 describe("ConnectorsPage", () => {
   beforeEach(() => {
     hiveContextMock.value.selected = { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" };
+    hiveContextMock.value.hives = [
+      { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+      { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+    ];
+    hiveContextMock.value.hasProvider = true;
+    hiveContextMock.searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -57,6 +73,60 @@ describe("ConnectorsPage", () => {
     expect(screen.getByText("discord-webhook:send_message")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Action policies" }).getAttribute("href")).toBe("/setup/action-policies");
     expect(screen.getAllByText((_content, element) => element?.textContent?.includes("send_message · succeeded") ?? false).length).toBeGreaterThan(0);
+  });
+
+  it("preserves targetHiveId when linking from the setup connectors mirror", async () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/connectors") return jsonResponse({ data: [] });
+      if (url === "/api/connector-installs?hiveId=hive-2") return jsonResponse({ data: [] });
+      return new Response("not found", { status: 404 });
+    }));
+
+    render(<ConnectorsPage />);
+
+    expect((await screen.findByRole("link", { name: "Action policies" })).getAttribute("href")).toBe(
+      "/setup/action-policies?targetHiveId=hive-2",
+    );
+  });
+
+  it("uses targetHiveId for connector install reads and destination-confirmed installs", async () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/connectors") return jsonResponse({ data: [connectorFixture()] });
+      if (url === "/api/connector-installs?hiveId=hive-2") return jsonResponse({ data: [] });
+      if (url === "/api/connector-installs" && init?.method === "POST") return jsonResponse({ data: { id: "install-2" } });
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ConnectorsPage />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/connector-installs?hiveId=hive-2"));
+    expect(screen.getByText(/Target mode: viewing/)).toBeTruthy();
+    fireEvent.click(await screen.findByText("Discord webhook"));
+    fireEvent.click(screen.getByRole("button", { name: "Save & test" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(([url, init]) => url === "/api/connector-installs" && init?.method === "POST");
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall![1]!.body as string).hiveId).toBe("hive-2");
+    });
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("will update Hive Two, not your active hive Hive One"));
+  });
+
+  it("fails closed for invalid targetHiveId without loading active-hive connector installs", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConnectorsPage />);
+
+    expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/connector-installs?hiveId=hive-1");
   });
 });
 
