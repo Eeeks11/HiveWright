@@ -34,7 +34,7 @@ export default function HiveIdeasPage() {
         <HiveSectionNav hiveId={hiveId} />
       </div>
 
-      <IdeasPanel hiveId={hiveId} />
+      <IdeasPanel hiveId={hiveId} confirmCrossHiveWrite={target.confirmCrossHiveWrite} />
     </div>
   );
 }

@@ -49,7 +49,13 @@ function buildPromotionBrief(idea: Idea) {
   return `${sourceParagraph}\n\n${detailLines.join("\n")}`;
 }
 
-export function IdeasPanel({ hiveId }: { hiveId: string }) {
+export function IdeasPanel({
+  hiveId,
+  confirmCrossHiveWrite = () => true,
+}: {
+  hiveId: string;
+  confirmCrossHiveWrite?: (action: string) => boolean;
+}) {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -197,6 +203,8 @@ export function IdeasPanel({ hiveId }: { hiveId: string }) {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) return;
 
+    if (!confirmCrossHiveWrite(`Saving idea "${trimmedTitle}"`)) return;
+
     setSubmitting(true);
     setError(null);
     try {
@@ -237,17 +245,18 @@ export function IdeasPanel({ hiveId }: { hiveId: string }) {
     }
   }
 
-  async function handleArchive(ideaId: string) {
-    setPendingActionId(ideaId);
+  async function handleArchive(idea: Idea) {
+    if (!confirmCrossHiveWrite(`Archiving idea "${idea.title}"`)) return;
+    setPendingActionId(idea.id);
     setError(null);
     try {
-      const res = await fetch(`/api/hives/${hiveId}/ideas/${ideaId}`, {
+      const res = await fetch(`/api/hives/${hiveId}/ideas/${idea.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ archived: true }),
       });
       if (!res.ok) throw new Error("Failed to archive idea");
-      setIdeas((current) => current.filter((idea) => idea.id !== ideaId));
+      setIdeas((current) => current.filter((entry) => entry.id !== idea.id));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to archive idea");
     } finally {
@@ -256,6 +265,7 @@ export function IdeasPanel({ hiveId }: { hiveId: string }) {
   }
 
   async function handlePromote(idea: Idea) {
+    if (!confirmCrossHiveWrite(`Promoting idea "${idea.title}" into a goal`)) return;
     setPendingActionId(idea.id);
     setError(null);
     try {
@@ -304,6 +314,8 @@ export function IdeasPanel({ hiveId }: { hiveId: string }) {
       setEditError("Title is required");
       return;
     }
+
+    if (!confirmCrossHiveWrite(`Saving changes to idea "${trimmedTitle}"`)) return;
 
     setSavingIdeaId(ideaId);
     setEditError(null);
@@ -552,7 +564,7 @@ export function IdeasPanel({ hiveId }: { hiveId: string }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleArchive(idea.id)}
+                    onClick={() => handleArchive(idea)}
                     disabled={pendingActionId === idea.id}
                     className="cursor-pointer rounded-md border px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-zinc-800"
                   >

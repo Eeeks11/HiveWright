@@ -78,8 +78,8 @@ describe("HiveDetailPage", () => {
     await waitFor(() => expect(screen.getByDisplayValue("Alpha Hive")).toBeTruthy());
     expect(screen.getByRole("link", { name: "Targets" }).getAttribute("href")).toBe("/hives/hive-1");
     expect(screen.getByRole("link", { name: "Ideas" }).getAttribute("href")).toBe("/hives/hive-1/ideas");
-    expect(screen.getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals");
-    expect(screen.getByRole("link", { name: "Decisions" }).getAttribute("href")).toBe("/decisions");
+    expect(screen.getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals?hiveId=hive-1");
+    expect(screen.getByRole("link", { name: "Decisions" }).getAttribute("href")).toBe("/decisions?hiveId=hive-1");
   });
 
   it("shows connector health, sync, scopes, risk, and recent actions on the hive detail page", async () => {
