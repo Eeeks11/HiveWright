@@ -16,7 +16,8 @@ import {
   type ModelRoutingPolicyState,
 } from "./policy";
 import { MODEL_ROUTING_PROFILES } from "./profiles";
-import type { ModelRoutingPolicy } from "./selector";
+import { classifyModelRoutingTask } from "./task-classifier";
+import type { ModelRoutingOutcomeScore, ModelRoutingPolicy } from "./selector";
 
 type RegistryHealthStatus = "healthy" | "unknown" | "unhealthy";
 
@@ -54,6 +55,22 @@ type CapabilityScoreRow = {
   updated_at: Date | null;
 };
 
+type OutcomeTaskRow = {
+  id: string;
+  assigned_to: string;
+  role_type: string | null;
+  title: string;
+  brief: string;
+  acceptance_criteria: string | null;
+  retry_count: number | null;
+  doctor_attempts: number | null;
+  status: string;
+  adapter_used: string | null;
+  model_used: string;
+  explicit_rating: string | number | null;
+  implicit_score: string | number | null;
+};
+
 export interface ModelRoutingRegistryRow {
   id: string;
   routeKey: string;
@@ -86,6 +103,7 @@ export interface ModelRoutingRegistryRow {
   probeMode: "automatic" | "on_demand";
   latencyMs: number | null;
   sampleCostUsd: number | null;
+  outcomeScores?: Partial<Record<keyof typeof MODEL_ROUTING_PROFILES, ModelRoutingOutcomeScore>>;
 }
 
 export interface ModelRoutingView {
@@ -133,6 +151,7 @@ export async function loadModelRoutingView(
 
   const collapsedRows = collapseConfiguredModelAliasRows(modelRows);
   const capabilityScoresByModel = await loadCapabilityScoresByModel(sql, collapsedRows);
+  const outcomeScoresByModel = await loadOutcomeScoresByModel(sql, hiveId, collapsedRows);
 
   const models: ModelRoutingRegistryRow[] = [];
   for (const row of collapsedRows) {
@@ -193,6 +212,7 @@ export async function loadModelRoutingView(
       probeMode,
       latencyMs: health?.latency_ms ?? null,
       sampleCostUsd: asNullableNumber(health?.sample_cost_usd),
+      outcomeScores: outcomeScoresByModel.get(capabilityScoreKey(row)) ?? {},
     });
   }
 
@@ -211,6 +231,7 @@ export async function loadModelRoutingView(
         qualityScore: model.qualityScore ?? undefined,
         costScore: model.costScore ?? undefined,
         capabilityScores: model.capabilityScores,
+        outcomeScores: model.outcomeScores,
         local: model.local,
         roleSlugs: model.roleSlugs.length > 0 ? model.roleSlugs : undefined,
       })),
@@ -218,6 +239,102 @@ export async function loadModelRoutingView(
     basePolicyState,
     profiles: MODEL_ROUTING_PROFILES,
   };
+}
+
+async function loadOutcomeScoresByModel(
+  sql: Sql,
+  hiveId: string,
+  rows: HiveModelRegistryRow[],
+): Promise<Map<string, Partial<Record<keyof typeof MODEL_ROUTING_PROFILES, ModelRoutingOutcomeScore>>>> {
+  if (rows.length === 0) return new Map();
+  const candidateKeys = new Map(rows.map((row) => [
+    `${row.adapter_type}:${canonicalModelIdForAdapter(row.adapter_type, row.model_id)}`,
+    capabilityScoreKey(row),
+  ]));
+  const taskRows = await sql<OutcomeTaskRow[]>`
+    SELECT
+      t.id,
+      t.assigned_to,
+      rt.type AS role_type,
+      t.title,
+      t.brief,
+      t.acceptance_criteria,
+      t.retry_count,
+      t.doctor_attempts,
+      t.status,
+      t.adapter_used,
+      t.model_used,
+      AVG(s.rating / 10.0) FILTER (
+        WHERE s.source = 'explicit_owner_feedback'
+          AND s.rating IS NOT NULL
+          AND s.is_qa_fixture = false
+      )::float AS explicit_rating,
+      CASE WHEN SUM(s.confidence) FILTER (
+        WHERE s.source = 'implicit_ea'
+          AND s.is_qa_fixture = false
+      ) > 0 THEN (
+        SUM((CASE s.signal_type WHEN 'positive' THEN 1.0 WHEN 'neutral' THEN 0.5 ELSE 0.0 END) * s.confidence)
+          FILTER (WHERE s.source = 'implicit_ea' AND s.is_qa_fixture = false)
+        / SUM(s.confidence) FILTER (WHERE s.source = 'implicit_ea' AND s.is_qa_fixture = false)
+      )::float ELSE NULL END AS implicit_score
+    FROM tasks t
+    LEFT JOIN role_templates rt ON rt.slug = t.assigned_to
+    LEFT JOIN task_quality_signals s ON s.task_id = t.id AND s.hive_id = t.hive_id
+    WHERE t.hive_id = ${hiveId}::uuid
+      AND t.model_used IS NOT NULL
+      AND t.status IN ('completed','failed','unresolvable')
+      AND COALESCE(t.completed_at, t.updated_at, t.created_at) > NOW() - INTERVAL '60 days'
+    GROUP BY t.id, rt.type
+  `;
+
+  const aggregate = new Map<string, { total: number; count: number }>();
+  for (const task of taskRows) {
+    const adapter = task.adapter_used?.trim();
+    if (!adapter) continue;
+    const modelKey = `${adapter}:${canonicalModelIdForAdapter(adapter, task.model_used)}`;
+    const candidateKey = candidateKeys.get(modelKey);
+    if (!candidateKey) continue;
+    const classification = classifyModelRoutingTask({
+      roleSlug: task.assigned_to,
+      roleType: task.role_type,
+      taskTitle: task.title,
+      taskBrief: task.brief,
+      acceptanceCriteria: task.acceptance_criteria,
+      retryCount: task.retry_count,
+    });
+    const key = `${candidateKey}\u0000${classification.profile}`;
+    const current = aggregate.get(key) ?? { total: 0, count: 0 };
+    current.total += scoreOutcomeTask(task);
+    current.count += 1;
+    aggregate.set(key, current);
+  }
+
+  const byModel = new Map<string, Partial<Record<keyof typeof MODEL_ROUTING_PROFILES, ModelRoutingOutcomeScore>>>();
+  for (const [key, value] of aggregate.entries()) {
+    const [candidateKey, profile] = key.split("\u0000") as [string, keyof typeof MODEL_ROUTING_PROFILES];
+    if (value.count <= 0) continue;
+    const score = Math.round((value.total / value.count) * 1000) / 1000;
+    const current = byModel.get(candidateKey) ?? {};
+    current[profile] = { score, sampleSize: value.count };
+    byModel.set(candidateKey, current);
+  }
+  return byModel;
+}
+
+function scoreOutcomeTask(task: OutcomeTaskRow): number {
+  const explicit = asNullableNumber(task.explicit_rating);
+  if (explicit !== null) return clamp01(explicit);
+  const implicit = asNullableNumber(task.implicit_score);
+  if (implicit !== null) return clamp01(implicit);
+  if (task.status !== "completed") return 0.1;
+  const retryPenalty = Math.min(0.3, Number(task.retry_count ?? 0) * 0.08);
+  const doctorPenalty = Math.min(0.3, Number(task.doctor_attempts ?? 0) * 0.1);
+  return clamp01(0.75 - retryPenalty - doctorPenalty);
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 async function loadCapabilityScoresByModel(

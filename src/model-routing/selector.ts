@@ -21,6 +21,12 @@ export interface ModelRoutingCandidate {
   local?: boolean;
   roleSlugs?: string[];
   roleTypes?: string[];
+  outcomeScores?: Partial<Record<ModelRoutingProfile, ModelRoutingOutcomeScore>>;
+}
+
+export interface ModelRoutingOutcomeScore {
+  score: number;
+  sampleSize: number;
 }
 
 export interface ModelRoutingOverride {
@@ -67,6 +73,8 @@ export interface ResolvedModelRoute {
       selected: boolean;
       missingAxes: string[];
       lowConfidenceAxes: string[];
+      outcomeScore?: number;
+      outcomeSampleSize?: number;
     }>;
   };
 }
@@ -163,7 +171,9 @@ export function resolveConfiguredModelRoute(
     profile: profileConfig.profile,
     explanation: closeScoreWinner && best && closeScoreWinner.candidate !== best.candidate
       ? `Selected ${selected.model} using ${profileConfig.profile} profile because it was within close score delta ${profileConfig.closeScoreDelta} and had lower cost.`
-      : `Selected ${selected.model} using ${profileConfig.profile} profile from ${classification.confidence}-confidence task classification.`,
+      : selectedScore.outcome
+        ? `Selected ${selected.model} using ${profileConfig.profile} profile from ${classification.confidence}-confidence task classification with internal outcome feedback.`
+        : `Selected ${selected.model} using ${profileConfig.profile} profile from ${classification.confidence}-confidence task classification.`,
     scoreBreakdown: {
       selectedScore: selectedScore.score,
       candidates: ranked.map((candidate) => ({
@@ -176,6 +186,8 @@ export function resolveConfiguredModelRoute(
         selected: candidate.candidate === selected,
         missingAxes: candidate.missingAxes,
         lowConfidenceAxes: candidate.lowConfidenceAxes,
+        outcomeScore: candidate.outcome?.score,
+        outcomeSampleSize: candidate.outcome?.sampleSize,
       })),
     },
   };
@@ -207,6 +219,7 @@ interface ScoredCandidate {
   speedScore: number;
   missingAxes: string[];
   lowConfidenceAxes: string[];
+  outcome?: ModelRoutingOutcomeScore;
 }
 
 function scoreCandidate(
@@ -214,20 +227,23 @@ function scoreCandidate(
   options: ScoreCandidateOptions,
 ): ScoredCandidate {
   const costScore = Number(candidate.costScore ?? 100);
+  const outcome = outcomeScoreForProfile(candidate, options.profileConfig.profile);
 
   if (!hasCapabilityScores(candidate)) {
+    const qualityScore = qualityScoreWithOutcome(candidate.qualityScore, outcome);
     const score =
-      Number(candidate.qualityScore ?? 0) * options.qualityWeight -
+      qualityScore * options.qualityWeight -
       costScore * options.costWeight;
 
     return {
       candidate,
       score,
-      capabilityFit: Number(candidate.qualityScore ?? 0),
+      capabilityFit: qualityScore,
       costScore,
       speedScore: 0,
       missingAxes: [],
       lowConfidenceAxes: [],
+      outcome,
     };
   }
 
@@ -263,7 +279,7 @@ function scoreCandidate(
 
   const rawCapabilityFit = knownWeight > 0 ? weightedScore / knownWeight : 0;
   const coverageRatio = totalPossibleWeight > 0 ? knownWeight / totalPossibleWeight : 0;
-  const capabilityFit = rawCapabilityFit * coverageRatio;
+  const capabilityFit = qualityScoreWithOutcome(rawCapabilityFit * coverageRatio, outcome);
   const profileCostWeight = Number(options.profileConfig.weights.cost ?? 0);
   const lowConfidencePenalty = lowConfidenceAxes.length * 4;
   const score =
@@ -279,6 +295,7 @@ function scoreCandidate(
     speedScore: Number(capabilityScores.get("speed")?.score ?? 0),
     missingAxes,
     lowConfidenceAxes,
+    outcome,
   };
 }
 
@@ -286,6 +303,36 @@ function hasCapabilityScores(
   candidate: ModelRoutingCandidate,
 ): candidate is ModelRoutingCandidate & { capabilityScores: ModelCapabilityScoreView[] } {
   return Array.isArray(candidate.capabilityScores) && candidate.capabilityScores.length > 0;
+}
+
+function outcomeScoreForProfile(
+  candidate: ModelRoutingCandidate,
+  profile: ModelRoutingProfile,
+): ModelRoutingOutcomeScore | undefined {
+  const score = candidate.outcomeScores?.[profile];
+  if (!score || !Number.isFinite(score.score) || !Number.isFinite(score.sampleSize) || score.sampleSize <= 0) {
+    return undefined;
+  }
+  return {
+    score: clamp01(score.score),
+    sampleSize: Math.max(0, Math.round(score.sampleSize)),
+  };
+}
+
+function qualityScoreWithOutcome(
+  baseQualityScore: number | string | null | undefined,
+  outcome: ModelRoutingOutcomeScore | undefined,
+): number {
+  const base = Number(baseQualityScore ?? 0);
+  if (!outcome) return base;
+  const confidence = Math.min(1, outcome.sampleSize / 5);
+  const outcomeWeight = 0.45 * confidence;
+  return base * (1 - outcomeWeight) + (outcome.score * 100) * outcomeWeight;
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function confidenceMultiplier(confidence: ModelCapabilityScoreView["confidence"]): number {
