@@ -47,17 +47,19 @@ const EXPLICIT_NON_IMPLEMENTATION_PATTERN = /\b(do not|don't)\b.{0,120}\b(live p
 const QA_REVIEW_ONLY_PATTERN = /\b(review|evaluate|verify)\b.{0,120}\b(deliverable|artifact|acceptance criteria|pass|fail)\b|\bfirst non-empty line\b.{0,80}\b(pass|fail)\b/i;
 const QA_WRAPPER_PATTERN = /^\[QA\]\s*Review:|##\s*QA Review/i;
 const QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,100}\b(HiveWright\s+)?(dashboard\/API\s+)?(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\badd\b.{0,80}\b(Vitest|test|regression)\b/i;
-const DOCUMENT_ONLY_ARTIFACT_PATTERN = /\b(document-only|markdown artifact|final markdown artifact|decision-ready remediation artifact|route\/flow evidence table|route\/flow matrix|evidence matrix|documented route\/flow matrix|synthesis)\b/i;
+const DOCUMENT_ONLY_ARTIFACT_PATTERN = /\b(document-only|markdown artifact|final markdown artifact|decision-ready remediation artifact|route\/flow evidence table|route\/flow matrix|evidence matrix|documented route\/flow matrix|synthesis|source-use boundary requirements|provenance tracking|remediation backlog)\b/i;
 const NON_CODE_ARTIFACT_ROLES = new Set([
   "document-manager",
   "reference-document-reviewer",
   "research-analyst",
   "financial-analyst",
   "operations-coordinator",
+  "compliance-risk-analyst",
 ]);
 const EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|api route)\b/i;
 const POSITIVE_SOURCE_EDIT_PATTERN = /\b(patch|modify|write|implement|refactor|fix)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|(?<!do not )(?<!don't )\b(edit|change)\b.{0,80}\b(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation source|implementation code)\b|\b(add|update)\b.{0,80}\b(test|vitest|migration|schema|component|api route)\b/i;
-const NEGATED_SOURCE_EDIT_PATTERN = /\b(do not|don't|without)\b.{0,30}\b(edit|change|modify|patch|write|touch|inspect or modify)\b.{0,100}\b(code|repo|repository|repositories|source|implementation code|source implementation|codebase|component|typescript|migration|schema|dashboard|api route)\b/gi;
+const NEGATED_SOURCE_EDIT_PATTERN = /\b(do not|don't|without|not)\b.{0,30}\b(edit|change|modify|patch|write|touch|inspect or modify)\b.{0,100}\b(code|repo|repository|repositories|source|implementation code|source implementation|codebase|component|typescript|migration|schema|dashboard|api route)\b/gi;
+const HTTP_ENDPOINT_REFERENCE_PATTERN = /\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\/[A-Za-z0-9_./:[\]-]+/g;
 
 export function evaluateTaskWorkspacePolicy(
   ctx: SessionContext,
@@ -147,7 +149,9 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
   const hivewrightSignals = HIVEWRIGHT_PRODUCT_PATTERN.test(text);
   const readOnlyNonCodeIntent = READ_ONLY_NON_CODE_PATTERN.test(text);
-  const sourceIntentText = text.replace(NEGATED_SOURCE_EDIT_PATTERN, " ");
+  const sourceIntentText = text
+    .replace(HTTP_ENDPOINT_REFERENCE_PATTERN, " ")
+    .replace(NEGATED_SOURCE_EDIT_PATTERN, " ");
   const explicitSourceEditIntent = EXPLICIT_SOURCE_EDIT_PATTERN.test(sourceIntentText);
   const positiveSourceEditIntent = POSITIVE_SOURCE_EDIT_PATTERN.test(sourceIntentText);
   const recoveryNonCodeIntent = NON_CODE_RECOVERY_PATTERN.test(text) && !explicitSourceEditIntent;

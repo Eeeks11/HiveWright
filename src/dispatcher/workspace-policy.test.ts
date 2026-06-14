@@ -491,6 +491,42 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }))).toMatchObject({ allowed: true });
   });
 
+  it("does not block Short Stay Sales compliance source-use boundary documents", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "compliance-risk-analyst",
+      title: "Add source-use boundary requirements to marketplace remediation backlog",
+      brief: "Perform a document-only compliance requirements addendum for the active Short Stay Sales remediation artifact/backlog. Required output: requirements for detailed provenance tracking for manual or seller-provided inputs, acquisition-boundary checks, source attribution, public-display gating, and manual review handoff. The addendum is document-only and does not propose production, auth, payment, email, DNS, integration, source/API/config changes, scraping, or bulk crawling.",
+      acceptanceCriteria: "The addendum is document-only and no implementation or source-code changes are required.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
+  it("does not treat HTTP endpoint references in QA evidence as source edits", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "qa",
+      title: "[QA] Review: Document live-site and API evidence into route and inventory matrix",
+      brief: "## QA Review\n\nReview the document-only deliverable evidence. The matrix cites `PATCH /api/listing/[id]/status` and an Admin dashboard evidence reference, but the task is QA-only and must verify the artifact, not patch source code. First non-empty line must be PASS or FAIL.",
+      acceptanceCriteria: "QA decision only; do not run git commands or modify code.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("does not let repository-neutral wording override explicit implementation requests", () => {
     for (const phrase of [
       "patch the HiveWright dashboard/API source code",
