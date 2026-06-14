@@ -33,6 +33,7 @@ function Probe({ routeHiveId }: { routeHiveId: string }) {
       <div data-testid="effective">{target.effectiveHiveId ?? "none"}</div>
       <div data-testid="unresolved">{String(target.isUnresolvedTarget)}</div>
       <div data-testid="goals-href">{target.withTargetHiveId("/goals")}</div>
+      <div data-testid="legacy-goals-href">{target.withHiveTargetParams("/goals")}</div>
       <div data-testid="exit-href">{target.exitTargetHref}</div>
       <button type="button" onClick={() => target.confirmCrossHiveWrite("Saving budget changes")}>Confirm</button>
       <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
@@ -47,6 +48,7 @@ describe("target hive mode primitives", () => {
     expect(screen.getByTestId("effective").textContent).toBe("target-1");
     expect(screen.getByTestId("unresolved").textContent).toBe("false");
     expect(screen.getByTestId("goals-href").textContent).toBe("/goals?targetHiveId=target-1");
+    expect(screen.getByTestId("legacy-goals-href").textContent).toBe("/goals?hiveId=target-1&targetHiveId=target-1");
     expect(screen.getByTestId("exit-href").textContent).toBe("/hives/active-1/files");
     expect(screen.getByText(/viewing/i).textContent).toContain("Target Hive");
     expect(screen.getByRole("link", { name: "Return to active hive" }).getAttribute("href")).toBe("/hives/active-1/files");

@@ -32,10 +32,10 @@ export function HiveSectionNav({ hiveId }: { hiveId: string }) {
     { href: `/hives/${hiveId}/ideas`, label: "Ideas" },
     { href: `/hives/${hiveId}/initiatives`, label: "Initiatives" },
     { href: `/hives/${hiveId}/files`, label: "Files" },
-    { href: target.withTargetHiveId(`/goals`), label: "Goals" },
-    { href: target.withTargetHiveId(`/decisions`), label: "Decisions" },
+    { href: target.withHiveTargetParams(`/goals`), label: "Goals" },
+    { href: target.withHiveTargetParams(`/decisions`), label: "Decisions" },
     ...(qualityFeedbackCount > 0
-      ? [{ href: target.withTargetHiveId(`/quality-feedback`), label: "Quality feedback" }]
+      ? [{ href: target.withHiveTargetParams(`/quality-feedback`), label: "Quality feedback" }]
       : []),
   ];
 

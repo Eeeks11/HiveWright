@@ -12,11 +12,17 @@ type Hive = {
   type: string;
 };
 
-function appendTargetHiveId(path: string, targetHiveId: string | null): string {
-  if (!targetHiveId) return path;
+function appendHiveTargetParams(
+  path: string,
+  routeHiveId: string | null,
+  targetHiveId: string | null,
+  { includeLegacyHiveId = false }: { includeLegacyHiveId?: boolean } = {},
+): string {
+  if (!routeHiveId && !targetHiveId) return path;
   const [base, query = ""] = path.split("?");
   const params = new URLSearchParams(query);
-  params.set("targetHiveId", targetHiveId);
+  if (includeLegacyHiveId && routeHiveId) params.set("hiveId", routeHiveId);
+  if (targetHiveId) params.set("targetHiveId", targetHiveId);
   const queryString = params.toString();
   return queryString ? `${base}?${queryString}` : base;
 }
@@ -55,7 +61,8 @@ export function useResolvedHiveTarget(routeHiveId: string | null | undefined) {
       isResolvingTarget: Boolean(hasProvider && loading && hives.length === 0),
       targetQueryHiveId,
       exitTargetHref,
-      withTargetHiveId: (path: string) => appendTargetHiveId(path, targetQueryHiveId),
+      withTargetHiveId: (path: string) => appendHiveTargetParams(path, routeId, targetQueryHiveId),
+      withHiveTargetParams: (path: string) => appendHiveTargetParams(path, routeId, targetQueryHiveId, { includeLegacyHiveId: true }),
       confirmCrossHiveWrite: (action: string) => {
         if (!isTargetingDifferentHive || !targetHive || !activeHive) return true;
         return window.confirm(
