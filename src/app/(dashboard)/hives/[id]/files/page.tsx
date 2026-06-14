@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { Check, Download, ExternalLink, FileText, FolderOpen, RotateCw, X } from "lucide-react";
 import { HiveSectionNav } from "@/components/hive-section-nav";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 const CATEGORIES = [
   { id: "projects", label: "Projects" },
@@ -102,6 +103,7 @@ function renderPreview(content: string, contentType: string) {
 export default function HiveFilesPage() {
   const params = useParams<{ id: string }>();
   const hiveId = params.id;
+  const target = useResolvedHiveTarget(hiveId);
   const [activeCategory, setActiveCategory] = useState<CategoryId>("projects");
   const [items, setItems] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,6 +119,13 @@ export default function HiveFilesPage() {
   });
 
   useEffect(() => {
+    if (target.isResolvingTarget || target.isUnresolvedTarget) {
+      setItems([]);
+      setReviews([]);
+      setLoading(target.isResolvingTarget);
+      setError(target.isUnresolvedTarget ? "Hive target not found" : "");
+      return;
+    }
     let cancelled = false;
     async function loadFiles() {
       setLoading(true);
@@ -153,7 +162,7 @@ export default function HiveFilesPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeCategory, hiveId]);
+  }, [activeCategory, hiveId, target.isResolvingTarget, target.isUnresolvedTarget]);
 
   const selectedCategory = useMemo(
     () => CATEGORIES.find((category) => category.id === activeCategory) ?? CATEGORIES[0],
@@ -161,6 +170,7 @@ export default function HiveFilesPage() {
   );
 
   async function decideProposal(proposal: ReviewProposal, decision: "accepted" | "edited" | "rejected" | "needs_confirmation") {
+    if (!target.confirmCrossHiveWrite("Applying a reference document proposal action")) return;
     const edits: Record<string, string> = {};
     if (decision === "edited") {
       const title = window.prompt("Record title", proposal.title);
@@ -190,6 +200,7 @@ export default function HiveFilesPage() {
   }
 
   async function retryReview(review: ReviewJob) {
+    if (!target.confirmCrossHiveWrite("Retrying a reference document review")) return;
     setReviewAction(review.id);
     try {
       const res = await fetch(`/api/hives/${hiveId}/reference-document-reviews`, {
@@ -234,8 +245,17 @@ export default function HiveFilesPage() {
     }
   }
 
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={hiveId} />;
+  }
+
+  if (target.isResolvingTarget) {
+    return <p className="text-amber-600/70 dark:text-amber-400/60">Loading…</p>;
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
       <div className="hive-honey-glow space-y-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">

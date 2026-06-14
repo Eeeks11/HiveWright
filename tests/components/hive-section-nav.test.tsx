@@ -52,8 +52,10 @@ describe("<HiveSectionNav>", () => {
     expect(screen.getByRole("link", { name: "Initiatives" }).getAttribute("href")).toBe("/hives/hive-2/initiatives");
     expect(screen.getByRole("link", { name: "Files" }).getAttribute("href")).toBe("/hives/hive-2/files");
     expect(screen.getByRole("link", { name: "Files" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("link", { name: "Goals" }).getAttribute("href")).toBe("/goals");
+    expect(screen.getByRole("link", { name: "Decisions" }).getAttribute("href")).toBe("/decisions");
     expect((await screen.findByRole("link", { name: "Quality feedback" })).getAttribute("href")).toBe(
-      "/quality-feedback?hiveId=hive-2",
+      "/quality-feedback",
     );
   });
 });

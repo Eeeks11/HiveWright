@@ -14,6 +14,7 @@ interface HiveContextValue {
   selectHive: (id: string) => void;
   refreshHives?: (preferredHiveId?: string) => Promise<void>;
   loading: boolean;
+  hasProvider?: boolean;
 }
 
 const HiveContext = createContext<HiveContextValue>({
@@ -21,7 +22,8 @@ const HiveContext = createContext<HiveContextValue>({
   selected: null,
   selectHive: () => {},
   refreshHives: async () => {},
-  loading: true,
+  loading: false,
+  hasProvider: false,
 });
 
 export function useHiveContext() {
@@ -68,7 +70,7 @@ export function HiveProvider({ children }: { children: ReactNode }) {
   const selected = hives.find((b) => b.id === selectedId) || null;
 
   return (
-    <HiveContext.Provider value={{ hives, selected, selectHive, refreshHives, loading }}>
+    <HiveContext.Provider value={{ hives, selected, selectHive, refreshHives, loading, hasProvider: true }}>
       {children}
     </HiveContext.Provider>
   );
