@@ -22,6 +22,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 // ---- router mock (must be before any dynamic import) ----
 const routerPushMock = vi.fn();
 const workflowContextMock = vi.hoisted(() => ({
+  params: {} as Record<string, string>,
   searchParams: new URLSearchParams(),
   value: {
     selected: {
@@ -41,7 +42,7 @@ const workflowContextMock = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPushMock }),
-  useParams: () => ({}),
+  useParams: () => workflowContextMock.params,
   useSearchParams: () => workflowContextMock.searchParams,
   usePathname: () => "/setup/workflow-capture",
 }));
@@ -122,6 +123,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   routerPushMock.mockReset();
 
+  workflowContextMock.params = {};
   workflowContextMock.searchParams = new URLSearchParams();
   workflowContextMock.value.selected = {
     id: "hive-test",
@@ -168,6 +170,14 @@ async function renderWorkflowCapturePage() {
     "../../src/app/(dashboard)/settings/workflow-capture/page"
   );
   return render(<WorkflowCapturePage />);
+}
+
+async function renderWorkflowCaptureReviewPage(captureId: string) {
+  workflowContextMock.params = { captureId };
+  const { default: WorkflowCaptureReviewPage } = await import(
+    "../../src/app/(dashboard)/settings/workflow-capture/[captureId]/review/page"
+  );
+  return render(<WorkflowCaptureReviewPage />);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,5 +419,56 @@ describe("WorkflowCapturePage — Cancel → DELETE /api/capture-sessions/[id]",
         u === `/api/capture-sessions/${sessionId}` && o?.method === "DELETE",
     );
     expect(deleteCall).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review shell — fail closed when URL target and loaded session hive disagree
+// ---------------------------------------------------------------------------
+
+describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
+  it("does not show draft/delete controls or fetch draft endpoints when targetHiveId mismatches the capture session hive", async () => {
+    const sessionId = "sess-hive-a";
+    workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
+    const fetchMock = vi.fn(
+      async (url: string): Promise<Response> => {
+        if (url === `/api/capture-sessions/${sessionId}`) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: sessionId,
+                hiveId: "hive-test",
+                status: "stopped",
+                startedAt: "2026-06-14T08:00:00.000Z",
+                stoppedAt: "2026-06-14T08:01:00.000Z",
+                captureScope: null,
+                metadata: null,
+                evidenceSummary: null,
+                redactedSummary: null,
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(JSON.stringify({ url }), { status: 200 });
+      },
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await renderWorkflowCaptureReviewPage(sessionId);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Capture session belongs to Test Hive, but this page is targeting Target Hive",
+      );
+    });
+
+    expect(screen.queryByRole("button", { name: /delete session/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /approve draft/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /reject draft/i })).toBeNull();
+
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(calls.some(([url]) => url === `/api/capture-sessions/${sessionId}/draft`)).toBe(false);
+    expect(calls.some(([, opts]) => opts?.method === "POST" || opts?.method === "DELETE")).toBe(false);
   });
 });

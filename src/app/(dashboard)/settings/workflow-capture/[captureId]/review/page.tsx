@@ -8,6 +8,7 @@ import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } 
 
 interface CaptureSession {
   id: string;
+  hiveId: string;
   status: string;
   startedAt: string | null;
   stoppedAt: string | null;
@@ -110,14 +111,27 @@ function CaptureReviewPageContent() {
 
   useEffect(() => {
     const id = params.captureId;
-    if (!id) return;
+    if (!id || !effectiveHiveId) return;
     setLoading(true);
     setError(null);
+    setSession(null);
+    setDraftPreview(null);
+    setDraftResult(null);
+    setEditedSkillContent("");
     fetch(`/api/capture-sessions/${id}`)
       .then(async (res) => {
         const body = await res.json() as { data?: CaptureSession; error?: string };
         if (!res.ok) throw new Error(body.error ?? "Failed to load session");
         if (!body.data) throw new Error("No session data returned");
+        if (body.data.hiveId !== effectiveHiveId) {
+          const sessionHiveName = target.activeHive?.id === body.data.hiveId
+            ? target.activeHive.name
+            : body.data.hiveId;
+          const targetHiveName = target.targetHive?.name ?? effectiveHiveId;
+          throw new Error(
+            `Capture session belongs to ${sessionHiveName}, but this page is targeting ${targetHiveName}. Return to the session's hive before reviewing or mutating it.`,
+          );
+        }
         setSession(body.data);
         setDraftPreviewLoading(true);
         const draftRes = await fetch(`/api/capture-sessions/${id}/draft`);
@@ -133,7 +147,7 @@ function CaptureReviewPageContent() {
         setLoading(false);
         setDraftPreviewLoading(false);
       });
-  }, [params.captureId]);
+  }, [effectiveHiveId, params.captureId, target.activeHive, target.targetHive]);
 
   async function handleDelete() {
     if (!session) return;
