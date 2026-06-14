@@ -69,10 +69,20 @@ export interface ResolvedModelRoute {
       score: number;
       capabilityFit: number;
       costScore: number;
+      costKnown: boolean;
       speedScore: number;
       selected: boolean;
       missingAxes: string[];
       lowConfidenceAxes: string[];
+      sourceDisagreements: string[];
+      selectedSources: Array<{
+        axis: string;
+        source: string;
+        benchmarkName: string;
+        score: number;
+        confidence: string;
+        modelVersionMatched: string;
+      }>;
       outcomeScore?: number;
       outcomeSampleSize?: number;
     }>;
@@ -108,6 +118,7 @@ export function resolveConfiguredModelRoute(
   const costQualityBalance = normalizeRoutingBalance(policy.preferences?.costQualityBalance);
   const { qualityWeight, costWeight } = weightsForRoutingBalance(costQualityBalance);
   const priorityReason = `routing priority ${routingPriorityLabel(costQualityBalance)}`;
+  const costTieBreakerEnabled = costQualityBalance < 100;
   const allowlist = new Set(policy.roleRoutes?.[input.roleSlug]?.candidateModels ?? []);
   const classification = classifyModelRoutingTask({
     roleSlug: input.roleSlug,
@@ -142,7 +153,7 @@ export function resolveConfiguredModelRoute(
 
   const best = ranked[0];
   const hasCapabilityRankedCandidates = ranked.some((candidate) => hasCapabilityScores(candidate.candidate));
-  const closeScoreWinner = best && hasCapabilityRankedCandidates
+  const closeScoreWinner = best && hasCapabilityRankedCandidates && costTieBreakerEnabled
     ? ranked
       .filter((candidate) => best.score - candidate.score <= profileConfig.closeScoreDelta)
       .filter((candidate) => best.capabilityFit - candidate.capabilityFit <= profileConfig.closeScoreDelta)
@@ -182,10 +193,13 @@ export function resolveConfiguredModelRoute(
         score: candidate.score,
         capabilityFit: candidate.capabilityFit,
         costScore: candidate.costScore,
+        costKnown: candidate.costKnown,
         speedScore: candidate.speedScore,
         selected: candidate.candidate === selected,
         missingAxes: candidate.missingAxes,
         lowConfidenceAxes: candidate.lowConfidenceAxes,
+        sourceDisagreements: candidate.sourceDisagreements,
+        selectedSources: candidate.selectedSources,
         outcomeScore: candidate.outcome?.score,
         outcomeSampleSize: candidate.outcome?.sampleSize,
       })),
@@ -216,17 +230,31 @@ interface ScoredCandidate {
   score: number;
   capabilityFit: number;
   costScore: number;
+  costKnown: boolean;
   speedScore: number;
   missingAxes: string[];
   lowConfidenceAxes: string[];
+  sourceDisagreements: string[];
+  selectedSources: Array<{
+    axis: string;
+    source: string;
+    benchmarkName: string;
+    score: number;
+    confidence: string;
+    modelVersionMatched: string;
+  }>;
   outcome?: ModelRoutingOutcomeScore;
 }
+
+const UNKNOWN_COST_SCORE = 55;
+const SOURCE_DISAGREEMENT_DELTA = 20;
 
 function scoreCandidate(
   candidate: ModelRoutingCandidate,
   options: ScoreCandidateOptions,
 ): ScoredCandidate {
-  const costScore = Number(candidate.costScore ?? 100);
+  const costKnown = candidate.costScore !== undefined && Number.isFinite(Number(candidate.costScore));
+  const costScore = costKnown ? Number(candidate.costScore) : UNKNOWN_COST_SCORE;
   const outcome = outcomeScoreForProfile(candidate, options.profileConfig.profile);
 
   if (!hasCapabilityScores(candidate)) {
@@ -240,28 +268,42 @@ function scoreCandidate(
       score,
       capabilityFit: qualityScore,
       costScore,
+      costKnown,
       speedScore: 0,
       missingAxes: [],
       lowConfidenceAxes: [],
+      sourceDisagreements: [],
+      selectedSources: [],
       outcome,
     };
   }
 
-  const capabilityScores = new Map(candidate.capabilityScores.map((score) => [score.axis, score]));
+  const capabilityScores = groupCapabilityScoresByAxis(candidate.capabilityScores);
   let weightedScore = 0;
   let knownWeight = 0;
   let totalPossibleWeight = 0;
   const missingAxes: string[] = [];
   const lowConfidenceAxes: string[] = [];
+  const sourceDisagreements: string[] = [];
+  const selectedSources: ScoredCandidate["selectedSources"] = [];
 
   for (const [axis, weight] of Object.entries(options.profileConfig.weights)) {
     if (axis === "cost") continue;
     totalPossibleWeight += weight;
 
-    const score = capabilityScores.get(axis as ModelCapabilityScoreView["axis"]);
+    const axisScores = capabilityScores.get(axis as ModelCapabilityScoreView["axis"]) ?? [];
+    const score = selectPreferredCapabilityScore(axisScores);
     if (!score && axis === "overall_quality" && candidate.qualityScore !== undefined) {
       knownWeight += weight;
       weightedScore += Number(candidate.qualityScore ?? 0) * weight;
+      selectedSources.push({
+        axis,
+        source: "hive_models.benchmark_quality_score",
+        benchmarkName: "benchmark_quality_score",
+        score: Number(candidate.qualityScore ?? 0),
+        confidence: "medium",
+        modelVersionMatched: candidate.model,
+      });
       continue;
     }
     if (!score) {
@@ -273,14 +315,24 @@ function scoreCandidate(
     if (score.confidence === "low") {
       lowConfidenceAxes.push(axis);
     }
+    const disagreement = sourceDisagreementForAxis(axis, axisScores);
+    if (disagreement) sourceDisagreements.push(disagreement);
+    selectedSources.push({
+      axis,
+      source: score.source,
+      benchmarkName: score.benchmarkName,
+      score: Number(score.score ?? 0),
+      confidence: score.confidence,
+      modelVersionMatched: score.modelVersionMatched,
+    });
 
-    weightedScore += Number(score.score ?? 0) * weight * confidenceMultiplier(score.confidence);
+    weightedScore += capabilityScoreValueForRouting(score) * weight * confidenceMultiplier(score.confidence);
   }
 
   const rawCapabilityFit = knownWeight > 0 ? weightedScore / knownWeight : 0;
   const coverageRatio = totalPossibleWeight > 0 ? knownWeight / totalPossibleWeight : 0;
   const capabilityFit = qualityScoreWithOutcome(rawCapabilityFit * coverageRatio, outcome);
-  const profileCostWeight = Number(options.profileConfig.weights.cost ?? 0);
+  const profileCostWeight = options.costWeight === 0 ? 0 : Number(options.profileConfig.weights.cost ?? 0);
   const lowConfidencePenalty = lowConfidenceAxes.length * 4;
   const score =
     capabilityFit * options.qualityWeight -
@@ -292,9 +344,12 @@ function scoreCandidate(
     score,
     capabilityFit,
     costScore,
-    speedScore: Number(capabilityScores.get("speed")?.score ?? 0),
+    costKnown,
+    speedScore: capabilityScoreValueForRouting(selectPreferredCapabilityScore(capabilityScores.get("speed") ?? [])),
     missingAxes,
     lowConfidenceAxes,
+    sourceDisagreements,
+    selectedSources,
     outcome,
   };
 }
@@ -303,6 +358,45 @@ function hasCapabilityScores(
   candidate: ModelRoutingCandidate,
 ): candidate is ModelRoutingCandidate & { capabilityScores: ModelCapabilityScoreView[] } {
   return Array.isArray(candidate.capabilityScores) && candidate.capabilityScores.length > 0;
+}
+
+function groupCapabilityScoresByAxis(
+  scores: ModelCapabilityScoreView[],
+): Map<ModelCapabilityScoreView["axis"], ModelCapabilityScoreView[]> {
+  const grouped = new Map<ModelCapabilityScoreView["axis"], ModelCapabilityScoreView[]>();
+  for (const score of scores) {
+    grouped.set(score.axis, [...(grouped.get(score.axis) ?? []), score]);
+  }
+  return grouped;
+}
+
+function selectPreferredCapabilityScore(scores: ModelCapabilityScoreView[]): ModelCapabilityScoreView | undefined {
+  return [...scores].sort(compareCapabilityScorePreference)[0];
+}
+
+function compareCapabilityScorePreference(
+  a: ModelCapabilityScoreView,
+  b: ModelCapabilityScoreView,
+): number {
+  return confidenceRank(b.confidence) - confidenceRank(a.confidence) ||
+    capabilitySourceRank(b.source) - capabilitySourceRank(a.source) ||
+    a.source.localeCompare(b.source) ||
+    a.benchmarkName.localeCompare(b.benchmarkName) ||
+    Number(b.updatedAt?.getTime() ?? 0) - Number(a.updatedAt?.getTime() ?? 0) ||
+    a.benchmarkName.localeCompare(b.benchmarkName);
+}
+
+function sourceDisagreementForAxis(axis: string, scores: ModelCapabilityScoreView[]): string | null {
+  if (scores.length < 2) return null;
+  const values = scores
+    .map((score) => capabilityScoreValueForRouting(score))
+    .filter((score) => Number.isFinite(score));
+  if (values.length < 2) return null;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max - min < SOURCE_DISAGREEMENT_DELTA) return null;
+  const sources = [...new Set(scores.map((score) => `${score.source}/${score.benchmarkName}`))].join(", ");
+  return `${axis}: benchmark sources disagree by ${(max - min).toFixed(1)} points (${sources})`;
 }
 
 function outcomeScoreForProfile(
@@ -335,6 +429,31 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function capabilitySourceRank(source: string): number {
+  const normalized = source.trim().toLowerCase();
+  if (normalized === "benchlm") return 4;
+  if (normalized === "llm stats") return 3;
+  if (normalized === "artificial analysis") return 2;
+  return 1;
+}
+
+function capabilityScoreValueForRouting(score: ModelCapabilityScoreView | undefined): number {
+  if (!score) return 0;
+  const value = Number(score.score ?? 0);
+  if (!Number.isFinite(value)) return 0;
+  if (score.axis !== "speed") return Math.max(0, Math.min(100, value));
+  // LLM Stats speed can be raw throughput; route on a bounded score so fast
+  // models do not swamp quality axes, while preserving the raw score in
+  // selectedSources/rawScore for audit. 250 c/s or higher is treated as 100.
+  return Math.max(0, Math.min(100, (value / 250) * 100));
+}
+
+function confidenceRank(confidence: ModelCapabilityScoreView["confidence"]): number {
+  if (confidence === "high") return 3;
+  if (confidence === "medium") return 2;
+  return 1;
+}
+
 function confidenceMultiplier(confidence: ModelCapabilityScoreView["confidence"]): number {
   if (confidence === "high") return 1;
   if (confidence === "medium") return 0.85;
@@ -353,6 +472,9 @@ function routingPriorityLabel(costQualityBalance: number): string {
   if (costQualityBalance < 50) {
     return `${costQualityBalance}/100 toward Cost`;
   }
+  if (costQualityBalance === 100) {
+    return "100/100 Pure Quality";
+  }
   if (costQualityBalance > 50) {
     return `${costQualityBalance}/100 toward Quality`;
   }
@@ -366,7 +488,7 @@ function weightsForRoutingBalance(
 
   return {
     qualityWeight: 0.25 + balance * 1.75,
-    costWeight: 2 - balance * 1.75,
+    costWeight: costQualityBalance === 100 ? 0 : 2 - balance * 1.75,
   };
 }
 

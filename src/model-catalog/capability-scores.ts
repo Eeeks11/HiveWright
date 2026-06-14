@@ -41,12 +41,13 @@ export interface ModelCapabilityScoreView extends ModelCapabilityScoreInput {
   updatedAt: Date | null;
 }
 
-export function normalizeCapabilityScore(value: number): number {
+export function normalizeCapabilityScore(value: number, axis?: ModelCapabilityAxis): number {
   if (!Number.isFinite(value)) {
     return 0;
   }
 
-  const clamped = Math.max(0, Math.min(100, value));
+  const upperBound = axis === "speed" ? 999.99 : 100;
+  const clamped = Math.max(0, Math.min(upperBound, value));
   return Math.round(clamped * 100) / 100;
 }
 
@@ -81,7 +82,7 @@ export async function upsertModelCapabilityScores(
         ${score.modelId},
         ${score.canonicalModelId},
         ${score.axis},
-        ${normalizeCapabilityScore(score.score)},
+        ${normalizeCapabilityScore(score.score, score.axis)},
         ${score.rawScore},
         ${score.source},
         ${score.sourceUrl},

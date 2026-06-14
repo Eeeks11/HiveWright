@@ -246,7 +246,7 @@ describe("/api/model-routing", () => {
     expect(loaded?.candidates).toEqual([]);
   });
 
-  it("returns only the best capability score per axis in routing models and candidates", async () => {
+  it("returns all capability score sources per axis in routing models and candidates", async () => {
     await sql`
       INSERT INTO hive_models (
         hive_id,
@@ -292,6 +292,18 @@ describe("/api/model-routing", () => {
         score: 44.4,
         source: "source-high-new",
         confidence: "high",
+      }),
+      expect.objectContaining({
+        axis: "coding",
+        score: 33.3,
+        source: "source-high-old",
+        confidence: "high",
+      }),
+      expect.objectContaining({
+        axis: "coding",
+        score: 55.5,
+        source: "source-medium-newer",
+        confidence: "medium",
       }),
     ]);
     expect(body.data.policy.candidates[0].capabilityScores).toEqual(
@@ -405,6 +417,17 @@ describe("/api/model-routing", () => {
       profile: "coding",
     });
     expect(previewBody.data.previewRoute.explanation).toContain("coding");
+    const selectedPreviewCandidate = previewBody.data.previewRoute.scoreBreakdown.candidates.find(
+      (candidate: { selected: boolean }) => candidate.selected,
+    );
+    expect(selectedPreviewCandidate.selectedSources).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        axis: "coding",
+        source: "llm-stats",
+        benchmarkName: "Coding Arena",
+      }),
+    ]));
+    expect(selectedPreviewCandidate.sourceDisagreements).toEqual([]);
 
     const acceptancePreviewRes = await GET(new Request(
       `http://localhost/api/model-routing?hiveId=${HIVE_ID}&previewTitle=Draft%20docs&previewBrief=Write%20release%20copy&previewAcceptanceCriteria=TypeScript%20tests%20pass`,

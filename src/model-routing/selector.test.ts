@@ -11,6 +11,8 @@ function capability(
   axis: ModelCapabilityAxis,
   score: number,
   confidence: ModelCapabilityScoreView["confidence"] = "high",
+  source = "test",
+  updatedAt: Date | null = null,
 ): ModelCapabilityScoreView {
   return {
     modelCatalogId: null,
@@ -21,12 +23,12 @@ function capability(
     axis,
     score,
     rawScore: null,
-    source: "test",
+    source,
     sourceUrl: "https://example.test",
-    benchmarkName: "test-benchmark",
+    benchmarkName: `${source}-benchmark`,
     modelVersionMatched: "test/model",
     confidence,
-    updatedAt: null,
+    updatedAt,
   };
 }
 
@@ -247,6 +249,149 @@ describe("resolveConfiguredModelRoute", () => {
     });
     expect(route.reason).toContain("routing priority 90/100 toward Quality");
     expect(route.reason).not.toContain("quality>=");
+  });
+
+  it("ignores cost completely when routing priority is pure quality", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 100 },
+      candidates: [
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.5",
+          qualityScore: 97,
+          costScore: 100,
+        },
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.4",
+          qualityScore: 95,
+          costScore: 0,
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "dev-agent",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+    });
+
+    expect(route).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.5",
+      source: "auto_policy",
+    });
+    expect(route.reason).toContain("100/100 Pure Quality");
+  });
+
+  it("surfaces selected capability provenance and source disagreement", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 90 },
+      candidates: [
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.4",
+          costScore: 20,
+          capabilityScores: [
+            capability("coding", 90, "medium", "BenchLM"),
+            capability("coding", 45, "medium", "LLM Stats"),
+            capability("reasoning", 80, "high", "BenchLM"),
+            capability("tool_use", 70, "high", "BenchLM"),
+          ],
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "dev-agent",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+      taskContext: {
+        taskTitle: "Fix TypeScript test",
+        taskBrief: "Implement code and run tests",
+      },
+    });
+
+    const selected = route.scoreBreakdown?.candidates.find((candidate) => candidate.selected);
+    expect(selected?.selectedSources.some((source) => source.axis === "coding" && source.source === "BenchLM")).toBe(true);
+    expect(selected?.sourceDisagreements.some((item) => item.includes("coding"))).toBe(true);
+  });
+
+  it("prefers benchmark source reliability before refresh timestamp when sources tie on confidence", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 100 },
+      candidates: [
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.4",
+          costScore: 80,
+          capabilityScores: [
+            capability("coding", 91, "high", "LLM Stats", new Date("2026-01-02T00:00:00Z")),
+            capability("coding", 89, "high", "BenchLM", new Date("2026-01-01T00:00:00Z")),
+            capability("reasoning", 80, "high", "BenchLM"),
+            capability("tool_use", 75, "high", "BenchLM"),
+          ],
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "dev-agent",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+      taskContext: {
+        taskTitle: "Fix failing TypeScript test",
+        taskBrief: "Implement code and run tests",
+      },
+    });
+
+    const selected = route.scoreBreakdown?.candidates.find((candidate) => candidate.selected);
+    expect(selected?.selectedSources.find((source) => source.axis === "coding")).toMatchObject({
+      source: "BenchLM",
+      score: 89,
+    });
+  });
+
+  it("uses bounded routing scores, not raw throughput, for speed source disagreement", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 75 },
+      candidates: [
+        {
+          adapterType: "local",
+          model: "ollama/qwen3:32b",
+          costScore: 1,
+          capabilityScores: [
+            capability("speed", 220, "high", "LLM Stats"),
+            capability("speed", 260, "high", "BenchLM"),
+            capability("writing", 82, "high", "BenchLM"),
+            capability("long_context", 82, "high", "BenchLM"),
+            capability("reasoning", 82, "high", "BenchLM"),
+            capability("overall_quality", 80, "high", "BenchLM"),
+          ],
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "summarizer",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+      taskContext: {
+        taskTitle: "Summarize meeting notes",
+        taskBrief: "Create a short summary",
+      },
+    });
+
+    const selected = route.scoreBreakdown?.candidates.find((candidate) => candidate.selected);
+    expect(selected?.sourceDisagreements.some((item) => item.startsWith("speed:"))).toBe(false);
   });
 
   it("uses internal outcome feedback for the classified task profile", () => {
@@ -769,9 +914,9 @@ describe("resolveConfiguredModelRoute", () => {
     expect(route.scoreBreakdown?.selectedScore).toBeGreaterThan(0);
   });
 
-  it("chooses the cheaper writing model when capability fit is close", () => {
+  it("chooses the cheaper writing model when capability fit is close and cost still matters", () => {
     const policy: ModelRoutingPolicy = {
-      preferences: { costQualityBalance: 100 },
+      preferences: { costQualityBalance: 90 },
       candidates: [
         {
           adapterType: "premium",
@@ -816,7 +961,7 @@ describe("resolveConfiguredModelRoute", () => {
       source: "auto_policy",
       profile: "writing",
     });
-    expect(route.reason).toContain("close score");
+    expect(route.reason).toContain("90/100 toward Quality");
   });
 
   it("does not choose a cheaper close-score candidate with much lower capability fit", () => {
