@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, CircleDashed, Clock3 } from "lucide-react";
@@ -28,7 +28,7 @@ const statusIcon = {
   not_set_up: CircleDashed,
 };
 
-export default function SetupHealthPage() {
+function SetupHealthPageContent() {
   const { selected, hives, loading: hivesLoading } = useHiveContext();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
@@ -165,4 +165,12 @@ function withTargetHiveId(href: string, targetHiveId: string | null) {
   const params = new URLSearchParams(query);
   params.set("targetHiveId", targetHiveId);
   return `${base}?${params.toString()}`;
+}
+
+export default function SetupHealthPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Setup health loading...</div>}>
+      <SetupHealthPageContent />
+    </Suspense>
+  );
 }
