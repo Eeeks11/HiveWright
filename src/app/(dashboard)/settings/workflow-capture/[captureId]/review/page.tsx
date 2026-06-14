@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 interface CaptureSession {
   id: string;
+  hiveId: string;
   status: string;
   startedAt: string | null;
   stoppedAt: string | null;
@@ -87,10 +89,14 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-export default function CaptureReviewPage() {
+function CaptureReviewPageContent() {
   const params = useParams<{ captureId: string }>();
   const { selected } = useHiveContext();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -105,14 +111,27 @@ export default function CaptureReviewPage() {
 
   useEffect(() => {
     const id = params.captureId;
-    if (!id) return;
+    if (!id || !effectiveHiveId) return;
     setLoading(true);
     setError(null);
+    setSession(null);
+    setDraftPreview(null);
+    setDraftResult(null);
+    setEditedSkillContent("");
     fetch(`/api/capture-sessions/${id}`)
       .then(async (res) => {
         const body = await res.json() as { data?: CaptureSession; error?: string };
         if (!res.ok) throw new Error(body.error ?? "Failed to load session");
         if (!body.data) throw new Error("No session data returned");
+        if (body.data.hiveId !== effectiveHiveId) {
+          const sessionHiveName = target.activeHive?.id === body.data.hiveId
+            ? target.activeHive.name
+            : body.data.hiveId;
+          const targetHiveName = target.targetHive?.name ?? effectiveHiveId;
+          throw new Error(
+            `Capture session belongs to ${sessionHiveName}, but this page is targeting ${targetHiveName}. Return to the session's hive before reviewing or mutating it.`,
+          );
+        }
         setSession(body.data);
         setDraftPreviewLoading(true);
         const draftRes = await fetch(`/api/capture-sessions/${id}/draft`);
@@ -128,11 +147,14 @@ export default function CaptureReviewPage() {
         setLoading(false);
         setDraftPreviewLoading(false);
       });
-  }, [params.captureId]);
+  }, [effectiveHiveId, params.captureId, target.activeHive, target.targetHive]);
 
   async function handleDelete() {
     if (!session) return;
     if (!window.confirm("Delete this capture session and all metadata? This cannot be undone.")) {
+      return;
+    }
+    if (!target.confirmCrossHiveWrite("Delete workflow capture session")) {
       return;
     }
     setDeleting(true);
@@ -142,7 +164,7 @@ export default function CaptureReviewPage() {
         const body = await res.json() as { error?: string };
         throw new Error(body.error ?? "Delete failed");
       }
-      router.push("/setup/workflow-capture");
+      router.push(target.withTargetHiveId("/setup/workflow-capture"));
     } catch (e) {
       setError((e as Error).message);
       setDeleting(false);
@@ -151,6 +173,9 @@ export default function CaptureReviewPage() {
 
   async function handleApproveDraft() {
     if (!session || draftResult || draftCreating) return;
+    if (!target.confirmCrossHiveWrite("Approve workflow capture draft")) {
+      return;
+    }
     setDraftCreating(true);
     setDraftError(null);
     try {
@@ -175,6 +200,9 @@ export default function CaptureReviewPage() {
 
   async function handleRejectDraft() {
     if (!session || draftRejecting) return;
+    if (!target.confirmCrossHiveWrite("Reject workflow capture draft")) {
+      return;
+    }
     setDraftRejecting(true);
     setDraftError(null);
     try {
@@ -195,7 +223,11 @@ export default function CaptureReviewPage() {
     }
   }
 
-  if (!selected) {
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  }
+
+  if (!effectiveHiveId) {
     return <p className="text-amber-400/60">Select a hive to view this capture session.</p>;
   }
 
@@ -207,9 +239,11 @@ export default function CaptureReviewPage() {
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Link href="/setup/workflow-capture" className="text-sm text-amber-400/60 hover:text-amber-200">
+          <Link href={target.withTargetHiveId("/setup/workflow-capture")} className="text-sm text-amber-400/60 hover:text-amber-200">
             Back
           </Link>
           <h1 className="text-2xl font-semibold text-amber-50">Session review</h1>
@@ -394,5 +428,13 @@ export default function CaptureReviewPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function CaptureReviewPage() {
+  return (
+    <Suspense fallback={<p className="text-amber-400/60">Loading capture review...</p>}>
+      <CaptureReviewPageContent />
+    </Suspense>
   );
 }

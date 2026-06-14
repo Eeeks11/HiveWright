@@ -22,6 +22,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 // ---- router mock (must be before any dynamic import) ----
 const routerPushMock = vi.fn();
 const workflowContextMock = vi.hoisted(() => ({
+  params: {} as Record<string, string>,
   searchParams: new URLSearchParams(),
   value: {
     selected: {
@@ -41,7 +42,7 @@ const workflowContextMock = vi.hoisted(() => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPushMock }),
-  useParams: () => ({}),
+  useParams: () => workflowContextMock.params,
   useSearchParams: () => workflowContextMock.searchParams,
   usePathname: () => "/setup/workflow-capture",
 }));
@@ -122,6 +123,7 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   routerPushMock.mockReset();
 
+  workflowContextMock.params = {};
   workflowContextMock.searchParams = new URLSearchParams();
   workflowContextMock.value.selected = {
     id: "hive-test",
@@ -168,6 +170,14 @@ async function renderWorkflowCapturePage() {
     "../../src/app/(dashboard)/settings/workflow-capture/page"
   );
   return render(<WorkflowCapturePage />);
+}
+
+async function renderWorkflowCaptureReviewPage(captureId: string) {
+  workflowContextMock.params = { captureId };
+  const { default: WorkflowCaptureReviewPage } = await import(
+    "../../src/app/(dashboard)/settings/workflow-capture/[captureId]/review/page"
+  );
+  return render(<WorkflowCaptureReviewPage />);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,5 +419,193 @@ describe("WorkflowCapturePage — Cancel → DELETE /api/capture-sessions/[id]",
         u === `/api/capture-sessions/${sessionId}` && o?.method === "DELETE",
     );
     expect(deleteCall).toBeUndefined();
+  });
+});
+
+function makeCaptureSession(sessionId: string, hiveId = "hive-target") {
+  return {
+    id: sessionId,
+    hiveId,
+    status: "stopped",
+    startedAt: "2026-06-14T08:00:00.000Z",
+    stoppedAt: "2026-06-14T08:01:00.000Z",
+    captureScope: null,
+    metadata: null,
+    evidenceSummary: null,
+    redactedSummary: null,
+  };
+}
+
+function makeDraftPreview() {
+  return {
+    preview: {
+      title: "Captured workflow",
+      observedSteps: ["Open dashboard", "Review output"],
+      inferredInputs: ["Owner decision"],
+      decisionNotes: ["Keep inactive until review"],
+      confidence: {
+        level: "medium",
+        score: 0.72,
+        rationale: "Metadata-only capture contains enough workflow structure.",
+      },
+      sensitiveDataWarnings: [],
+      redactionNotes: [],
+      suggestedSkillContent: "---\nname: captured-workflow\n---\n# Captured workflow\n",
+      source: {
+        captureSessionId: "sess-review",
+        fieldsUsed: ["captureScope", "metadata"],
+        rawMediaAccepted: false,
+      },
+    },
+    previewStatus: "generated",
+    approvedDraftId: null,
+    approvedDraftStatus: null,
+    rawMediaAccepted: false,
+  };
+}
+
+function mockReviewFetch(sessionId: string) {
+  const fetchMock = vi.fn(
+    async (url: string, opts?: RequestInit): Promise<Response> => {
+      if (url === `/api/capture-sessions/${sessionId}` && !opts?.method) {
+        return new Response(JSON.stringify({ data: makeCaptureSession(sessionId) }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `/api/capture-sessions/${sessionId}/draft` && !opts?.method) {
+        return new Response(JSON.stringify({ data: makeDraftPreview() }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            data: {
+              draft: {
+                id: "draft-1",
+                slug: "captured-workflow",
+                status: "inactive",
+                qaReviewStatus: null,
+                securityReviewStatus: null,
+                internalSourceRef: sessionId,
+                provenanceUrl: null,
+                publishedAt: null,
+              },
+              created: true,
+              duplicate: false,
+              message: "Inactive draft created.",
+              rawMediaAccepted: false,
+            },
+          }),
+          { status: 201, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "DELETE") {
+        return new Response(
+          JSON.stringify({ data: { previewStatus: "rejected" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ url, method: opts?.method }), { status: 200 });
+    },
+  );
+  globalThis.fetch = fetchMock as typeof globalThis.fetch;
+  return fetchMock;
+}
+
+// ---------------------------------------------------------------------------
+// Review shell — cross-hive draft write confirmation
+// ---------------------------------------------------------------------------
+
+describe("WorkflowCaptureReviewPage — target-mode draft writes", () => {
+  it("does not approve a draft when cross-hive confirmation is cancelled", async () => {
+    const sessionId = "sess-review-approve";
+    workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetchMock = mockReviewFetch(sessionId);
+
+    await renderWorkflowCaptureReviewPage(sessionId);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /approve draft/i })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /approve draft/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Approve workflow capture draft will update Target Hive, not your active hive Test Hive"),
+    );
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(
+      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "POST"),
+    ).toBe(false);
+  });
+
+  it("does not reject a draft when cross-hive confirmation is cancelled", async () => {
+    const sessionId = "sess-review-reject";
+    workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetchMock = mockReviewFetch(sessionId);
+
+    await renderWorkflowCaptureReviewPage(sessionId);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /reject draft/i })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /reject draft/i }));
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Reject workflow capture draft will update Target Hive, not your active hive Test Hive"),
+    );
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(
+      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "DELETE"),
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review shell — fail closed when URL target and loaded session hive disagree
+// ---------------------------------------------------------------------------
+
+describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
+  it("does not show draft/delete controls or fetch draft endpoints when targetHiveId mismatches the capture session hive", async () => {
+    const sessionId = "sess-hive-a";
+    workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
+    const fetchMock = vi.fn(
+      async (url: string): Promise<Response> => {
+        if (url === `/api/capture-sessions/${sessionId}`) {
+          return new Response(JSON.stringify({ data: makeCaptureSession(sessionId, "hive-test") }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ url }), { status: 200 });
+      },
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await renderWorkflowCaptureReviewPage(sessionId);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Capture session belongs to Test Hive, but this page is targeting Target Hive",
+      );
+    });
+
+    expect(screen.queryByRole("button", { name: /delete session/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /approve draft/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /reject draft/i })).toBeNull();
+
+    const calls = fetchMock.mock.calls as unknown as FetchCall[];
+    expect(calls.some(([url]) => url === `/api/capture-sessions/${sessionId}/draft`)).toBe(false);
+    expect(calls.some(([, opts]) => opts?.method === "POST" || opts?.method === "DELETE")).toBe(false);
   });
 });

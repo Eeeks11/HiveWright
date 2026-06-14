@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 type QualityFeedbackDecision = {
   id: string;
@@ -69,8 +70,11 @@ async function fetchFeedback(
 
 function QualityFeedbackPageInner() {
   const searchParams = useSearchParams();
-  const { selected, hives, loading: hivesLoading } = useHiveContext();
-  const selectedHiveId = searchParams.get("hiveId") ?? selected?.id ?? hives[0]?.id ?? null;
+  const { selected, loading: hivesLoading } = useHiveContext();
+  const legacyHiveId = searchParams.get("hiveId");
+  const requestedTargetHiveId = searchParams.get("targetHiveId") ?? legacyHiveId;
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const selectedHiveId = target.effectiveHiveId;
   const qaRunId = searchParams.get("qaRunId");
   const [pending, setPending] = useState<QualityFeedbackDecision[]>([]);
   const [resolved, setResolved] = useState<QualityFeedbackDecision[]>([]);
@@ -104,8 +108,8 @@ function QualityFeedbackPageInner() {
 
   const selectedTitle = useMemo(() => {
     if (!selectedHiveId) return null;
-    return hives.find((hive) => hive.id === selectedHiveId)?.name ?? selected?.name ?? "Active hive";
-  }, [hives, selected?.name, selectedHiveId]);
+    return target.targetHive?.name ?? selected?.name ?? "Active hive";
+  }, [selected?.name, target.targetHive?.name, selectedHiveId]);
 
   async function respond(decisionId: string, response: "quality_feedback" | "dismiss_quality_feedback") {
     const rating = ratings[decisionId];
@@ -113,6 +117,7 @@ function QualityFeedbackPageInner() {
       setError("Pick a rating from 1 to 10 before submitting.");
       return;
     }
+    if (!target.confirmCrossHiveWrite("Submit quality feedback")) return;
     setSubmitting(decisionId);
     setError(null);
     try {
@@ -120,6 +125,7 @@ function QualityFeedbackPageInner() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hiveId: selectedHiveId,
           response,
           rating: response === "quality_feedback" ? rating : undefined,
           comment: comments[decisionId] ?? "",
@@ -137,13 +143,17 @@ function QualityFeedbackPageInner() {
     }
   }
 
-  if (hivesLoading || loading) {
+  if (hivesLoading || target.isResolvingTarget) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold text-amber-950 dark:text-amber-100">Quality feedback</h1>
         <p className="text-sm text-amber-700/70 dark:text-amber-300/70">Loading...</p>
       </div>
     );
+  }
+
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
   }
 
   if (!selectedHiveId) {
@@ -155,8 +165,19 @@ function QualityFeedbackPageInner() {
     );
   }
 
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold text-amber-950 dark:text-amber-100">Quality feedback</h1>
+        <p className="text-sm text-amber-700/70 dark:text-amber-300/70">Loading...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-7">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-amber-950 dark:text-amber-100">Quality feedback</h1>
@@ -165,7 +186,7 @@ function QualityFeedbackPageInner() {
           </p>
         </div>
         <Link
-          href="/decisions"
+          href={target.withTargetHiveId("/decisions")}
           className="rounded-md border border-amber-300/70 px-3 py-2 text-sm text-amber-900 transition hover:bg-amber-100 dark:border-white/[0.10] dark:text-amber-100 dark:hover:bg-white/[0.05]"
         >
           Decisions

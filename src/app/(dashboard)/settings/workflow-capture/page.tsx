@@ -107,6 +107,7 @@ function WorkflowCapturePageContent() {
     ) {
       return;
     }
+    if (!target.confirmCrossHiveWrite("Stop workflow capture")) return;
     const sessionId = sessionIdRef.current;
     syncPhase("stopping");
     cleanupMedia();
@@ -135,7 +136,7 @@ function WorkflowCapturePageContent() {
     routerRef.current.push(
       withTargetHiveId(`/setup/workflow-capture/${sessionId}/review`, targetHiveId),
     );
-  }, [cleanupMedia, targetHiveId]);
+  }, [cleanupMedia, target, targetHiveId]);
 
   // Keep a stable ref so stream/recorder event handlers always call the latest version
   const triggerStopRef = useRef(triggerStop);
@@ -283,6 +284,9 @@ function WorkflowCapturePageContent() {
       return;
     }
     if (!window.confirm("Discard this recording? Nothing will be saved.")) {
+      return;
+    }
+    if (!target.confirmCrossHiveWrite("Cancel workflow capture")) {
       return;
     }
 

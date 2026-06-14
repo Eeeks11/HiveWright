@@ -7,6 +7,11 @@ import DecisionsPage from "../../src/app/(dashboard)/decisions/page";
 
 const HIVE_ID = "b151c196-5883-4c43-b6e7-d2ed181d2f50";
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/decisions",
+}));
+
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => ({
     selected: {
@@ -15,7 +20,16 @@ vi.mock("@/components/hive-context", () => ({
       slug: "hivewright",
       type: "business",
     },
+    hives: [
+      {
+        id: HIVE_ID,
+        name: "HiveWright",
+        slug: "hivewright",
+        type: "business",
+      },
+    ],
     loading: false,
+    hasProvider: true,
   }),
 }));
 
@@ -298,6 +312,7 @@ describe("<DecisionsPage>", () => {
       );
       expect(respondPosts).toHaveLength(1);
       expect(JSON.parse(String(respondPosts[0][1]?.body))).toEqual({
+        hiveId: HIVE_ID,
         response: "discussed",
         comment: "Use the faint honeycomb direction.",
       });
