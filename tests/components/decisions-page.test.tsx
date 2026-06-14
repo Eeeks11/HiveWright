@@ -7,6 +7,11 @@ import DecisionsPage from "../../src/app/(dashboard)/decisions/page";
 
 const HIVE_ID = "b151c196-5883-4c43-b6e7-d2ed181d2f50";
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/decisions",
+}));
+
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => ({
     selected: {
@@ -15,14 +20,23 @@ vi.mock("@/components/hive-context", () => ({
       slug: "hivewright",
       type: "business",
     },
+    hives: [
+      {
+        id: HIVE_ID,
+        name: "HiveWright",
+        slug: "hivewright",
+        type: "business",
+      },
+    ],
     loading: false,
+    hasProvider: true,
   }),
 }));
 
 function decision(overrides: Record<string, unknown> = {}) {
   return {
     id: "decision-1",
-    title: "Choose Gemini CLI authentication",
+    title: "Choose Gemini CLI authentication?",
     context: "The adapter needs a runtime auth path.",
     recommendation: "Use the owner-scoped GCA login.",
     options: [],
@@ -160,7 +174,7 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
-    await screen.findByRole("link", { name: "Choose Gemini CLI authentication" });
+    await screen.findByRole("link", { name: "Choose Gemini CLI authentication?" });
 
     const listCallsBeforeToggle = fetchMock.mock.calls
       .map(([url]) => String(url))
@@ -197,7 +211,7 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
-    await screen.findByRole("link", { name: "Choose Gemini CLI authentication" });
+    await screen.findByRole("link", { name: "Choose Gemini CLI authentication?" });
     expect(screen.queryByText(/^supervisor_flagged$/i)).toBeNull();
     expect(screen.queryByText(/^decision$/i)).toBeNull();
   });
@@ -284,7 +298,7 @@ describe("<DecisionsPage>", () => {
 
     render(<DecisionsPage />);
 
-    expect(await screen.findByRole("link", { name: "Choose Gemini CLI authentication" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: "Choose Gemini CLI authentication?" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Discuss" }));
     const input = await screen.findByPlaceholderText("Type a message...");
     fireEvent.change(input, {
@@ -298,6 +312,7 @@ describe("<DecisionsPage>", () => {
       );
       expect(respondPosts).toHaveLength(1);
       expect(JSON.parse(String(respondPosts[0][1]?.body))).toEqual({
+        hiveId: HIVE_ID,
         response: "discussed",
         comment: "Use the faint honeycomb direction.",
       });

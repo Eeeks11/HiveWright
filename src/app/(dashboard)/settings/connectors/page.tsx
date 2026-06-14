@@ -1,13 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
-import {
-  TargetHiveBanner,
-  UnresolvedHiveTargetMessage,
-  useResolvedHiveTarget,
-} from "@/components/hive-target-mode";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
+import { usePathname, useSearchParams } from "next/navigation";
 
 interface SetupField {
   key: string;
@@ -67,18 +63,19 @@ interface ConnectorAction {
   createdAt: string;
 }
 
-export default function ConnectorsPage() {
-  const { selected, loading: hivesLoading } = useHiveContext();
+function ConnectorsPageContent() {
+  const { selected } = useHiveContext();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const requestedTargetHiveId = searchParams.get("targetHiveId");
-  const target = useResolvedHiveTarget(requestedTargetHiveId);
-  const isResolvingRequestedTarget = Boolean(requestedTargetHiveId && target.isResolvingTarget);
-  const isBlockedTarget = Boolean(requestedTargetHiveId && (target.isResolvingTarget || target.isUnresolvedTarget));
-  const effectiveHive = requestedTargetHiveId ? (isBlockedTarget ? null : target.targetHive) : selected;
-  const effectiveHiveId = requestedTargetHiveId
-    ? (isBlockedTarget ? null : target.effectiveHiveId)
-    : selected?.id ?? null;
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : selected?.id;
+  const effectiveHiveName = targetHiveId && target.targetHive ? target.targetHive.name : selected?.name;
+  const actionPoliciesHref = targetHiveId
+    ? `/setup/action-policies?targetHiveId=${encodeURIComponent(targetHiveId)}`
+    : "/setup/action-policies";
   const [catalog, setCatalog] = useState<Connector[]>([]);
   const [installs, setInstalls] = useState<Install[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -162,7 +159,7 @@ export default function ConnectorsPage() {
 
   async function submitInstall(c: Connector) {
     if (!effectiveHiveId) return;
-    if (!confirmTargetWrite(`Install ${displayName || c.name}`)) return;
+    if (!target.confirmCrossHiveWrite(`Installing ${c.name}`)) return;
     setBusy(c.slug);
     try {
       const res = await fetch("/api/connector-installs", {
@@ -234,7 +231,7 @@ export default function ConnectorsPage() {
   }
 
   async function activateInstall(install: Install) {
-    if (!confirmTargetWrite(`Restart dispatcher for ${install.displayName}`)) return;
+    if (!target.confirmCrossHiveWrite(`Activating ${install.displayName}`)) return;
     if (!window.confirm(
       `Restart the dispatcher to bring ${install.displayName} online? In-flight tasks will be interrupted and resumed after boot.`,
     )) {
@@ -257,7 +254,7 @@ export default function ConnectorsPage() {
   }
 
   async function testInstall(install: Install) {
-    if (!confirmTargetWrite(`Test ${install.displayName}`)) return;
+    if (!target.confirmCrossHiveWrite(`Testing ${install.displayName}`)) return;
     setBusy(install.id);
     setFlash(null);
     try {
@@ -281,7 +278,7 @@ export default function ConnectorsPage() {
   }
 
   async function removeInstall(install: Install) {
-    if (!confirmTargetWrite(`Remove ${install.displayName}`)) return;
+    if (!target.confirmCrossHiveWrite(`Removing ${install.displayName}`)) return;
     if (!window.confirm(`Remove ${install.displayName}? Existing agent calls using it will start failing.`)) {
       return;
     }
@@ -300,7 +297,7 @@ export default function ConnectorsPage() {
   async function toggleInstallStatus(install: Install) {
     const targetStatus = install.status === "active" ? "disabled" : "active";
     const action = targetStatus === "disabled" ? "Disable" : "Enable";
-    if (!confirmTargetWrite(`${action} ${install.displayName}`)) return;
+    if (!target.confirmCrossHiveWrite(`${action} ${install.displayName}`)) return;
     if (!window.confirm(`${action} ${install.displayName}? ${targetStatus === "disabled" ? "Agents will not be able to use this connector until re-enabled." : "This connector will become available to agents again."}`)) {
       return;
     }
@@ -329,17 +326,12 @@ export default function ConnectorsPage() {
     }
   }
 
-  function confirmTargetWrite(action: string): boolean {
-    if (!target.isTargetingDifferentHive || !target.targetHive || !target.activeHive) return true;
-    const typed = window.prompt(
-      `${action} will update ${target.targetHive.name}, not your active hive ${target.activeHive.name}. Type ${target.targetHive.name} to continue.`,
-    );
-    return typed === target.targetHive.name;
-  }
-
   function connectorSettingsHref(path: string): string {
-    if (!target.targetQueryHiveId) return path;
-    return target.withTargetHiveId(path);
+    if (!targetHiveId) return path;
+    const [base, query = ""] = path.split("?");
+    const params = new URLSearchParams(query);
+    params.set("targetHiveId", targetHiveId);
+    return `${base}?${params.toString()}`;
   }
 
   function oauthStartHref(c: Connector): string {
@@ -352,7 +344,7 @@ export default function ConnectorsPage() {
     return `/api/oauth/${c.slug}/start?${params.toString()}`;
   }
 
-  if (isResolvingRequestedTarget) {
+  if (targetHiveId && target.isResolvingTarget) {
     return (
       <section className="rounded-lg border p-5 text-sm text-muted-foreground">
         Resolving hive target...
@@ -360,26 +352,26 @@ export default function ConnectorsPage() {
     );
   }
 
-  if (target.isUnresolvedTarget) return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
-  if (!effectiveHive && !hivesLoading) return <p className="text-amber-400/60">Select a hive first.</p>;
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={targetHiveId} />;
+  }
+
+  if (!selected && !effectiveHiveId) return <p className="text-amber-400/60">Select a hive first.</p>;
 
   return (
     <div className="space-y-8">
-      {target.isTargetingDifferentHive ? (
-        <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={pathname || "/settings/connectors"} />
-      ) : null}
       <div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold text-amber-50">Connectors</h1>
           <a
-            href={connectorSettingsHref("/setup/action-policies")}
+            href={actionPoliciesHref}
             className="rounded border border-amber-500/30 px-3 py-1 text-sm text-amber-100 hover:bg-amber-500/10"
           >
             Action policies
           </a>
         </div>
         <p className="text-sm text-amber-600/70">
-          Wire {effectiveHive?.name ?? "this hive"} up to the outside world. Each connector uses encrypted
+          Wire {effectiveHiveName ?? "this hive"} up to the outside world. Each connector uses encrypted
           credentials and is scoped to this hive only.
         </p>
         {oauthBanner && (
@@ -394,6 +386,8 @@ export default function ConnectorsPage() {
           </p>
         )}
       </div>
+
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/connectors" />
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-amber-100">Installed</h2>
@@ -551,9 +545,7 @@ export default function ConnectorsPage() {
                       <a
                         href={oauthStartHref(c)}
                         onClick={(event) => {
-                          if (!confirmTargetWrite(`Start OAuth for ${c.name}`)) {
-                            event.preventDefault();
-                          }
+                          if (!target.confirmCrossHiveWrite(`Installing ${c.name}`)) event.preventDefault();
                         }}
                         className="flex w-full items-start gap-3 text-left"
                       >
@@ -720,5 +712,13 @@ function ConnectorCapabilitySummary({ connector }: { connector: Connector }) {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+export default function ConnectorsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Connectors loading...</div>}>
+      <ConnectorsPageContent />
+    </Suspense>
   );
 }

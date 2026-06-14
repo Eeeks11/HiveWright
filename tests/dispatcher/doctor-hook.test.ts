@@ -14,7 +14,9 @@ vi.mock("../../src/doctor", () => ({
 
 vi.mock("../../src/quality/doctor", () => ({
   parseQualityDoctorDiagnosis: vi.fn(),
+  parseQualityDoctorDiagnosisResult: vi.fn(),
   applyQualityDoctorDiagnosis: vi.fn(),
+  recordQualityDoctorContaminationHandoff: vi.fn(),
 }));
 
 /**
@@ -58,12 +60,13 @@ describe("dispatcher doctor-hook gate", () => {
 
   it("routes retried quality-doctor tasks to the quality parser", async () => {
     const diagnosis = {
+      contract: "quality_doctor_diagnosis.v1",
       cause: "wrong_role_or_brief",
       details: "QA was asked to diagnose its own already-shipped verdict.",
       recommendation: "Send to supervisor for a clearer review brief.",
     } as const;
     const sql = {} as never;
-    vi.mocked(qualityDoctor.parseQualityDoctorDiagnosis).mockReturnValue(diagnosis);
+    vi.mocked(qualityDoctor.parseQualityDoctorDiagnosisResult).mockReturnValue({ ok: true, diagnosis });
 
     const handled = await applyStructuredDoctorDiagnosis(sql, {
       assignedTo: "doctor",
@@ -74,13 +77,42 @@ describe("dispatcher doctor-hook gate", () => {
     }, "doctor output");
 
     expect(handled).toBe(true);
-    expect(qualityDoctor.parseQualityDoctorDiagnosis).toHaveBeenCalledWith("doctor output");
+    expect(qualityDoctor.parseQualityDoctorDiagnosisResult).toHaveBeenCalledWith("doctor output");
     expect(qualityDoctor.applyQualityDoctorDiagnosis).toHaveBeenCalledWith(
       sql,
       "46c6df57-0000-0000-0000-000000000000",
       diagnosis,
     );
     expect(regularDoctor.parseDoctorDiagnosis).not.toHaveBeenCalled();
+  });
+
+  it("does not fall through to regular doctor parsing when a quality retry emits contaminated SupervisorActions output", async () => {
+    const sql = {} as never;
+    vi.mocked(qualityDoctor.parseQualityDoctorDiagnosisResult).mockReturnValue({
+      ok: false,
+      kind: "contaminated",
+      reason: "Quality doctor output used non-quality diagnosis field 'action'.",
+    });
+
+    const handled = await applyStructuredDoctorDiagnosis(sql, {
+      assignedTo: "doctor",
+      createdBy: "quality-doctor",
+      id: "399226f6-0000-0000-0000-000000000000",
+      parentTaskId: "46c6df57-0000-0000-0000-000000000000",
+      title: "Quality diagnosis: QA review",
+    }, "```json\n{\"action\":\"rewrite_brief\",\"newBrief\":\"stale\"}\n```");
+
+    expect(handled).toBe(true);
+    expect(qualityDoctor.recordQualityDoctorContaminationHandoff).toHaveBeenCalledWith(
+      sql,
+      "46c6df57-0000-0000-0000-000000000000",
+      "399226f6-0000-0000-0000-000000000000",
+      "Quality doctor output used non-quality diagnosis field 'action'.",
+      "```json\n{\"action\":\"rewrite_brief\",\"newBrief\":\"stale\"}\n```",
+    );
+    expect(qualityDoctor.applyQualityDoctorDiagnosis).not.toHaveBeenCalled();
+    expect(regularDoctor.parseDoctorDiagnosis).not.toHaveBeenCalled();
+    expect(regularDoctor.applyDoctorDiagnosis).not.toHaveBeenCalled();
   });
 
   it("still recognizes the original quality-doctor task shape", () => {

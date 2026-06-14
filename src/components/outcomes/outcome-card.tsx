@@ -84,24 +84,43 @@ export function OutcomeCardView({
         </p>
       </div>
 
-      <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
-        <p>{outcome.whyItMatters}</p>
-        <p>{outcome.impactStatement}</p>
-        <p className="font-medium">{outcome.recommendedNextAction}</p>
+      <div className="space-y-3 text-sm text-zinc-700 dark:text-zinc-300">
+        <section className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">What finished</p>
+          <p>{outcome.goalTitle}</p>
+        </section>
+        <section className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">What changed / what you got</p>
+          <p>{outcome.impactStatement}</p>
+          <p>{outcome.whyItMatters}</p>
+        </section>
+        <section className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">What to open / read / use</p>
+          <p>{outcome.primaryArtifactTitle ?? "No standalone final artifact was linked; use the handoff summary and audit trail."}</p>
+        </section>
+        <section className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Owner action next</p>
+          <p className="font-medium">{outcome.recommendedNextAction}</p>
+        </section>
       </div>
 
-      <dl className="space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-        <div>Completed: {new Date(outcome.createdAt).toLocaleString()}</div>
-        {outcome.primaryArtifactTitle && (
-          <div>Output: {outcome.primaryArtifactTitle}</div>
-        )}
-        <div>
-          Goal/audit: <Link href={goalUrl} className="text-blue-600 hover:underline dark:text-blue-400">{outcome.goalTitle}</Link>
-        </div>
-        {outcome.evidenceWorkProductIds.length > 0 && (
-          <div>{outcome.evidenceWorkProductIds.length} audit artifact{outcome.evidenceWorkProductIds.length === 1 ? "" : "s"}</div>
-        )}
-      </dl>
+      <details className="rounded-md border border-zinc-200 bg-zinc-50/70 p-3 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/45 dark:text-zinc-400">
+        <summary className="cursor-pointer font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">
+          Audit / provenance
+        </summary>
+        <dl className="mt-3 space-y-1">
+          <div>Completed: {new Date(outcome.createdAt).toLocaleString()}</div>
+          {outcome.primaryArtifactTitle && (
+            <div>Output: {outcome.primaryArtifactTitle}</div>
+          )}
+          <div>
+            Goal/audit: <Link href={goalUrl} className="text-blue-600 hover:underline dark:text-blue-400">{outcome.goalTitle}</Link>
+          </div>
+          {outcome.evidenceWorkProductIds.length > 0 && (
+            <div>{outcome.evidenceWorkProductIds.length} audit artifact{outcome.evidenceWorkProductIds.length === 1 ? "" : "s"}</div>
+          )}
+        </dl>
+      </details>
 
       <div className="flex flex-wrap gap-2 border-t pt-3 dark:border-zinc-800">
         <button

@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
+import { useSearchParams } from "next/navigation";
 
 type HealthStatus = "healthy" | "unknown" | "unhealthy";
 type ModelFilter = "all" | "enabled" | "routeable" | "needs_attention" | "disabled" | "local" | "cloud";
@@ -114,8 +116,15 @@ const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   roleRoutes: {},
 };
 
-export default function ModelSetupPage() {
+function ModelSetupPageContent() {
   const { selected: selectedHive } = useHiveContext();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const target = useResolvedHiveTarget(targetHiveId ?? selectedHive?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : (selectedHive?.id ?? null);
+  const effectiveHiveName = targetHiveId && target.targetHive ? target.targetHive.name : selectedHive?.name;
   const [models, setModels] = useState<SetupModel[]>([]);
   const [credentials, setCredentials] = useState<SetupCredential[]>([]);
   const [routingPolicy, setRoutingPolicy] = useState<RoutingPolicy>(DEFAULT_ROUTING_POLICY);
@@ -158,13 +167,13 @@ export default function ModelSetupPage() {
   }, [models, modelFilter, modelSearch, routingByKey]);
 
   const load = async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
     setLoading(true);
     setError(null);
     try {
       const [setupRes, routingRes] = await Promise.all([
-        fetch(`/api/model-setup?hiveId=${selectedHive.id}`),
-        fetch(`/api/model-routing?hiveId=${selectedHive.id}`),
+        fetch(`/api/model-setup?hiveId=${effectiveHiveId}`),
+        fetch(`/api/model-routing?hiveId=${effectiveHiveId}`),
       ]);
       const setupBody = await setupRes.json().catch(() => ({}));
       const routingBody = await routingRes.json().catch(() => ({}));
@@ -184,7 +193,7 @@ export default function ModelSetupPage() {
   useEffect(() => {
     void load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedHive?.id]);
+  }, [effectiveHiveId]);
 
   const runAction = async (label: string, fn: () => Promise<void>) => {
     setActionRunning(label);
@@ -200,35 +209,38 @@ export default function ModelSetupPage() {
   };
 
   const refreshMetadata = () => runAction("metadata", async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Refreshing model metadata")) return;
     const res = await fetch("/api/model-setup/metadata", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hiveId: selectedHive.id }),
+      body: JSON.stringify({ hiveId: effectiveHiveId }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
   });
 
   const syncModels = () => runAction("sync", async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Syncing configured models")) return;
     const res = await fetch("/api/model-health/sync-models", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hiveId: selectedHive.id }),
+      body: JSON.stringify({ hiveId: effectiveHiveId }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
   });
 
   const runProbes = () => runAction("probes", async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Running model health probes")) return;
     const enabledModelCount = models.filter((model) => model.hiveEnabled).length;
     const res = await fetch("/api/model-health/probe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        hiveId: selectedHive.id,
+        hiveId: effectiveHiveId,
         includeFresh: true,
         limit: Math.max(enabledModelCount, 1),
       }),
@@ -241,7 +253,8 @@ export default function ModelSetupPage() {
     model: SetupModel,
     patch: { enabled?: boolean; credentialId?: string | null; fallbackPriority?: number },
   ) => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite(`Updating ${model.displayName}`)) return;
     setSavingModel(modelKey(model));
     setError(null);
     try {
@@ -249,7 +262,7 @@ export default function ModelSetupPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selectedHive.id,
+          hiveId: effectiveHiveId,
           modelCatalogId: model.modelCatalogId,
           hiveModelId: model.hiveModelId,
           enabled: patch.enabled ?? model.hiveEnabled,
@@ -304,23 +317,24 @@ export default function ModelSetupPage() {
   };
 
   const saveRoutingPolicy = () => runAction("routing", async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Saving model routing policy")) return;
     const res = await fetch("/api/model-routing", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hiveId: selectedHive.id, policy: routingPolicy }),
+      body: JSON.stringify({ hiveId: effectiveHiveId, policy: routingPolicy }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
   });
 
   const previewRouting = async () => {
-    if (!selectedHive?.id) return;
+    if (!effectiveHiveId) return;
     setActionRunning("preview");
     setError(null);
     try {
       const params = new URLSearchParams({
-        hiveId: selectedHive.id,
+        hiveId: effectiveHiveId,
         previewRoleSlug: previewRoleSlug.trim() || "preview",
       });
       if (previewTitle.trim()) params.set("previewTitle", previewTitle.trim());
@@ -340,7 +354,15 @@ export default function ModelSetupPage() {
     }
   };
 
-  if (!selectedHive) {
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return (
+      <div className="space-y-6">
+        <UnresolvedHiveTargetMessage hiveId={targetHiveId} />
+      </div>
+    );
+  }
+
+  if (!selectedHive && !effectiveHiveId) {
     return (
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold">Model Setup</h1>
@@ -355,7 +377,7 @@ export default function ModelSetupPage() {
         <div>
           <h1 className="text-2xl font-semibold">Model Setup</h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Global model facts with {selectedHive.name} credentials, health, and routing controls.
+            Global model facts with {effectiveHiveName ?? "the selected hive"} credentials, health, and routing controls.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -370,6 +392,8 @@ export default function ModelSetupPage() {
           </button>
         </div>
       </div>
+
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/models" />
 
       {error && (
         <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
@@ -922,4 +946,12 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleDateString();
+}
+
+export default function ModelSetupPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Model setup loading...</div>}>
+      <ModelSetupPageContent />
+    </Suspense>
+  );
 }

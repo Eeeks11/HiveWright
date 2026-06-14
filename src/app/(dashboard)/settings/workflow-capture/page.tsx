@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useRef, useEffect, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import { CaptureConsentDialog } from "@/components/capture-consent-dialog";
 import { CaptureRecordingPill } from "@/components/capture-recording-pill";
 
@@ -25,9 +26,15 @@ function isSupportedBrowser(): boolean {
   );
 }
 
-export default function WorkflowCapturePage() {
+function WorkflowCapturePageContent() {
   const { selected } = useHiveContext();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : selected?.id;
 
   const [phase, setPhase] = useState<CapturePhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +89,7 @@ export default function WorkflowCapturePage() {
   // Purge local media on unmount
   useEffect(() => {
     return () => cleanupMedia();
-  }, [cleanupMedia]);
+  }, [cleanupMedia, targetHiveId]);
 
   function startTimer() {
     timerRef.current = setInterval(() => {
@@ -100,6 +107,7 @@ export default function WorkflowCapturePage() {
     ) {
       return;
     }
+    if (!target.confirmCrossHiveWrite("Stop workflow capture")) return;
     const sessionId = sessionIdRef.current;
     syncPhase("stopping");
     cleanupMedia();
@@ -126,9 +134,9 @@ export default function WorkflowCapturePage() {
     }
 
     routerRef.current.push(
-      `/setup/workflow-capture/${sessionId}/review`,
+      withTargetHiveId(`/setup/workflow-capture/${sessionId}/review`, targetHiveId),
     );
-  }, [cleanupMedia]);
+  }, [cleanupMedia, target, targetHiveId]);
 
   // Keep a stable ref so stream/recorder event handlers always call the latest version
   const triggerStopRef = useRef(triggerStop);
@@ -150,7 +158,8 @@ export default function WorkflowCapturePage() {
   }
 
   async function handleConsentConfirm() {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Creating a browser capture session")) return;
 
     // Step 1: Create the session (consent=true, status=recording)
     syncPhase("creating");
@@ -160,7 +169,7 @@ export default function WorkflowCapturePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selected.id,
+          hiveId: effectiveHiveId,
           consent: true,
           status: "recording",
           captureScope: { type: "browser_tab" },
@@ -277,6 +286,9 @@ export default function WorkflowCapturePage() {
     if (!window.confirm("Discard this recording? Nothing will be saved.")) {
       return;
     }
+    if (!target.confirmCrossHiveWrite("Cancel workflow capture")) {
+      return;
+    }
 
     const sessionId = sessionIdRef.current;
     syncPhase("cancelling");
@@ -316,7 +328,11 @@ export default function WorkflowCapturePage() {
     syncPhase("idle");
   }
 
-  if (!selected) {
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={targetHiveId} />;
+  }
+
+  if (!selected && !effectiveHiveId) {
     return (
       <p className="text-amber-400/60">
         Select a hive to use browser capture.
@@ -358,6 +374,8 @@ export default function WorkflowCapturePage() {
             without your sign-off.
           </p>
         </div>
+
+        <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/workflow-capture" />
 
         {/* Error banner */}
         {error && (
@@ -464,7 +482,7 @@ export default function WorkflowCapturePage() {
             <p className="mt-1 text-sm text-amber-400/70">
               Use the{" "}
               <Link
-                href="/setup/sop-importer"
+                href={withTargetHiveId("/setup/sop-importer", targetHiveId)}
                 className="text-amber-400 underline hover:text-amber-200"
               >
                 manual SOP importer
@@ -475,5 +493,21 @@ export default function WorkflowCapturePage() {
         )}
       </div>
     </>
+  );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
+}
+
+export default function WorkflowCapturePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Workflow capture loading...</div>}>
+      <WorkflowCapturePageContent />
+    </Suspense>
   );
 }

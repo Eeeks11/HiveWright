@@ -393,6 +393,20 @@ describe("Decisions API", () => {
       )
       RETURNING id
     `;
+    const [notNormalized] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind, route_metadata)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Raw producer payload needs rewrite',
+        'This row deliberately opts out of the normal owner inbox until a producer normalizes it.',
+        'normal',
+        'pending',
+        'decision',
+        ${sql.json({ normalizedOwnerQuestion: false })}
+      )
+      RETURNING id
+    `;
     const [fixtureHive] = await sql<{ id: string }[]>`
       INSERT INTO hives (slug, name, type, is_system_fixture)
       VALUES (${PREFIX + "fixture"}, 'System Fixture Hive', 'digital', true)
@@ -436,6 +450,7 @@ describe("Decisions API", () => {
     expect(allDefaultIds).not.toContain(learningGateFollowup.id);
     expect(allDefaultIds).not.toContain(qaTaskDecision.id);
     expect(allDefaultIds).not.toContain(notificationApproval.id);
+    expect(allDefaultIds).not.toContain(notNormalized.id);
 
     const includeRes = await getDecisions(new Request(
       `http://localhost/api/decisions?hiveId=${hiveId}&kind=all&includeInternalSystem=true&includeAiPeerQualityFeedback=true`,
@@ -452,6 +467,7 @@ describe("Decisions API", () => {
       learningGateFollowup.id,
       qaTaskDecision.id,
       notificationApproval.id,
+      notNormalized.id,
     ]));
     expect(includedIds).not.toContain(fixtureDecision.id);
   });

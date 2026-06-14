@@ -155,13 +155,29 @@ export async function applyStructuredDoctorDiagnosis(
   if (task.assignedTo !== "doctor" || !task.parentTaskId) return false;
 
   if (isQualityDoctorDiagnosisTask(task)) {
-    const { parseQualityDoctorDiagnosis, applyQualityDoctorDiagnosis } =
+    const {
+      parseQualityDoctorDiagnosisResult,
+      applyQualityDoctorDiagnosis,
+      recordQualityDoctorContaminationHandoff,
+    } =
       await import("../quality/doctor");
-    const diagnosis = parseQualityDoctorDiagnosis(output);
-    if (diagnosis) {
-      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, diagnosis);
+    const parseResult = parseQualityDoctorDiagnosisResult(output);
+    if (parseResult.ok) {
+      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, parseResult.diagnosis);
       return true;
     }
+
+    console.warn(
+      `[dispatcher] Quality doctor diagnosis parse failed for task ${task.id}: ${parseResult.reason}`,
+    );
+    await recordQualityDoctorContaminationHandoff(
+      sql,
+      task.parentTaskId,
+      task.id,
+      parseResult.reason,
+      output,
+    );
+    return true;
   }
 
   const { parseDoctorDiagnosis, applyDoctorDiagnosis, escalateMalformedDiagnosis } =

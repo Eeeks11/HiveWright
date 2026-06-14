@@ -3,20 +3,29 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ModelSetupPage from "../../src/app/(dashboard)/setup/models/page";
 
-const selectedHive = {
-  id: "hive-1",
-  slug: "hive-1",
-  name: "Hive One",
-  type: "digital",
-};
-
-vi.mock("@/components/hive-context", () => ({
-  useHiveContext: () => ({
-    hives: [selectedHive],
-    selected: selectedHive,
+const contextMock = vi.hoisted(() => ({
+  value: {
+    hives: [
+      { id: "hive-1", slug: "hive-1", name: "Hive One", type: "digital" },
+      { id: "hive-2", slug: "hive-2", name: "Hive Two", type: "digital" },
+    ],
+    selected: { id: "hive-1", slug: "hive-1", name: "Hive One", type: "digital" } as
+      | { id: string; slug: string; name: string; type: string }
+      | null,
     selectHive: vi.fn(),
     loading: false,
-  }),
+    hasProvider: true,
+  },
+  searchParams: new URLSearchParams(),
+}));
+
+vi.mock("@/components/hive-context", () => ({
+  useHiveContext: () => contextMock.value,
+}));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/setup/models",
+  useSearchParams: () => contextMock.searchParams,
 }));
 
 describe("ModelSetupPage", () => {
@@ -24,10 +33,71 @@ describe("ModelSetupPage", () => {
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    contextMock.value = {
+      hives: [
+        { id: "hive-1", slug: "hive-1", name: "Hive One", type: "digital" },
+        { id: "hive-2", slug: "hive-2", name: "Hive Two", type: "digital" },
+      ],
+      selected: { id: "hive-1", slug: "hive-1", name: "Hive One", type: "digital" },
+      selectHive: vi.fn(),
+      loading: false,
+      hasProvider: true,
+    };
+    contextMock.searchParams = new URLSearchParams();
+    vi.restoreAllMocks();
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+  });
+
+  it("uses targetHiveId for setup reads and destination-confirmed model writes", async () => {
+    contextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    const model = modelFixture({ hiveEnabled: false });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/model-setup") && init?.method === "PATCH") {
+        return jsonResponse({ data: { models: [{ ...model, hiveEnabled: true }] } });
+      }
+      if (url.includes("/api/model-setup")) return jsonResponse({ data: { models: [model], credentials: [] } });
+      if (url.includes("/api/model-routing")) return modelRoutingResponse();
+      return new Response("not found", { status: 404 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    render(<ModelSetupPage />);
+
+    expect(await screen.findByText(/Target mode: viewing/i)).toBeTruthy();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/model-setup?hiveId=hive-2"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/model-routing?hiveId=hive-2"));
+
+    const usageCheckbox = await screen.findByLabelText("Enable Gemini New");
+    fireEvent.click(usageCheckbox);
+    expect(confirm).toHaveBeenCalledWith(
+      "Updating Gemini New will update Hive Two, not your active hive Hive One. Continue?",
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/model-setup", expect.objectContaining({ method: "PATCH" }));
+
+    fireEvent.click(usageCheckbox);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/model-setup",
+      expect.objectContaining({
+        method: "PATCH",
+        body: expect.stringContaining("\"hiveId\":\"hive-2\""),
+      }),
+    ));
+  });
+
+  it("fails closed for invalid targetHiveId without issuing setup reads", () => {
+    contextMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
+
+    render(<ModelSetupPage />);
+
+    expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("previews auto routing for sample task context", async () => {
@@ -451,4 +521,56 @@ function jsonResponse(body: unknown): Response {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function modelRoutingResponse(): Response {
+  return jsonResponse({
+    data: {
+      policy: {
+        preferences: { costQualityBalance: 50 },
+        routeOverrides: {},
+        roleRoutes: {},
+      },
+      models: [],
+    },
+  });
+}
+
+function modelFixture(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    modelCatalogId: "catalog-1",
+    hiveModelId: "hive-model-1",
+    routeKey: "google:gemini:google/gemini-new",
+    provider: "google",
+    adapterType: "gemini",
+    modelId: "google/gemini-new",
+    displayName: "Gemini New",
+    family: "gemini",
+    capabilities: ["text", "code"],
+    local: false,
+    hiveEnabled: false,
+    ownerDisabledAt: null,
+    ownerDisabledReason: null,
+    firstSeenAt: null,
+    lastSeenAt: null,
+    staleSince: null,
+    deprecatedAt: null,
+    discoverySource: null,
+    credentialId: null,
+    credentialName: null,
+    fallbackPriority: 100,
+    costPerInputToken: null,
+    costPerOutputToken: null,
+    benchmarkQualityScore: null,
+    routingCostScore: null,
+    metadataSourceName: null,
+    metadataSourceUrl: null,
+    metadataLastCheckedAt: null,
+    status: "unknown",
+    latencyMs: null,
+    failureClass: null,
+    failureMessage: null,
+    lastProbedAt: null,
+    ...overrides,
+  };
 }

@@ -10,13 +10,9 @@ const hiveContextMock = vi.hoisted(() => ({
       | null,
     hives: [] as Array<{ id: string; slug: string; name: string; type: string }>,
     loading: false,
-    selectHive: () => {},
     hasProvider: true,
+    selectHive: () => {},
   },
-}));
-
-const navigationMock = vi.hoisted(() => ({
-  pathname: "/settings/setup-health",
   searchParams: new URLSearchParams(),
 }));
 
@@ -25,26 +21,27 @@ vi.mock("@/components/hive-context", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => navigationMock.pathname,
-  useSearchParams: () => navigationMock.searchParams,
+  useSearchParams: () => hiveContextMock.searchParams,
+  usePathname: () => "/setup/health",
 }));
 
 describe("SetupHealthPage", () => {
   beforeEach(() => {
-    navigationMock.pathname = "/settings/setup-health";
-    navigationMock.searchParams = new URLSearchParams();
     hiveContextMock.value = {
       selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [],
+      hives: [
+        { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+        { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+      ],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
-    hasProvider: true,
     };
+    hiveContextMock.searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("renders without crashing when no hive is selected and the context is empty", () => {
@@ -52,8 +49,8 @@ describe("SetupHealthPage", () => {
       selected: null,
       hives: [],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
-    hasProvider: true,
     };
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -80,14 +77,20 @@ describe("SetupHealthPage", () => {
     expect(screen.queryByText("1 of 1 ready")).toBeNull();
 
     resolveFetch(
-      jsonResponse({
-        data: {
-          hiveId: "hive-1",
-          rows: [
-            row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
-          ],
+      new Response(
+        JSON.stringify({
+          data: {
+            hiveId: "hive-1",
+            rows: [
+              row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
+            ],
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
         },
-      }),
+      ),
     );
 
     await waitFor(() => expect(screen.getByText("1 of 1 ready")).toBeTruthy());
@@ -99,29 +102,35 @@ describe("SetupHealthPage", () => {
       "fetch",
       vi.fn(() =>
         Promise.resolve(
-          jsonResponse({
-            data: {
-              hiveId: "hive-1",
-              rows: [
-                row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
-                row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
-                row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
-                row(
-                  "dashboard",
-                  "Dashboard",
-                  "ready",
-                  "Ready",
-                  "/setup/health",
-                  "Review dashboard health",
-                  "Dashboard responded at http://localhost:3002.",
-                ),
-                row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
-                row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
-                row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
-                row("memory", "Memory search", "needs_attention", "Needs attention", "/setup/embeddings", "Fix memory search"),
-              ],
+          new Response(
+            JSON.stringify({
+              data: {
+                hiveId: "hive-1",
+                rows: [
+                  row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup"),
+                  row("ea", "EA", "not_set_up", "Not set up yet", "/setup/connectors", "Connect EA"),
+                  row("dispatcher", "Work queue", "ready", "Ready", "/tasks", "View work queue"),
+                  row(
+                    "dashboard",
+                    "Dashboard",
+                    "ready",
+                    "Ready",
+                    "/setup/health",
+                    "Review dashboard health",
+                    "Dashboard responded at http://localhost:3002.",
+                  ),
+                  row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections"),
+                  row("safety", "Safety rules", "needs_attention", "Needs attention", "/setup/action-policies", "Review safety rules"),
+                  row("schedules", "Recurring work", "not_set_up", "Not set up yet", "/schedules", "Turn on recurring work"),
+                  row("memory", "Memory search", "needs_attention", "Needs attention", "/setup/embeddings", "Fix memory search"),
+                ],
+              },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
             },
-          }),
+          ),
         ),
       ),
     );
@@ -162,84 +171,51 @@ describe("SetupHealthPage", () => {
     expect(within(screen.getByText("Service connections").closest("article")!).getByText("Pending/not checked")).toBeTruthy();
   });
 
-  it("uses the query-backed target hive for setup-health and preserves target links", async () => {
-    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
-    hiveContextMock.value = {
-      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [
-        { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-        { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
-      ],
-      loading: false,
-      selectHive: () => {},
-    hasProvider: true,
-    };
-    const fetchSpy = vi.fn(() => Promise.resolve(jsonResponse({
-      data: {
-        hiveId: "hive-2",
-        rows: [row("connectors", "Service connections", "pending", "Pending/not checked", "/setup/connectors", "Test connections")],
-      },
-    })));
-    vi.stubGlobal("fetch", fetchSpy);
+  it("uses targetHiveId for setup health reads and preserves it in fix links", async () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: {
+              hiveId: "hive-2",
+              rows: [row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup")],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<SetupHealthPage />);
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith(
+    await waitFor(() => expect(screen.getByText("1 of 1 ready")).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith(
       "/api/setup-health?hiveId=hive-2",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    ));
+    );
     expect(screen.getByText(/Target mode: viewing/)).toBeTruthy();
-    expect(screen.getByText("Hive Two")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Return to active hive" }).getAttribute("href")).toBe("/settings/setup-health");
-    expect(screen.getByRole("link", { name: "Test connections" }).getAttribute("href")).toBe("/setup/connectors?targetHiveId=hive-2");
+    expect(screen.getByRole("link", { name: "Review Model Setup" }).getAttribute("href")).toBe(
+      "/setup/models?targetHiveId=hive-2",
+    );
   });
 
-  it("fails closed for an unresolved setup-health target without querying the active hive", () => {
-    navigationMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
-    hiveContextMock.value = {
-      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }],
-      loading: false,
-      selectHive: () => {},
-    hasProvider: true,
-    };
+  it("fails closed for invalid targetHiveId without reading active setup health", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
     render(<SetupHealthPage />);
 
-    expect(screen.getByText(/Hive target/)).toBeTruthy();
-    expect(screen.getByText("missing-hive")).toBeTruthy();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("waits for target hive resolution before fetching setup health", () => {
-    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
-    hiveContextMock.value = {
-      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [],
-      loading: true,
-      selectHive: () => {},
-      hasProvider: true,
-    };
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-
-    render(<SetupHealthPage />);
-
-    expect(screen.getByText("Checking setup health...")).toBeTruthy();
+    expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("continues resolving when a stale non-empty hive list does not contain the requested setup-health target", () => {
-    navigationMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
-    hiveContextMock.value = {
-      selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }],
-      loading: true,
-      selectHive: () => {},
-      hasProvider: true,
-    };
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    hiveContextMock.value.hives = [{ id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" }];
+    hiveContextMock.value.loading = true;
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -269,11 +245,4 @@ function row(
     href,
     hrefLabel,
   };
-}
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
 }

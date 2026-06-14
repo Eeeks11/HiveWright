@@ -62,7 +62,7 @@ function impactStatement(kind: string | null, goalTitle: string): string {
   const label = kindLabel(kind);
   switch (label) {
     case "Business":
-      return `Business hive impact: completed work for "${goalTitle}" is now an owner-visible handoff with review state.`;
+      return `Business hive impact: completed work for "${goalTitle}" is ready for owner review and use.`;
     case "Project":
       return `Project hive impact: "${goalTitle}" has a shippable result ready for owner review.`;
     case "Personal assistant":
@@ -77,12 +77,12 @@ function impactStatement(kind: string | null, goalTitle: string): string {
 }
 
 function whyItMatters(goalTitle: string): string {
-  return `This creates a durable owner-visible handoff for "${goalTitle}" so final outcomes are reviewed separately from task artifacts and audit logs.`;
+  return `This packages the finished result for "${goalTitle}" so the owner can see what changed, open the output, and keep audit files separate.`;
 }
 
 function recommendedNextAction(primary: PrimaryWorkProduct | null): string {
-  if (primary?.open_url) return "Review the primary work product, then accept it or request a bounded revision.";
-  return "Review the goal handoff and linked evidence, then accept it or request a bounded revision.";
+  if (primary?.open_url) return "Open the final output first, then accept it, request a bounded revision, archive it, or flag it as a reusable idea.";
+  return "Review the summary and audit evidence, then accept it, request a bounded revision, archive it, or flag it as a reusable idea.";
 }
 
 async function selectPrimaryWorkProduct(
