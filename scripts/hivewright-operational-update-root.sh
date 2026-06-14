@@ -5,8 +5,12 @@ INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-/home/trent/apps/HiveWright}"
 RUNTIME_ROOT="${HIVEWRIGHT_RUNTIME_ROOT:-/home/trent/.hivewright}"
 ENV_FILE="${HIVEWRIGHT_ENV_FILE:-$RUNTIME_ROOT/config/.env}"
 LOG_DIR="$RUNTIME_ROOT/logs/updates"
+DEPLOYMENT_DIR="$RUNTIME_ROOT/logs/deployments"
+CUTOVER_FILE="$DEPLOYMENT_DIR/latest-runtime-cutover.json"
 SERVICE_USER="${HIVEWRIGHT_SERVICE_USER:-trent}"
-DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://localhost:3002}"
+DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://127.0.0.1:3002}"
+HEALTH_RETRY_COUNT="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_COUNT:-15}"
+HEALTH_RETRY_DELAY_SECONDS="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_DELAY_SECONDS:-2}"
 CANONICAL_REMOTE_URL="${HIVEWRIGHT_CANONICAL_REMOTE_URL:-https://github.com/Eeeks11/HiveWright.git}"
 MODE="${1:-status-json}"
 
@@ -24,6 +28,65 @@ json_escape() {
   node -e 'process.stdout.write(JSON.stringify(process.argv[1] ?? ""))' "$1"
 }
 
+json_or_null() {
+  if [ -n "${1:-}" ]; then
+    json_escape "$1"
+  else
+    printf 'null'
+  fi
+}
+
+extract_health_build_hash() {
+  node -e 'let data=""; process.stdin.on("data", (chunk) => data += chunk); process.stdin.on("end", () => { try { const parsed = JSON.parse(data); const buildHash = parsed?.data?.buildHash ?? parsed?.buildHash ?? ""; process.stdout.write(String(buildHash || "")); } catch {} });'
+}
+
+verify_dashboard_health() {
+  local health_url="${DASHBOARD_URL%/}/api/health"
+  local attempt http_code tmp_file build_hash
+  tmp_file="$(mktemp)"
+  trap 'rm -f "$tmp_file"' RETURN
+
+  for attempt in $(seq 1 "$HEALTH_RETRY_COUNT"); do
+    : > "$tmp_file"
+    http_code="$(curl -sS -o "$tmp_file" -w '%{http_code}' "$health_url" || printf '000')"
+    build_hash="$(extract_health_build_hash < "$tmp_file")"
+    echo "dashboard_health_attempt=$attempt/$HEALTH_RETRY_COUNT dashboard_http=$http_code"
+    if [ "$http_code" = "200" ] && [ -n "$build_hash" ]; then
+      DASHBOARD_HTTP_CODE="$http_code"
+      DASHBOARD_BUILD_HASH="$build_hash"
+      return 0
+    fi
+    [ "$attempt" -lt "$HEALTH_RETRY_COUNT" ] && sleep "$HEALTH_RETRY_DELAY_SECONDS"
+  done
+
+  echo "Dashboard health verification failed after $HEALTH_RETRY_COUNT attempts: $health_url" >&2
+  if [ -s "$tmp_file" ]; then
+    echo "dashboard_health_body=$(tr '\n' ' ' < "$tmp_file")" >&2
+  fi
+  return 31
+}
+
+write_cutover_record() {
+  local recorded_at="$1"
+  local deployed_commit="$2"
+  local build_hash="$3"
+  local dashboard_pid="$4"
+  local dashboard_cwd="$5"
+  local dispatcher_pid="$6"
+  local dispatcher_cwd="$7"
+  local dashboard_pid_json="null"
+  local dispatcher_pid_json="null"
+
+  [ -n "$dashboard_pid" ] && [ "$dashboard_pid" != "0" ] && dashboard_pid_json="$dashboard_pid"
+  [ -n "$dispatcher_pid" ] && [ "$dispatcher_pid" != "0" ] && dispatcher_pid_json="$dispatcher_pid"
+
+  cat > "$CUTOVER_FILE" <<JSON
+{"recordedAt":$(json_escape "$recorded_at"),"runtimeMode":"locked-install","installDir":$(json_escape "$INSTALL_DIR"),"runtimeRoot":$(json_escape "$RUNTIME_ROOT"),"envFile":$(json_escape "$ENV_FILE"),"dashboardHealthUrl":$(json_escape "$DASHBOARD_URL"),"deployedCommit":$(json_escape "$deployed_commit"),"buildHash":$(json_or_null "$build_hash"),"dashboard":{"pid":$dashboard_pid_json,"cwd":$(json_or_null "$dashboard_cwd")},"dispatcher":{"pid":$dispatcher_pid_json,"cwd":$(json_or_null "$dispatcher_cwd")}}
+JSON
+
+  chown "$SERVICE_USER:$SERVICE_USER" "$CUTOVER_FILE" 2>/dev/null || true
+}
+
 ensure_root() {
   if [ "$(id -u)" -ne 0 ]; then
     echo "hivewright-operational-update must run as root" >&2
@@ -34,7 +97,7 @@ ensure_root() {
 ensure_paths() {
   [ "$INSTALL_DIR" = "/home/trent/apps/HiveWright" ] || { echo "Refusing unexpected install path: $INSTALL_DIR" >&2; exit 20; }
   [ -d "$INSTALL_DIR/.git" ] || { echo "Install dir is not a git checkout: $INSTALL_DIR" >&2; exit 21; }
-  mkdir -p "$LOG_DIR"
+  mkdir -p "$LOG_DIR" "$DEPLOYMENT_DIR"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_ROOT/logs" 2>/dev/null || true
 }
 
@@ -152,7 +215,8 @@ apply_update() {
   ensure_root
   ensure_paths
   configure_root_git
-  local log_file="$LOG_DIR/hivewright-update-$(date +%Y%m%d-%H%M%S).log"
+  local log_file
+  log_file="$LOG_DIR/hivewright-update-$(date +%Y%m%d-%H%M%S).log"
 
   {
     echo "HiveWright privileged operational updater"
@@ -215,14 +279,33 @@ apply_update() {
     echo
     echo "== verify =="
     runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user is-active hivewright-dashboard.service hivewright-dispatcher.service
-    for pid in $(runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user show hivewright-dashboard.service hivewright-dispatcher.service -p MainPID --value); do
-      [ "$pid" = "0" ] && continue
-      cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
-      echo "pid=$pid cwd=$cwd"
-      [ "$cwd" = "$INSTALL_DIR" ] || { echo "Service PID $pid is not running from $INSTALL_DIR" >&2; exit 30; }
+    dashboard_pid="$(runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user show hivewright-dashboard.service -p MainPID --value | tail -n 1)"
+    dispatcher_pid="$(runuser -u "$SERVICE_USER" -- env XDG_RUNTIME_DIR="/run/user/$(id -u "$SERVICE_USER")" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$SERVICE_USER")/bus" systemctl --user show hivewright-dispatcher.service -p MainPID --value | tail -n 1)"
+    dashboard_cwd=""
+    dispatcher_cwd=""
+    for service_pid in "$dashboard_pid" "$dispatcher_pid"; do
+      [ -z "$service_pid" ] && continue
+      [ "$service_pid" = "0" ] && continue
+      cwd="$(readlink "/proc/$service_pid/cwd" 2>/dev/null || true)"
+      echo "pid=$service_pid cwd=$cwd"
+      [ "$cwd" = "$INSTALL_DIR" ] || { echo "Service PID $service_pid is not running from $INSTALL_DIR" >&2; exit 30; }
+      if [ "$service_pid" = "$dashboard_pid" ]; then
+        dashboard_cwd="$cwd"
+      elif [ "$service_pid" = "$dispatcher_pid" ]; then
+        dispatcher_cwd="$cwd"
+      fi
     done
-    curl -fsS -o /dev/null -w 'dashboard_http=%{http_code}\n' "$DASHBOARD_URL" || true
-    echo "head_after=$(git rev-parse HEAD)"
+    head_after="$(git rev-parse HEAD)"
+    verify_dashboard_health
+    echo "dashboard_http=$DASHBOARD_HTTP_CODE"
+    echo "dashboard_build_hash=$DASHBOARD_BUILD_HASH"
+    [ "$DASHBOARD_BUILD_HASH" = "$head_after" ] || {
+      echo "Dashboard build hash does not match operational checkout head: expected $head_after, got $DASHBOARD_BUILD_HASH" >&2
+      exit 32
+    }
+    write_cutover_record "$(date -Is)" "$head_after" "$DASHBOARD_BUILD_HASH" "$dashboard_pid" "$dashboard_cwd" "$dispatcher_pid" "$dispatcher_cwd"
+    echo "cutover_file=$CUTOVER_FILE"
+    echo "head_after=$head_after"
     echo "completed=$(date -Is)"
   } 2>&1 | tee "$log_file"
 

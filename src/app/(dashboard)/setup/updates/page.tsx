@@ -20,10 +20,30 @@ type UpdatePlan = {
   message: string;
 };
 
+type RuntimeCutoverRecord = {
+  recordedAt: string | null;
+  runtimeMode: string | null;
+  installDir: string | null;
+  runtimeRoot: string | null;
+  envFile: string | null;
+  dashboardHealthUrl: string | null;
+  deployedCommit: string | null;
+  buildHash: string | null;
+};
+
+type RuntimeCutoverStatus = {
+  path: string;
+  available: boolean;
+  state: "in_sync" | "drift" | "unavailable";
+  reasons: string[];
+  record: RuntimeCutoverRecord | null;
+};
+
 type UpdateResponse = {
   data?: {
     status: UpdateStatus;
     plan: UpdatePlan;
+    cutover?: RuntimeCutoverStatus;
     started?: boolean;
     logPath?: string;
     logDirectory?: string;
@@ -67,6 +87,7 @@ function isUpdateComplete(status: UpdateStatus, monitor: UpdateMonitor) {
 export default function UpdatesPage() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [plan, setPlan] = useState<UpdatePlan | null>(null);
+  const [cutover, setCutover] = useState<RuntimeCutoverStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [monitor, setMonitor] = useState<UpdateMonitor>({
@@ -88,6 +109,7 @@ export default function UpdatesPage() {
       if (!res.ok || !body.data) throw new Error(body.error ?? "Failed to load update status");
       setStatus(body.data.status);
       setPlan(body.data.plan);
+      setCutover(body.data.cutover ?? null);
       return body.data;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -122,6 +144,7 @@ export default function UpdatesPage() {
       );
       setStatus(body.data.status);
       setPlan(body.data.plan);
+      setCutover(body.data.cutover ?? null);
       setMonitor({
         running: true,
         startedFromCommit: body.data.status.currentCommit,
@@ -223,6 +246,19 @@ export default function UpdatesPage() {
         )}
 
         {status && <p className="mt-4 text-sm text-zinc-600 dark:text-zinc-300">{status.message}</p>}
+        {cutover && (
+          <div className="mt-4 rounded-md border border-amber-200/65 bg-amber-50/70 p-3 text-sm dark:border-white/[0.08] dark:bg-white/[0.04]">
+            <p className="font-medium">Runtime cutover record: {cutover.state}</p>
+            <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">
+              {cutover.record?.runtimeMode ?? "mode unknown"} · {shortSha(cutover.record?.deployedCommit ?? null)} · {cutover.path}
+            </p>
+            {cutover.reasons.length > 0 && (
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-zinc-600 dark:text-zinc-300">
+                {cutover.reasons.map((reason) => <li key={reason}>{reason}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
         {error && <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p>}
         {result && <p className="mt-4 text-sm text-green-700 dark:text-green-400">{result}</p>}
       </section>
