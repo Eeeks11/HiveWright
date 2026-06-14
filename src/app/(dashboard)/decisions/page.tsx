@@ -127,12 +127,73 @@ function isDirectTaskQaCapDecision(value: unknown) {
 }
 
 function ownerDecisionQuestion(decision: Decision): string {
-  const question = decision.title.trim();
-  return question.length > 0 ? question : "Owner decision required.";
+  const title = decision.title
+    .replace(/^hive needs your input:\s*/i, "")
+    .replace(/^owner decision required:?\s*/i, "")
+    .trim();
+  const question = title || "What should HiveWright do next?";
+  return /[?]$/.test(question) ? question : `${question}?`;
 }
 
 function ownerDecisionRecommendation(decision: Decision): string {
-  return decision.recommendation?.trim() || "No recommendation recorded yet.";
+  const recommendation = decision.recommendation?.replace(/\s+/g, " ").trim();
+  if (recommendation) return recommendation;
+  if (decision.status === "ea_review") {
+    return "Let HiveWright keep working unless this escalates back to you with a concrete question.";
+  }
+  if (decision.status === "auto_approved") {
+    return "Review only if this looks wrong; otherwise no owner action is needed.";
+  }
+  return "Choose the option that best matches your intent. If none fit, use Discuss so the hive can continue with your clarification.";
+}
+
+function fallbackDecisionOptions(decision: Decision): DecisionOption[] {
+  if (decision.status === "ea_review") {
+    return [
+      {
+        key: "watch_ea",
+        label: "Let HiveWright continue",
+        response: "discussed",
+        description: "No owner action is needed unless the EA escalates this into the Needs you queue.",
+      },
+    ];
+  }
+  if (decision.status === "auto_approved") {
+    return [
+      {
+        key: "accept_auto_path",
+        label: "Leave as-is",
+        response: "approved",
+        description: "Keep the already-approved path and let the hive continue.",
+      },
+      {
+        key: "override_auto_path",
+        label: "Override and reject",
+        response: "rejected",
+        description: "Stop or redirect the path HiveWright already took.",
+      },
+    ];
+  }
+  return [
+    {
+      key: "approve",
+      label: "Approve",
+      response: "approved",
+      description: "Let HiveWright continue with the recommended path.",
+    },
+    {
+      key: "discuss",
+      label: "Discuss",
+      response: "discussed",
+      description: "Add clarification when the recommendation is not enough to act safely.",
+    },
+    {
+      key: "reject",
+      label: "Reject",
+      response: "rejected",
+      description: "Stop this path and have the hive replan or park the work.",
+    },
+  ];
 }
 
 function ownerDecisionActionLabel(decision: Decision, options: DecisionOption[]): string {
@@ -391,7 +452,10 @@ export default function DecisionsPage() {
   })();
 
   const decisionRows: RunsTableRow[] = decisions.map((decision) => {
-    const structuredOptions = getDecisionOptions(decision.options);
+    const structuredOptions = getDecisionOptions(decision.options).slice(0, 4);
+    const displayOptions = structuredOptions.length > 0
+      ? structuredOptions
+      : fallbackDecisionOptions(decision).slice(0, 4);
     const isDirectTaskQaCap = isDirectTaskQaCapDecision(decision.options);
     const question = ownerDecisionQuestion(decision);
     const recommendation = ownerDecisionRecommendation(decision);
@@ -428,14 +492,14 @@ export default function DecisionsPage() {
             </p>
           </div>
 
-          {structuredOptions.length > 0 && (
+          {displayOptions.length > 0 && (
             <div className="space-y-2">
               <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
-                Options
+                Options and consequences
               </p>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {structuredOptions.map((option) => {
-                  const canAct = statusFilter === "pending";
+                {displayOptions.map((option) => {
+                  const canAct = statusFilter === "pending" && structuredOptions.length > 0;
                   if (canAct) {
                     const isRejecting =
                       option.response === "rejected" || option.response === "abandon";
