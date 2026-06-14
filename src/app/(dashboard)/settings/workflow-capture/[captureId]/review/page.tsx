@@ -173,6 +173,9 @@ function CaptureReviewPageContent() {
 
   async function handleApproveDraft() {
     if (!session || draftResult || draftCreating) return;
+    if (!target.confirmCrossHiveWrite("Approve workflow capture draft")) {
+      return;
+    }
     setDraftCreating(true);
     setDraftError(null);
     try {
@@ -197,6 +200,9 @@ function CaptureReviewPageContent() {
 
   async function handleRejectDraft() {
     if (!session || draftRejecting) return;
+    if (!target.confirmCrossHiveWrite("Reject workflow capture draft")) {
+      return;
+    }
     setDraftRejecting(true);
     setDraftError(null);
     try {
