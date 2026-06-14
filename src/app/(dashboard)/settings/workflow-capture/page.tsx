@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
 import { CaptureConsentDialog } from "@/components/capture-consent-dialog";
@@ -28,6 +28,8 @@ function isSupportedBrowser(): boolean {
 export default function WorkflowCapturePage() {
   const { selected } = useHiveContext();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
 
   const [phase, setPhase] = useState<CapturePhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export default function WorkflowCapturePage() {
   // Purge local media on unmount
   useEffect(() => {
     return () => cleanupMedia();
-  }, [cleanupMedia]);
+  }, [cleanupMedia, targetHiveId]);
 
   function startTimer() {
     timerRef.current = setInterval(() => {
@@ -126,9 +128,9 @@ export default function WorkflowCapturePage() {
     }
 
     routerRef.current.push(
-      `/setup/workflow-capture/${sessionId}/review`,
+      withTargetHiveId(`/setup/workflow-capture/${sessionId}/review`, targetHiveId),
     );
-  }, [cleanupMedia]);
+  }, [cleanupMedia, targetHiveId]);
 
   // Keep a stable ref so stream/recorder event handlers always call the latest version
   const triggerStopRef = useRef(triggerStop);
@@ -464,7 +466,7 @@ export default function WorkflowCapturePage() {
             <p className="mt-1 text-sm text-amber-400/70">
               Use the{" "}
               <Link
-                href="/setup/sop-importer"
+                href={withTargetHiveId("/setup/sop-importer", targetHiveId)}
                 className="text-amber-400 underline hover:text-amber-200"
               >
                 manual SOP importer
@@ -476,4 +478,12 @@ export default function WorkflowCapturePage() {
       </div>
     </>
   );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
 }

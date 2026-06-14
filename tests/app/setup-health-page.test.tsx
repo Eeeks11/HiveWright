@@ -18,6 +18,10 @@ vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => hiveContextMock.value,
 }));
 
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 describe("SetupHealthPage", () => {
   beforeEach(() => {
     hiveContextMock.value = {

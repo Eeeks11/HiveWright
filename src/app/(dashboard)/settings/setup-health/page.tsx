@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, CircleDashed, Clock3 } from "lucide-react";
 import { useHiveContext } from "@/components/hive-context";
 import type { SetupHealthRow, SetupHealthStatus } from "@/setup-health/status";
@@ -28,6 +29,8 @@ const statusIcon = {
 
 export default function SetupHealthPage() {
   const { selected, hives, loading: hivesLoading } = useHiveContext();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
   const hive = selected ?? hives[0] ?? null;
   const [health, setHealth] = useState<SetupHealthResponse | null>(null);
   const [error, setError] = useState<{ hiveId: string; message: string } | null>(null);
@@ -129,7 +132,7 @@ export default function SetupHealthPage() {
                     ) : null}
                   </div>
                   <Link
-                    href={row.href}
+                    href={withTargetHiveId(row.href, targetHiveId)}
                     className="inline-flex w-fit items-center justify-center rounded-md border border-amber-200/70 px-3 py-2 text-sm font-medium transition-colors hover:bg-amber-100/70 focus-visible:ring-2 focus-visible:ring-amber-500/45 dark:border-white/[0.1] dark:hover:bg-white/[0.06]"
                   >
                     {row.hrefLabel}
@@ -142,4 +145,12 @@ export default function SetupHealthPage() {
       ) : null}
     </div>
   );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
+import { useSearchParams } from "next/navigation";
 
 interface SetupField {
   key: string;
@@ -63,6 +64,11 @@ interface ConnectorAction {
 
 export default function ConnectorsPage() {
   const { selected } = useHiveContext();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const actionPoliciesHref = targetHiveId
+    ? `/setup/action-policies?targetHiveId=${encodeURIComponent(targetHiveId)}`
+    : "/setup/action-policies";
   const [catalog, setCatalog] = useState<Connector[]>([]);
   const [installs, setInstalls] = useState<Install[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -309,7 +315,7 @@ export default function ConnectorsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold text-amber-50">Connectors</h1>
           <a
-            href="/setup/action-policies"
+            href={actionPoliciesHref}
             className="rounded border border-amber-500/30 px-3 py-1 text-sm text-amber-100 hover:bg-amber-500/10"
           >
             Action policies

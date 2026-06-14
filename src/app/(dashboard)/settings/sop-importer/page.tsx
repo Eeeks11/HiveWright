@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 
 const EXAMPLE = `# Handle Lakes Bushland refund request
@@ -27,6 +28,8 @@ inside our published refund policy.
 - Do not refund if the guest has an outstanding damage claim open.`;
 
 export default function SopImporterPage() {
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
   const { selected } = useHiveContext();
   const [title, setTitle] = useState("");
   const [scope, setScope] = useState<"hive" | "system">("hive");
@@ -83,7 +86,7 @@ export default function SopImporterPage() {
         <p className="text-sm text-amber-200/80">
           Prefer to record rather than write?{" "}
           <Link
-            href="/setup/workflow-capture"
+            href={withTargetHiveId("/setup/workflow-capture", targetHiveId)}
             className="text-amber-400 underline hover:text-amber-200"
           >
             Use browser capture
@@ -167,4 +170,12 @@ export default function SopImporterPage() {
       </div>
     </div>
   );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
 }

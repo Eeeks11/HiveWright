@@ -25,6 +25,7 @@ const routerPushMock = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPushMock }),
   useParams: () => ({}),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // ---- hive context mock ----
