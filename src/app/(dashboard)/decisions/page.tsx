@@ -2,8 +2,10 @@
 
 import { useEffect, useState, useCallback } from "react";
 import type { ButtonHTMLAttributes } from "react";
+import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 import { RunsTable, type RunsTableBadgeTone, type RunsTableRow } from "@/components/runs-table";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 type Decision = {
   id: string;
@@ -238,7 +240,10 @@ function ActionButton({
 
 export default function DecisionsPage() {
   const { selected, loading: bizLoading } = useHiveContext();
-  const selectedHiveId = selected?.id;
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -253,13 +258,13 @@ export default function DecisionsPage() {
   const [activityRefresh, setActivityRefresh] = useState(0);
 
   const fetchDecisions = useCallback(async () => {
-    if (!selectedHiveId) return;
+    if (!effectiveHiveId) return;
     setLoading(true);
     try {
       const query = new URLSearchParams({
         status: statusFilter,
         kind: kindFilter,
-        hiveId: selectedHiveId,
+        hiveId: effectiveHiveId,
         includeInternalSystem: String(includeInternalSystem),
       });
       const res = await fetch(
@@ -273,13 +278,14 @@ export default function DecisionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedHiveId, statusFilter, kindFilter, includeInternalSystem]);
+  }, [effectiveHiveId, statusFilter, kindFilter, includeInternalSystem]);
 
   useEffect(() => {
-    if (selectedHiveId) fetchDecisions();
-  }, [fetchDecisions, selectedHiveId]);
+    if (effectiveHiveId) fetchDecisions();
+  }, [fetchDecisions, effectiveHiveId]);
 
   async function respond(id: string, action: string, note?: string, option?: DecisionOption) {
+    if (!target.confirmCrossHiveWrite("Respond to decision")) return;
     setResponding(id);
     try {
       const response = option?.response ?? ACTION_MAP[action] ?? action;
@@ -287,6 +293,7 @@ export default function DecisionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hiveId: effectiveHiveId,
           response,
           comment: note,
           selectedOptionKey: option?.key,
@@ -326,11 +333,12 @@ export default function DecisionsPage() {
   async function sendMessage(decisionId: string) {
     const content = newMessage.trim();
     if (!content) return;
+    if (!target.confirmCrossHiveWrite("Send decision message")) return;
     try {
       const res = await fetch(`/api/decisions/${decisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "discussed", comment: content }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, response: "discussed", comment: content }),
       });
       if (!res.ok) throw new Error("Failed to send message");
       const messages = await fetch(`/api/decisions/${decisionId}/messages`);
@@ -345,7 +353,29 @@ export default function DecisionsPage() {
     }
   }
 
-  if (bizLoading || loading) {
+  if (bizLoading || target.isResolvingTarget) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Decisions</h1>
+        <p className="text-zinc-500 text-sm">Loading...</p>
+      </div>
+    );
+  }
+
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  }
+
+  if (!effectiveHiveId) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Decisions</h1>
+        <p className="text-zinc-400">No hive selected.</p>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Decisions</h1>
@@ -401,7 +431,7 @@ export default function DecisionsPage() {
     return {
       id: decision.id,
       title: question,
-      href: `/decisions/${decision.id}`,
+      href: target.withTargetHiveId(`/decisions/${decision.id}`),
       status: { label: decision.status, tone: decision.status === "pending" ? "amber" : "neutral" },
       priority: { label: decision.priority, tone: PRIORITY_TONE[decision.priority] ?? "neutral" },
       primaryMeta: [{ label: "Owner action", value: actionLabel }],
@@ -630,6 +660,8 @@ export default function DecisionsPage() {
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="hive-honey-glow flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase text-amber-800/70 dark:text-amber-200/70">

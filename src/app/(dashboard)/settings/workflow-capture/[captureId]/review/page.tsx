@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 interface CaptureSession {
   id: string;
@@ -91,6 +92,10 @@ export default function CaptureReviewPage() {
   const params = useParams<{ captureId: string }>();
   const { selected } = useHiveContext();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
   const [session, setSession] = useState<CaptureSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +140,9 @@ export default function CaptureReviewPage() {
     if (!window.confirm("Delete this capture session and all metadata? This cannot be undone.")) {
       return;
     }
+    if (!target.confirmCrossHiveWrite("Delete workflow capture session")) {
+      return;
+    }
     setDeleting(true);
     try {
       const res = await fetch(`/api/capture-sessions/${session.id}`, { method: "DELETE" });
@@ -142,7 +150,7 @@ export default function CaptureReviewPage() {
         const body = await res.json() as { error?: string };
         throw new Error(body.error ?? "Delete failed");
       }
-      router.push("/setup/workflow-capture");
+      router.push(target.withTargetHiveId("/setup/workflow-capture"));
     } catch (e) {
       setError((e as Error).message);
       setDeleting(false);
@@ -195,7 +203,11 @@ export default function CaptureReviewPage() {
     }
   }
 
-  if (!selected) {
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  }
+
+  if (!effectiveHiveId) {
     return <p className="text-amber-400/60">Select a hive to view this capture session.</p>;
   }
 
@@ -207,9 +219,11 @@ export default function CaptureReviewPage() {
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Link href="/setup/workflow-capture" className="text-sm text-amber-400/60 hover:text-amber-200">
+          <Link href={target.withTargetHiveId("/setup/workflow-capture")} className="text-sm text-amber-400/60 hover:text-amber-200">
             Back
           </Link>
           <h1 className="text-2xl font-semibold text-amber-50">Session review</h1>

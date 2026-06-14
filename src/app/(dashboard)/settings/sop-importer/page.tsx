@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 const EXAMPLE = `# Handle Lakes Bushland refund request
 
@@ -28,6 +30,10 @@ inside our published refund policy.
 
 export default function SopImporterPage() {
   const { selected } = useHiveContext();
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
   const [title, setTitle] = useState("");
   const [scope, setScope] = useState<"hive" | "system">("hive");
   const [content, setContent] = useState("");
@@ -35,7 +41,8 @@ export default function SopImporterPage() {
   const [flash, setFlash] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   async function submit() {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Import SOP")) return;
     setBusy(true);
     setFlash(null);
     try {
@@ -43,7 +50,7 @@ export default function SopImporterPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selected.id,
+          hiveId: effectiveHiveId,
           title,
           scope,
           content,
@@ -65,11 +72,17 @@ export default function SopImporterPage() {
     }
   }
 
-  if (!selected)
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  }
+
+  if (!effectiveHiveId)
     return <p className="text-amber-400/60">Select a hive to import an SOP.</p>;
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div>
         <h1 className="text-2xl font-semibold text-amber-50">Workflow capture</h1>
         <p className="text-sm text-amber-600/70">
@@ -83,7 +96,7 @@ export default function SopImporterPage() {
         <p className="text-sm text-amber-200/80">
           Prefer to record rather than write?{" "}
           <Link
-            href="/setup/workflow-capture"
+            href={target.withTargetHiveId("/setup/workflow-capture")}
             className="text-amber-400 underline hover:text-amber-200"
           >
             Use browser capture
@@ -118,7 +131,7 @@ export default function SopImporterPage() {
             onChange={(e) => setScope(e.target.value as "hive" | "system")}
             className="mt-1 rounded border border-border bg-background px-2 py-1 text-sm text-amber-50"
           >
-            <option value="hive">This hive only ({selected.name})</option>
+            <option value="hive">This hive only ({target.targetHive?.name ?? selected?.name ?? "selected hive"})</option>
             <option value="system">System-wide (all hives)</option>
           </select>
         </div>

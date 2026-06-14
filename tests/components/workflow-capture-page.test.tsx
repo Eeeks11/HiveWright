@@ -25,6 +25,8 @@ const routerPushMock = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPushMock }),
   useParams: () => ({}),
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/setup/workflow-capture",
 }));
 
 // ---- hive context mock ----
@@ -36,6 +38,16 @@ vi.mock("@/components/hive-context", () => ({
       slug: "test-hive",
       type: "digital",
     },
+    hives: [
+      {
+        id: "hive-test",
+        name: "Test Hive",
+        slug: "test-hive",
+        type: "digital",
+      },
+    ],
+    loading: false,
+    hasProvider: true,
   }),
 }));
 

@@ -49,7 +49,9 @@ export function useResolvedHiveTarget(routeHiveId: string | null | undefined) {
     const targetQueryHiveId = isTargetingDifferentHive ? targetHive?.id ?? null : null;
     const section = currentSection(pathname);
     const exitTargetHref = activeHive
-      ? `/hives/${activeHive.id}${section ? `/${section}` : ""}`
+      ? pathname?.startsWith("/hives/")
+        ? `/hives/${activeHive.id}${section ? `/${section}` : ""}`
+        : pathname ?? "/hives"
       : "/hives";
 
     return {
