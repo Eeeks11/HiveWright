@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { Suspense, useState, useRef, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
@@ -26,7 +26,7 @@ function isSupportedBrowser(): boolean {
   );
 }
 
-export default function WorkflowCapturePage() {
+function WorkflowCapturePageContent() {
   const { selected } = useHiveContext();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -498,4 +498,12 @@ function withTargetHiveId(href: string, targetHiveId: string | null) {
   const params = new URLSearchParams(query);
   params.set("targetHiveId", targetHiveId);
   return `${base}?${params.toString()}`;
+}
+
+export default function WorkflowCapturePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Workflow capture loading...</div>}>
+      <WorkflowCapturePageContent />
+    </Suspense>
+  );
 }

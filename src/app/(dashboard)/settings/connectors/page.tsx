@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
 import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import { useSearchParams } from "next/navigation";
@@ -63,7 +63,7 @@ interface ConnectorAction {
   createdAt: string;
 }
 
-export default function ConnectorsPage() {
+function ConnectorsPageContent() {
   const { selected } = useHiveContext();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
@@ -678,5 +678,13 @@ function ConnectorCapabilitySummary({ connector }: { connector: Connector }) {
         </ul>
       ) : null}
     </div>
+  );
+}
+
+export default function ConnectorsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Connectors loading...</div>}>
+      <ConnectorsPageContent />
+    </Suspense>
   );
 }

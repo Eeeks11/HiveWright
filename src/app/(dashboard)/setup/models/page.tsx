@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useHiveContext } from "@/components/hive-context";
 import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import { useSearchParams } from "next/navigation";
@@ -116,7 +116,7 @@ const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   roleRoutes: {},
 };
 
-export default function ModelSetupPage() {
+function ModelSetupPageContent() {
   const { selected: selectedHive } = useHiveContext();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
@@ -946,4 +946,12 @@ function formatDate(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "unknown";
   return date.toLocaleDateString();
+}
+
+export default function ModelSetupPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Model setup loading...</div>}>
+      <ModelSetupPageContent />
+    </Suspense>
+  );
 }
