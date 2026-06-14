@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
 import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import { useSearchParams } from "next/navigation";
@@ -45,7 +45,7 @@ const DECISIONS: Decision[] = ["allow", "require_approval", "block"];
 const EFFECT_TYPES: EffectType[] = ["read", "notify", "write", "financial", "destructive", "system"];
 const RISK_TIERS: RiskTier[] = ["low", "medium", "high", "critical"];
 
-export default function ActionPoliciesPage() {
+function ActionPoliciesPageContent() {
   const { selected } = useHiveContext();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
@@ -518,4 +518,12 @@ function normalizePolicy(policy: Partial<Policy>): Policy {
     reason: policy.reason ?? null,
     conditions: policy.conditions ?? {},
   };
+}
+
+export default function ActionPoliciesPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Action policies loading...</div>}>
+      <ActionPoliciesPageContent />
+    </Suspense>
+  );
 }

@@ -506,7 +506,7 @@ function withTargetHiveId(href: string, targetHiveId: string | null) {
 
 export default function WorkflowCapturePage() {
   return (
-    <Suspense fallback={<p className="text-amber-400/60">Loading workflow capture...</p>}>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Workflow capture loading...</div>}>
       <WorkflowCapturePageContent />
     </Suspense>
   );

@@ -195,7 +195,7 @@ function withTargetHiveId(href: string, targetHiveId: string | null) {
 
 export default function SopImporterPage() {
   return (
-    <Suspense fallback={<p className="text-amber-400/60">Loading SOP importer...</p>}>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">SOP importer loading...</div>}>
       <SopImporterPageContent />
     </Suspense>
   );
