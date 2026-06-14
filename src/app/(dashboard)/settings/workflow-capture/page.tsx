@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import { CaptureConsentDialog } from "@/components/capture-consent-dialog";
 import { CaptureRecordingPill } from "@/components/capture-recording-pill";
 
@@ -30,6 +31,10 @@ export default function WorkflowCapturePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : selected?.id;
 
   const [phase, setPhase] = useState<CapturePhase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +157,8 @@ export default function WorkflowCapturePage() {
   }
 
   async function handleConsentConfirm() {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Creating a browser capture session")) return;
 
     // Step 1: Create the session (consent=true, status=recording)
     syncPhase("creating");
@@ -162,7 +168,7 @@ export default function WorkflowCapturePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          hiveId: selected.id,
+          hiveId: effectiveHiveId,
           consent: true,
           status: "recording",
           captureScope: { type: "browser_tab" },
@@ -318,7 +324,11 @@ export default function WorkflowCapturePage() {
     syncPhase("idle");
   }
 
-  if (!selected) {
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={targetHiveId} />;
+  }
+
+  if (!selected && !effectiveHiveId) {
     return (
       <p className="text-amber-400/60">
         Select a hive to use browser capture.
@@ -360,6 +370,8 @@ export default function WorkflowCapturePage() {
             without your sign-off.
           </p>
         </div>
+
+        <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/workflow-capture" />
 
         {/* Error banner */}
         {error && (

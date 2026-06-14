@@ -10,8 +10,10 @@ const hiveContextMock = vi.hoisted(() => ({
       | null,
     hives: [] as Array<{ id: string; slug: string; name: string; type: string }>,
     loading: false,
+    hasProvider: true,
     selectHive: () => {},
   },
+  searchParams: new URLSearchParams(),
 }));
 
 vi.mock("@/components/hive-context", () => ({
@@ -19,17 +21,23 @@ vi.mock("@/components/hive-context", () => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => hiveContextMock.searchParams,
+  usePathname: () => "/setup/health",
 }));
 
 describe("SetupHealthPage", () => {
   beforeEach(() => {
     hiveContextMock.value = {
       selected: { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
-      hives: [],
+      hives: [
+        { id: "hive-1", slug: "hive-one", name: "Hive One", type: "digital" },
+        { id: "hive-2", slug: "hive-two", name: "Hive Two", type: "digital" },
+      ],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
     };
+    hiveContextMock.searchParams = new URLSearchParams();
   });
 
   afterEach(() => {
@@ -41,6 +49,7 @@ describe("SetupHealthPage", () => {
       selected: null,
       hives: [],
       loading: false,
+      hasProvider: true,
       selectHive: () => {},
     };
     const fetchSpy = vi.fn();
@@ -160,6 +169,47 @@ describe("SetupHealthPage", () => {
     expect(pageText).not.toMatch(/adapter_config|raw model|cron|route hint|action_policies|effect_type|jsonb/i);
     expect(pageText).not.toMatch(/3000\/3001|localhost:3000|localhost:3001/);
     expect(within(screen.getByText("Service connections").closest("article")!).getByText("Pending/not checked")).toBeTruthy();
+  });
+
+  it("uses targetHiveId for setup health reads and preserves it in fix links", async () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: {
+              hiveId: "hive-2",
+              rows: [row("models", "Models", "ready", "Ready", "/setup/models", "Review Model Setup")],
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SetupHealthPage />);
+
+    await waitFor(() => expect(screen.getByText("1 of 1 ready")).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/setup-health?hiveId=hive-2",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(screen.getByText(/Target mode: viewing/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Review Model Setup" }).getAttribute("href")).toBe(
+      "/setup/models?targetHiveId=hive-2",
+    );
+  });
+
+  it("fails closed for invalid targetHiveId without reading active setup health", () => {
+    hiveContextMock.searchParams = new URLSearchParams("targetHiveId=missing-hive");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<SetupHealthPage />);
+
+    expect(screen.getByText(/Hive target/).textContent).toContain("missing-hive");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
