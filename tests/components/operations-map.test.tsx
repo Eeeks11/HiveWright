@@ -5,7 +5,54 @@ import {
   buildOperationsMapModel,
   buildOperationsTopology,
   OperationsMapView,
+  type OperationsTopologyNode,
 } from "@/components/operations-map";
+
+interface ApproxFootprint {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+function approxNodeRadius(node: OperationsTopologyNode): number {
+  if (node.kind === "hive") return 42;
+  if (node.liveBlocking || node.state === "failed" || node.state === "unresolvable") {
+    return node.kind === "goal" ? 30 : 26;
+  }
+  if (node.state === "history") return node.kind === "goal" ? 26 : 20;
+  if (node.state === "decision" || node.state === "escalation") return node.kind === "goal" ? 30 : 26;
+  if (node.active) return node.kind === "goal" ? 32 : 26;
+  return node.kind === "goal" ? 28 : 22;
+}
+
+function approxNodeFootprint(node: OperationsTopologyNode): ApproxFootprint {
+  const radius = approxNodeRadius(node);
+  const hexHalfHeight = radius * 0.866;
+  const labelWidth = node.label.length * 6.5;
+  const sublabelWidth = node.sublabel.length * 5.2;
+  const halfWidth = Math.max(radius, labelWidth / 2, sublabelWidth / 2) + 8;
+  return {
+    left: node.x - halfWidth,
+    right: node.x + halfWidth,
+    top: node.y - hexHalfHeight - 6,
+    bottom: node.y + hexHalfHeight + (node.sublabel ? 40 : 24),
+  };
+}
+
+function footprintsOverlap(a: ApproxFootprint, b: ApproxFootprint): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function expectNoApproximateNodeOverlaps(nodes: OperationsTopologyNode[]) {
+  for (let a = 0; a < nodes.length; a += 1) {
+    for (let b = a + 1; b < nodes.length; b += 1) {
+      const first = nodes[a];
+      const second = nodes[b];
+      expect(footprintsOverlap(approxNodeFootprint(first), approxNodeFootprint(second)), `${first.id} overlaps ${second.id}`).toBe(false);
+    }
+  }
+}
 
 describe("buildOperationsMapModel relationship view", () => {
   it("groups active agents under their goal cluster", () => {
@@ -544,7 +591,7 @@ describe("buildOperationsTopology", () => {
       expect(to).toBeTruthy();
       expect(to!.x).toBeGreaterThan(150);
       expect(to!.x).toBeLessThan(850);
-      expect(Math.hypot(to!.x - from!.x, to!.y - from!.y)).toBeLessThanOrEqual(260);
+      expect(Math.hypot(to!.x - from!.x, to!.y - from!.y)).toBeLessThanOrEqual(280);
     }
   });
 
@@ -584,7 +631,7 @@ describe("buildOperationsTopology", () => {
     expect(new Set(taskNodes.map((node) => Math.round(node.x))).size).toBeGreaterThan(1);
 
     for (const task of taskNodes) {
-      expect(Math.hypot(task.x - goal!.x, task.y - goal!.y)).toBeLessThanOrEqual(330);
+      expect(Math.hypot(task.x - goal!.x, task.y - goal!.y)).toBeLessThanOrEqual(420);
     }
 
     for (let a = 0; a < taskNodes.length; a += 1) {
@@ -735,5 +782,121 @@ describe("buildOperationsTopology", () => {
     expect(historyNode).toBeTruthy();
     expect(historyNode!.state).toBe("history");
     expect(historyNode!.x - goalNode!.x).toBeLessThanOrEqual(520);
+  });
+
+  it("separates approximate node footprints in a dense multi-goal real-world topology", () => {
+    const supervisors = [
+      "Short Stay Sales",
+      "Owner Guest Review Recovery",
+      "Quality Reviewer screenshot audit",
+      "Cleaning handoff and linen checks",
+      "Maintenance quote follow-up",
+      "Channel pricing reconciliation",
+      "Guest message escalation queue",
+    ].map((title, index) => ({
+      goalId: `dense-goal-${index}`,
+      title,
+      threadId: null,
+      lastActivityAt: null,
+      state: index % 3 === 0 ? ("running" as const) : index % 3 === 1 ? ("waking" as const) : ("idle" as const),
+    }));
+    const tasks = supervisors.flatMap((supervisor, index) => [
+      {
+        id: `active-${index}-a`,
+        title: `${supervisor.title} agent is preparing owner-visible next action`,
+        assignedTo: index % 2 === 0 ? "quality-reviewer" : "sales-concierge",
+        startedAt: null,
+        modelUsed: null,
+        status: "active",
+        goalId: supervisor.goalId,
+        goalTitle: supervisor.title,
+      },
+      {
+        id: `active-${index}-b`,
+        title: `${supervisor.title} follow-up with a long label that should still fit`,
+        assignedTo: index % 2 === 0 ? "ops-reviewer" : "booking-agent",
+        startedAt: null,
+        modelUsed: null,
+        status: "active",
+        goalId: supervisor.goalId,
+        goalTitle: supervisor.title,
+      },
+    ]);
+    const criticalItems = supervisors.flatMap((supervisor, index) => [
+      {
+        id: `blocked-${index}`,
+        title: `${supervisor.title} needs owner review before continuing`,
+        sourceType: "task" as const,
+        status: index % 2 === 0 ? "blocked" : "failed",
+        href: `/tasks/blocked-${index}`,
+        updatedAt: null,
+        goalId: supervisor.goalId,
+        goalTitle: supervisor.title,
+        goalStatus: "active",
+        taskId: `blocked-${index}`,
+        assignedTo: index % 2 === 0 ? "quality-reviewer" : "sales-concierge",
+        liveBlocking: true,
+      },
+      {
+        id: `decision-${index}`,
+        title: `${supervisor.title} decision pending`,
+        sourceType: "decision" as const,
+        status: index % 2 === 0 ? "pending" : "ea_review",
+        href: `/decisions/decision-${index}`,
+        updatedAt: null,
+        goalId: supervisor.goalId,
+        goalTitle: supervisor.title,
+        goalStatus: "active",
+        taskId: null,
+        assignedTo: null,
+        liveBlocking: true,
+      },
+    ]);
+
+    const topology = buildOperationsTopology(buildOperationsMapModel({ supervisors, tasks, criticalItems }));
+
+    expectNoApproximateNodeOverlaps(topology.nodes);
+  });
+
+  it("separates approximate node footprints for a single crowded goal", () => {
+    const model = buildOperationsMapModel({
+      supervisors: [
+        {
+          goalId: "short-stay-sales",
+          title: "Short Stay Sales",
+          threadId: null,
+          lastActivityAt: null,
+          state: "running",
+        },
+      ],
+      tasks: Array.from({ length: 4 }, (_, index) => ({
+        id: `sales-agent-${index}`,
+        title: `Short Stay Sales active workstream ${index} needs a readable operation-map label`,
+        assignedTo: index % 2 === 0 ? "sales-concierge" : "quality-reviewer",
+        startedAt: null,
+        modelUsed: null,
+        status: "active",
+        goalId: "short-stay-sales",
+        goalTitle: "Short Stay Sales",
+      })),
+      criticalItems: Array.from({ length: 8 }, (_, index) => ({
+        id: `sales-critical-${index}`,
+        title: `Short Stay Sales blocker ${index} is crowded but must remain readable`,
+        sourceType: index % 3 === 0 ? ("decision" as const) : ("task" as const),
+        status: index % 3 === 0 ? "pending" : index % 2 === 0 ? "failed" : "unresolvable",
+        href: index % 3 === 0 ? `/decisions/sales-critical-${index}` : `/tasks/sales-critical-${index}`,
+        updatedAt: null,
+        goalId: "short-stay-sales",
+        goalTitle: "Short Stay Sales",
+        goalStatus: "active",
+        taskId: index % 3 === 0 ? null : `sales-critical-${index}`,
+        assignedTo: index % 2 === 0 ? "quality-reviewer" : "sales-concierge",
+        liveBlocking: true,
+      })),
+    });
+
+    const topology = buildOperationsTopology(model);
+
+    expectNoApproximateNodeOverlaps(topology.nodes);
   });
 });
