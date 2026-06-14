@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
@@ -88,7 +88,7 @@ function JsonBlock({ value }: { value: unknown }) {
   );
 }
 
-export default function CaptureReviewPage() {
+function CaptureReviewPageContent() {
   const params = useParams<{ captureId: string }>();
   const { selected } = useHiveContext();
   const router = useRouter();
@@ -408,5 +408,13 @@ export default function CaptureReviewPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function CaptureReviewPage() {
+  return (
+    <Suspense fallback={<p className="text-amber-400/60">Loading capture review...</p>}>
+      <CaptureReviewPageContent />
+    </Suspense>
   );
 }

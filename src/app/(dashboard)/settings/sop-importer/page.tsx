@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useHiveContext } from "@/components/hive-context";
@@ -28,7 +28,7 @@ inside our published refund policy.
 - Any refund over $500 needs owner approval via a Tier 2 decision.
 - Do not refund if the guest has an outstanding damage claim open.`;
 
-export default function SopImporterPage() {
+function SopImporterPageContent() {
   const { selected } = useHiveContext();
   const searchParams = useSearchParams();
   const requestedTargetHiveId = searchParams.get("targetHiveId");
@@ -179,5 +179,13 @@ export default function SopImporterPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function SopImporterPage() {
+  return (
+    <Suspense fallback={<p className="text-amber-400/60">Loading SOP importer...</p>}>
+      <SopImporterPageContent />
+    </Suspense>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import type { ButtonHTMLAttributes } from "react";
 import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
@@ -238,7 +238,7 @@ function ActionButton({
   );
 }
 
-export default function DecisionsPage() {
+function DecisionsPageContent() {
   const { selected, loading: bizLoading } = useHiveContext();
   const searchParams = useSearchParams();
   const requestedTargetHiveId = searchParams.get("targetHiveId");
@@ -722,6 +722,14 @@ export default function DecisionsPage() {
         }}
       />
     </div>
+  );
+}
+
+export default function DecisionsPage() {
+  return (
+    <Suspense fallback={<p className="text-zinc-400">Loading decisions...</p>}>
+      <DecisionsPageContent />
+    </Suspense>
   );
 }
 
