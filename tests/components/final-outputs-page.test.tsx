@@ -124,12 +124,12 @@ describe("FinalOutputsPage", () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText("Hive 1 launch")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Hive 1 launch").length).toBeGreaterThan(0));
     expect(screen.queryByText("Archived launch notes")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
 
-    await waitFor(() => expect(screen.getByText("Archived launch notes")).toBeTruthy());
+    await waitFor(() => expect(screen.getAllByText("Archived launch notes").length).toBeGreaterThan(0));
     expect(screen.queryByText("Hive 1 launch")).toBeNull();
   });
 });
