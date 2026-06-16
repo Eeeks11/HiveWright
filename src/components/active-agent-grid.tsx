@@ -62,6 +62,7 @@ export function ActiveAgentGrid({ hiveId }: { hiveId: string }) {
         <AgentCard
           key={task.id}
           taskId={task.id}
+          hiveId={hiveId}
           assignedTo={task.assignedTo}
           title={task.title}
           modelUsed={task.modelUsed}

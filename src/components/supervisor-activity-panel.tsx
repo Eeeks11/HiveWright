@@ -86,7 +86,7 @@ function eventStyle(type: SupervisorEvent["type"]): { color: string; prefix: str
   }
 }
 
-export function SupervisorActivityPanel({ goalId }: { goalId: string }) {
+export function SupervisorActivityPanel({ goalId, hiveId }: { goalId: string; hiveId: string }) {
   const [data, setData] = useState<SupervisorActivity | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,7 +98,7 @@ export function SupervisorActivityPanel({ goalId }: { goalId: string }) {
 
     async function fetchActivity() {
       try {
-        const res = await fetch(`/api/goals/${goalId}/supervisor`);
+        const res = await fetch(`/api/goals/${goalId}/supervisor?hiveId=${encodeURIComponent(hiveId)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const body = (await res.json()) as { data: SupervisorActivity };
         if (!cancelled) {
@@ -125,7 +125,7 @@ export function SupervisorActivityPanel({ goalId }: { goalId: string }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [goalId, data?.goalStatus]);
+  }, [goalId, hiveId, data?.goalStatus]);
 
   // Auto-scroll inside the panel only while the reader is already following the tail.
   useEffect(() => {

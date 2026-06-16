@@ -18,9 +18,10 @@ function formatSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function endpointFor(scope: Exclude<AttachmentSource, "idea">, id: string) {
-  if (scope === "task") return `/api/tasks/${id}/attachments`;
-  return `/api/goals/${id}/attachments`;
+function endpointFor(scope: Exclude<AttachmentSource, "idea">, id: string, hiveId?: string) {
+  const suffix = hiveId ? `?hiveId=${encodeURIComponent(hiveId)}` : "";
+  if (scope === "task") return `/api/tasks/${id}/attachments${suffix}`;
+  return `/api/goals/${id}/attachments${suffix}`;
 }
 
 export function AttachmentsPanel({
@@ -42,7 +43,7 @@ export function AttachmentsPanel({
       try {
         const url = scope === "idea"
           ? `/api/hives/${hiveId}/ideas/${id}/attachments`
-          : endpointFor(scope, id);
+          : endpointFor(scope, id, hiveId);
         const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) {
           if (active) {

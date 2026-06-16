@@ -97,8 +97,8 @@ export function mapDeliverableRow(row: DeliverableRow): DeliverableDetail {
   const renderMode = normalizeRenderMode(row, filename);
   const openUrl = renderMode === "external_url" && row.public_url
     ? row.public_url
-    : `/api/deliverables/${row.id}/content`;
-  const downloadUrl = renderMode === "external_url" ? null : `/api/deliverables/${row.id}/download`;
+    : `/api/deliverables/${row.id}/content?hiveId=${encodeURIComponent(row.hive_id)}`;
+  const downloadUrl = renderMode === "external_url" ? null : `/api/deliverables/${row.id}/download?hiveId=${encodeURIComponent(row.hive_id)}`;
 
   return {
     id: row.id,

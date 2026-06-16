@@ -467,13 +467,13 @@ function makeDraftPreview() {
 function mockReviewFetch(sessionId: string) {
   const fetchMock = vi.fn(
     async (url: string, opts?: RequestInit): Promise<Response> => {
-      if (url === `/api/capture-sessions/${sessionId}` && !opts?.method) {
+      if (url.startsWith(`/api/capture-sessions/${sessionId}?`) && !opts?.method) {
         return new Response(JSON.stringify({ data: makeCaptureSession(sessionId) }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url === `/api/capture-sessions/${sessionId}/draft` && !opts?.method) {
+      if (url.startsWith(`/api/capture-sessions/${sessionId}/draft?`) && !opts?.method) {
         return new Response(JSON.stringify({ data: makeDraftPreview() }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -581,7 +581,7 @@ describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
     workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
     const fetchMock = vi.fn(
       async (url: string): Promise<Response> => {
-        if (url === `/api/capture-sessions/${sessionId}`) {
+        if (url.startsWith(`/api/capture-sessions/${sessionId}?`)) {
           return new Response(JSON.stringify({ data: makeCaptureSession(sessionId, "hive-test") }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -605,7 +605,7 @@ describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
     expect(screen.queryByRole("button", { name: /reject draft/i })).toBeNull();
 
     const calls = fetchMock.mock.calls as unknown as FetchCall[];
-    expect(calls.some(([url]) => url === `/api/capture-sessions/${sessionId}/draft`)).toBe(false);
+    expect(calls.some(([url]) => url.startsWith(`/api/capture-sessions/${sessionId}/draft`))).toBe(false);
     expect(calls.some(([, opts]) => opts?.method === "POST" || opts?.method === "DELETE")).toBe(false);
   });
 });

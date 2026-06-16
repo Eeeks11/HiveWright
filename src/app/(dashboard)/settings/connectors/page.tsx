@@ -130,7 +130,7 @@ function ConnectorsPageContent() {
     let cancelled = false;
     Promise.all(installs.map(async (install) => {
       try {
-        const body = await fetch(`/api/connector-installs/${install.id}/actions`).then((r) => r.json());
+        const body = await fetch(`/api/connector-installs/${install.id}/actions?hiveId=${encodeURIComponent(install.hiveId)}`).then((r) => r.json());
         return [install.id, body.data ?? []] as const;
       } catch {
         return [install.id, []] as const;
@@ -193,6 +193,8 @@ function ConnectorsPageContent() {
         try {
           const testRes = await fetch(`/api/connector-installs/${justInstalled.id}/test`, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hiveId: effectiveHiveId }),
           });
           const testBody = await testRes.json();
           const r = testBody.data ?? {};
@@ -258,7 +260,11 @@ function ConnectorsPageContent() {
     setBusy(install.id);
     setFlash(null);
     try {
-      const res = await fetch(`/api/connector-installs/${install.id}/test`, { method: "POST" });
+      const res = await fetch(`/api/connector-installs/${install.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiveId: install.hiveId }),
+      });
       const body = await res.json();
       const r = body.data ?? {};
       const msg = r.success
@@ -284,7 +290,11 @@ function ConnectorsPageContent() {
     }
     setBusy(install.id);
     try {
-      await fetch(`/api/connector-installs/${install.id}`, { method: "DELETE" });
+      await fetch(`/api/connector-installs/${install.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiveId: install.hiveId }),
+      });
       if (effectiveHiveId) {
         const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
         setInstalls(refreshed.data ?? []);
@@ -307,7 +317,7 @@ function ConnectorsPageContent() {
       const res = await fetch(`/api/connector-installs/${install.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: targetStatus }),
+        body: JSON.stringify({ hiveId: install.hiveId, status: targetStatus }),
       });
       const body = await res.json();
       if (!res.ok) {

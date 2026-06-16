@@ -380,7 +380,7 @@ function DecisionsPageContent() {
     setExpandedThread(decisionId);
     setThreadLoading(true);
     try {
-      const res = await fetch(`/api/decisions/${decisionId}/messages`);
+      const res = await fetch(`/api/decisions/${decisionId}/messages?hiveId=${encodeURIComponent(effectiveHiveId ?? "")}`);
       if (!res.ok) throw new Error("Failed to load thread");
       const data = await res.json();
       setThreadMessages(data.data ?? []);
@@ -402,7 +402,7 @@ function DecisionsPageContent() {
         body: JSON.stringify({ hiveId: effectiveHiveId, response: "discussed", comment: content }),
       });
       if (!res.ok) throw new Error("Failed to send message");
-      const messages = await fetch(`/api/decisions/${decisionId}/messages`);
+      const messages = await fetch(`/api/decisions/${decisionId}/messages?hiveId=${encodeURIComponent(effectiveHiveId ?? "")}`);
       if (messages.ok) {
         const data = await messages.json();
         setThreadMessages(data.data ?? []);
@@ -607,6 +607,7 @@ function DecisionsPageContent() {
 
           <DecisionActivity
             decisionId={decision.id}
+            hiveId={effectiveHiveId}
             defaultOpen={decision.status === "pending"}
             refreshToken={activityRefresh}
           />
@@ -799,10 +800,12 @@ export default function DecisionsPage() {
 
 function DecisionActivity({
   decisionId,
+  hiveId,
   defaultOpen,
   refreshToken,
 }: {
   decisionId: string;
+  hiveId: string;
   defaultOpen: boolean;
   refreshToken: number;
 }) {
@@ -811,7 +814,7 @@ function DecisionActivity({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/decisions/${decisionId}/activity`)
+    fetch(`/api/decisions/${decisionId}/activity?hiveId=${encodeURIComponent(hiveId)}`)
       .then((res) => (res.ok ? res.json() : { data: [] }))
       .then((body) => {
         if (!cancelled) setEntries(Array.isArray(body.data) ? body.data : []);
@@ -825,7 +828,7 @@ function DecisionActivity({
     return () => {
       cancelled = true;
     };
-  }, [decisionId, refreshToken]);
+  }, [decisionId, hiveId, refreshToken]);
 
   return (
     <details

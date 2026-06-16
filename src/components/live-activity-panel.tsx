@@ -29,6 +29,7 @@ const AUTO_SCROLL_THRESHOLD_PX = 80;
 
 export interface LiveActivityPanelProps {
   taskId: string;
+  hiveId: string;
   taskTitle?: string;
   /** Pass task status from server to drive empty-state messaging */
   taskStatus?: "pending" | "active" | "completed" | "failed";
@@ -38,7 +39,7 @@ export function LiveActivityPanel(props: LiveActivityPanelProps) {
   return <LiveActivityPanelContent key={props.taskId} {...props} />;
 }
 
-function LiveActivityPanelContent({ taskId, taskTitle, taskStatus }: LiveActivityPanelProps) {
+function LiveActivityPanelContent({ taskId, hiveId, taskTitle, taskStatus }: LiveActivityPanelProps) {
   const [lines, setLines] = useState<OutputChunk[]>([]);
   const [connState, setConnState] = useState<ConnectionState>("connecting");
   const outputRef = useRef<HTMLDivElement>(null);
@@ -55,7 +56,7 @@ function LiveActivityPanelContent({ taskId, taskTitle, taskStatus }: LiveActivit
     function connect() {
       if (destroyedRef.current) return;
 
-      const es = new EventSource(`/api/tasks/${taskId}/stream`);
+      const es = new EventSource(`/api/tasks/${taskId}/stream?hiveId=${encodeURIComponent(hiveId)}`);
       esRef.current = es;
 
       es.onmessage = (event: MessageEvent) => {
@@ -103,7 +104,7 @@ function LiveActivityPanelContent({ taskId, taskTitle, taskStatus }: LiveActivit
       esRef.current?.close();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [taskId]);
+  }, [taskId, hiveId]);
 
   // Keep the output pinned only while the reader is already following the tail.
   useEffect(() => {

@@ -44,7 +44,8 @@ export default function BoardPage() {
   }, [selected?.id]);
 
   async function openSession(id: string) {
-    const res = await fetch(`/api/board/sessions/${id}`);
+    if (!selected?.id) return;
+    const res = await fetch(`/api/board/sessions/${id}?hiveId=${encodeURIComponent(selected.id)}`);
     const body = await res.json();
     if (!res.ok) {
       setError(body.error ?? "Failed to load session");

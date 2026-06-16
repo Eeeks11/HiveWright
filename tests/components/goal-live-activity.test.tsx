@@ -87,11 +87,12 @@ describe("<GoalLiveActivity>", () => {
     render(
       <GoalLiveActivity
         goalId="goal-1"
+        hiveId="hive-test"
         taskTitles={{ "task-1": "Investigate live output" }}
       />,
     );
 
-    expect(MockEventSource.instances[0].url).toBe("/api/goals/goal-1/stream");
+    expect(MockEventSource.instances[0].url).toBe("/api/goals/goal-1/stream?hiveId=hive-test");
 
     act(() => {
       MockEventSource.instances[0].emit({

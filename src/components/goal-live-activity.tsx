@@ -124,6 +124,7 @@ function TaskOutputPanel({
 
 export function GoalLiveActivity(props: {
   goalId: string;
+  hiveId: string;
   taskTitles?: Record<string, string>;
 }) {
   return <GoalLiveActivityContent key={props.goalId} {...props} />;
@@ -131,9 +132,11 @@ export function GoalLiveActivity(props: {
 
 function GoalLiveActivityContent({
   goalId,
+  hiveId,
   taskTitles,
 }: {
   goalId: string;
+  hiveId: string;
   /** Map of taskId → human-readable title fetched server-side. Falls back to
    *  short UUID prefix for tasks that start after the initial page render. */
   taskTitles?: Record<string, string>;
@@ -154,7 +157,7 @@ function GoalLiveActivityContent({
     function connect() {
       if (destroyedRef.current) return;
 
-      const es = new EventSource(`/api/goals/${goalId}/stream`);
+      const es = new EventSource(`/api/goals/${goalId}/stream?hiveId=${encodeURIComponent(hiveId)}`);
       esRef.current = es;
 
       es.onmessage = (event: MessageEvent) => {
@@ -234,7 +237,7 @@ function GoalLiveActivityContent({
       esRef.current?.close();
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [goalId]);
+  }, [goalId, hiveId]);
 
   const panels = Array.from(taskPanels.values());
 

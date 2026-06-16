@@ -8,6 +8,7 @@ const MAX_OUTPUT_CHARS = 8000;
 
 interface AgentCardProps {
   taskId: string;
+  hiveId: string;
   assignedTo: string;
   title: string;
   modelUsed?: string | null;
@@ -45,6 +46,7 @@ function relativeTime(iso: string | null | undefined): string {
 
 export function AgentCard({
   taskId,
+  hiveId,
   assignedTo,
   title,
   modelUsed,
@@ -65,7 +67,7 @@ export function AgentCard({
 
   useEffect(() => {
     if (cancelled) return;
-    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+    const es = new EventSource(`/api/tasks/${taskId}/stream?hiveId=${encodeURIComponent(hiveId)}`);
     es.onmessage = (event) => {
       let parsed: { type?: string; chunk?: string };
       try {
@@ -93,7 +95,7 @@ export function AgentCard({
     return () => {
       es.close();
     };
-  }, [taskId, cancelled]);
+  }, [taskId, hiveId, cancelled]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -108,7 +110,7 @@ export function AgentCard({
       const res = await fetch(`/api/tasks/${taskId}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ hiveId }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };

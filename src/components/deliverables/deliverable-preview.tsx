@@ -14,7 +14,7 @@ function previewText(deliverable: DeliverableDetail) {
 }
 
 function contentUrl(deliverable: DeliverableDetail) {
-  return `/api/deliverables/${deliverable.id}/content`;
+  return `/api/deliverables/${deliverable.id}/content?hiveId=${encodeURIComponent(deliverable.hiveId)}`;
 }
 
 export function DeliverablePreview({ deliverable }: { deliverable: DeliverableDetail }) {

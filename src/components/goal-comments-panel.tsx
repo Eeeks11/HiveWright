@@ -10,7 +10,7 @@ type GoalComment = {
   createdAt: string;
 };
 
-export function GoalCommentsPanel({ goalId }: { goalId: string }) {
+export function GoalCommentsPanel({ goalId, hiveId }: { goalId: string; hiveId: string }) {
   const [comments, setComments] = useState<GoalComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
@@ -19,14 +19,14 @@ export function GoalCommentsPanel({ goalId }: { goalId: string }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    fetch(`/api/goals/${goalId}/comments`)
+    fetch(`/api/goals/${goalId}/comments?hiveId=${encodeURIComponent(hiveId)}`)
       .then((r) => r.json())
       .then((json) => {
         setComments(json.data?.comments ?? []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [goalId]);
+  }, [goalId, hiveId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,7 +38,7 @@ export function GoalCommentsPanel({ goalId }: { goalId: string }) {
       const res = await fetch(`/api/goals/${goalId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: trimmed, createdBy: "owner" }),
+        body: JSON.stringify({ hiveId, body: trimmed, createdBy: "owner" }),
       });
       const json = await res.json();
       if (!res.ok) {

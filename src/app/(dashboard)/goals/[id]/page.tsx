@@ -29,6 +29,7 @@ type GoalRow = {
   parent_id: string | null;
   created_at: Date;
   updated_at: Date;
+  hive_id: string;
 };
 
 type SubGoalRow = {
@@ -67,7 +68,7 @@ export default async function GoalDetailPage({
 
   const [goalRows, subGoalRows, taskRows] = await Promise.all([
     sql<GoalRow[]>`
-      SELECT id, title, description, status, budget_cents, spent_cents, parent_id, created_at, updated_at
+      SELECT id, title, description, status, budget_cents, spent_cents, parent_id, created_at, updated_at, hive_id
       FROM goals
       WHERE id = ${id}
     `,
@@ -136,7 +137,7 @@ export default async function GoalDetailPage({
       )}
 
       {/* Attachments */}
-      <AttachmentsPanel scope="goal" id={goal.id} />
+      <AttachmentsPanel scope="goal" id={goal.id} hiveId={goal.hive_id} />
 
       {/* Sub-goals */}
       {subGoalRows.length > 0 && (
@@ -162,16 +163,17 @@ export default async function GoalDetailPage({
       <GoalPlanPanel goalId={goal.id} />
 
       {/* Owner feedback thread — persist rework requests on the goal */}
-      <GoalCommentsPanel goalId={goal.id} />
+      <GoalCommentsPanel goalId={goal.id} hiveId={goal.hive_id} />
 
       {/* Supervisor's own thoughts + tool calls, parsed from the codex
           rollout file. Polls every 5 s while the goal is active. */}
-      <SupervisorActivityPanel goalId={goal.id} />
+      <SupervisorActivityPanel goalId={goal.id} hiveId={goal.hive_id} />
 
       {/* Live agent activity — uses goal stream so tasks that start after page
           load appear automatically without a manual refresh */}
       <GoalLiveActivity
         goalId={goal.id}
+        hiveId={goal.hive_id}
         taskTitles={Object.fromEntries(taskRows.map((t) => [t.id, t.title]))}
       />
 

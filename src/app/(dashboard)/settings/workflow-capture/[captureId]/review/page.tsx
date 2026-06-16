@@ -118,7 +118,7 @@ function CaptureReviewPageContent() {
     setDraftPreview(null);
     setDraftResult(null);
     setEditedSkillContent("");
-    fetch(`/api/capture-sessions/${id}`)
+    fetch(`/api/capture-sessions/${id}?hiveId=${encodeURIComponent(effectiveHiveId)}`)
       .then(async (res) => {
         const body = await res.json() as { data?: CaptureSession; error?: string };
         if (!res.ok) throw new Error(body.error ?? "Failed to load session");
@@ -134,7 +134,7 @@ function CaptureReviewPageContent() {
         }
         setSession(body.data);
         setDraftPreviewLoading(true);
-        const draftRes = await fetch(`/api/capture-sessions/${id}/draft`);
+        const draftRes = await fetch(`/api/capture-sessions/${id}/draft?hiveId=${encodeURIComponent(effectiveHiveId)}`);
         const draftBody = await draftRes.json() as { data?: DraftPreviewResult; error?: string };
         if (!draftRes.ok) throw new Error(draftBody.error ?? "Failed to load draft preview");
         if (draftBody.data) {
@@ -159,7 +159,11 @@ function CaptureReviewPageContent() {
     }
     setDeleting(true);
     try {
-      const res = await fetch(`/api/capture-sessions/${session.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/capture-sessions/${session.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiveId: effectiveHiveId }),
+      });
       if (!res.ok) {
         const body = await res.json() as { error?: string };
         throw new Error(body.error ?? "Delete failed");
@@ -183,6 +187,7 @@ function CaptureReviewPageContent() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hiveId: effectiveHiveId,
           reviewNotes: "Approved from capture review shell.",
           suggestedSkillContent: editedSkillContent,
         }),
@@ -209,7 +214,7 @@ function CaptureReviewPageContent() {
       const res = await fetch(`/api/capture-sessions/${session.id}/draft`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "Rejected in capture review shell." }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, reason: "Rejected in capture review shell." }),
       });
       const body = await res.json() as { data?: { previewStatus: "rejected" }; error?: string };
       if (!res.ok) throw new Error(body.error ?? "Draft rejection failed");

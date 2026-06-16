@@ -121,7 +121,7 @@ function WorkflowCapturePageContent() {
       const res = await fetch(`/api/capture-sessions/${sessionId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "stopped" }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, status: "stopped" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -136,7 +136,7 @@ function WorkflowCapturePageContent() {
     routerRef.current.push(
       withTargetHiveId(`/setup/workflow-capture/${sessionId}/review`, targetHiveId),
     );
-  }, [cleanupMedia, target, targetHiveId]);
+  }, [cleanupMedia, effectiveHiveId, target, targetHiveId]);
 
   // Keep a stable ref so stream/recorder event handlers always call the latest version
   const triggerStopRef = useRef(triggerStop);
@@ -213,7 +213,7 @@ function WorkflowCapturePageContent() {
         await fetch(`/api/capture-sessions/${createdSessionId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "cancelled" }),
+          body: JSON.stringify({ hiveId: effectiveHiveId, status: "cancelled" }),
         });
       } catch {
         // non-fatal — best-effort cleanup
@@ -300,6 +300,8 @@ function WorkflowCapturePageContent() {
         // Hard-purge: try DELETE first; if session state doesn't allow it, fall back to PATCH+cancelled
         const deleteRes = await fetch(`/api/capture-sessions/${sessionId}`, {
           method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hiveId: effectiveHiveId }),
         });
         if (!deleteRes.ok) {
           // Fallback: mark cancelled

@@ -196,13 +196,14 @@ export default async function TaskDetailPage({
       <TaskPipelineRouter hiveId={task.hive_id} taskId={task.id} taskTitle={task.title} />
 
       {/* Attachments */}
-      <AttachmentsPanel scope="task" id={task.id} />
+      <AttachmentsPanel scope="task" id={task.id} hiveId={task.hive_id} />
 
       {/* Live agent output */}
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Agent Output</h2>
         <LiveActivityPanel
           taskId={task.id}
+          hiveId={task.hive_id}
           taskTitle={task.title}
           taskStatus={task.status as "pending" | "active" | "completed" | "failed"}
         />
