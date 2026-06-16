@@ -60,7 +60,7 @@ describe("HiveDetailPage", () => {
         return jsonResponse({ data: [installFixture()] });
       }
 
-      if (url === "/api/connector-installs/install-1/actions") {
+      if (url === "/api/connector-installs/install-1/actions?hiveId=hive-1") {
         return jsonResponse({ data: [actionFixture()] });
       }
 

@@ -122,7 +122,7 @@ export function HiveConnectorsPanel({ hiveId }: { hiveId: string }) {
     Promise.all(installs.map(async (install) => {
       try {
         void queryKeys.connectors.actions(install.id);
-        const body = await fetch(`/api/connector-installs/${install.id}/actions`).then(readJson);
+        const body = await fetch(`/api/connector-installs/${install.id}/actions?hiveId=${encodeURIComponent(hiveId)}`).then(readJson);
         return [install.id, body.data ?? []] as const;
       } catch {
         return [install.id, []] as const;
@@ -133,7 +133,7 @@ export function HiveConnectorsPanel({ hiveId }: { hiveId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [installs]);
+  }, [hiveId, installs]);
 
   const installedSlugs = useMemo(() => new Set(installs.map((install) => install.connectorSlug)), [installs]);
   const availableCatalog = useMemo(
@@ -146,7 +146,11 @@ export function HiveConnectorsPanel({ hiveId }: { hiveId: string }) {
     setMessage(null);
     try {
       if (action === "test") {
-        const res = await fetch(`/api/connector-installs/${install.id}/test`, { method: "POST" });
+        const res = await fetch(`/api/connector-installs/${install.id}/test`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hiveId }),
+        });
         const body = await res.json();
         if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
         const result = body.data ?? {};
@@ -174,7 +178,7 @@ export function HiveConnectorsPanel({ hiveId }: { hiveId: string }) {
         const res = await fetch(`/api/connector-installs/${install.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: nextStatus }),
+          body: JSON.stringify({ hiveId, status: nextStatus }),
         });
         const body = await res.json();
         if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);

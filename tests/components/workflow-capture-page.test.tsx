@@ -311,7 +311,7 @@ describe("WorkflowCapturePage — Stop → PATCH /api/capture-sessions/[id]", ()
 
     const stopFetch = vi.fn(
       async (url: string, opts?: RequestInit): Promise<Response> => {
-        if (url === `/api/capture-sessions/${sessionId}` && opts?.method === "PATCH") {
+        if (url === `/api/capture-sessions/${sessionId}?hiveId=hive-test` && opts?.method === "PATCH") {
           return new Response(
             JSON.stringify({ data: { id: sessionId, status: "stopped" } }),
             { status: 200, headers: { "Content-Type": "application/json" } },
@@ -328,11 +328,12 @@ describe("WorkflowCapturePage — Stop → PATCH /api/capture-sessions/[id]", ()
       const calls = stopFetch.mock.calls as unknown as FetchCall[];
       const patchCall = calls.find(
         ([u, o]) =>
-          u === `/api/capture-sessions/${sessionId}` && o?.method === "PATCH",
+          u === `/api/capture-sessions/${sessionId}?hiveId=hive-test` && o?.method === "PATCH",
       );
       expect(patchCall, "PATCH to capture-sessions was not called on Stop").toBeTruthy();
 
       const body = JSON.parse(patchCall![1]!.body as string) as Record<string, unknown>;
+      expect(body.hiveId).toBe("hive-test");
       expect(body.status).toBe("stopped");
       assertNoRawMedia(body);
     });
@@ -358,7 +359,7 @@ describe("WorkflowCapturePage — Cancel → DELETE /api/capture-sessions/[id]",
 
     const cancelFetch = vi.fn(
       async (url: string, opts?: RequestInit): Promise<Response> => {
-        if (url === `/api/capture-sessions/${sessionId}` && opts?.method === "DELETE") {
+        if (url === `/api/capture-sessions/${sessionId}?hiveId=hive-test` && opts?.method === "DELETE") {
           return new Response(
             JSON.stringify({ data: { id: sessionId, purged: true } }),
             { status: 200, headers: { "Content-Type": "application/json" } },
@@ -379,7 +380,7 @@ describe("WorkflowCapturePage — Cancel → DELETE /api/capture-sessions/[id]",
       const calls = cancelFetch.mock.calls as unknown as FetchCall[];
       const deleteCall = calls.find(
         ([u, o]) =>
-          u === `/api/capture-sessions/${sessionId}` && o?.method === "DELETE",
+          u === `/api/capture-sessions/${sessionId}?hiveId=hive-test` && o?.method === "DELETE",
       );
       expect(deleteCall, "DELETE to capture-sessions was not called on Cancel").toBeTruthy();
     });
@@ -416,7 +417,7 @@ describe("WorkflowCapturePage — Cancel → DELETE /api/capture-sessions/[id]",
     const calls = cancelFetch.mock.calls as unknown as FetchCall[];
     const deleteCall = calls.find(
       ([u, o]) =>
-        u === `/api/capture-sessions/${sessionId}` && o?.method === "DELETE",
+        u === `/api/capture-sessions/${sessionId}?hiveId=hive-test` && o?.method === "DELETE",
     );
     expect(deleteCall).toBeUndefined();
   });
@@ -465,21 +466,22 @@ function makeDraftPreview() {
 }
 
 function mockReviewFetch(sessionId: string) {
+  const targetQuery = "hiveId=hive-target";
   const fetchMock = vi.fn(
     async (url: string, opts?: RequestInit): Promise<Response> => {
-      if (url === `/api/capture-sessions/${sessionId}` && !opts?.method) {
+      if (url === `/api/capture-sessions/${sessionId}?${targetQuery}` && !opts?.method) {
         return new Response(JSON.stringify({ data: makeCaptureSession(sessionId) }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url === `/api/capture-sessions/${sessionId}/draft` && !opts?.method) {
+      if (url === `/api/capture-sessions/${sessionId}/draft?${targetQuery}` && !opts?.method) {
         return new Response(JSON.stringify({ data: makeDraftPreview() }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "POST") {
+      if (url === `/api/capture-sessions/${sessionId}/draft?${targetQuery}` && opts?.method === "POST") {
         return new Response(
           JSON.stringify({
             data: {
@@ -502,7 +504,7 @@ function mockReviewFetch(sessionId: string) {
           { status: 201, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "DELETE") {
+      if (url === `/api/capture-sessions/${sessionId}/draft?${targetQuery}` && opts?.method === "DELETE") {
         return new Response(
           JSON.stringify({ data: { previewStatus: "rejected" } }),
           { status: 200, headers: { "Content-Type": "application/json" } },
@@ -541,7 +543,7 @@ describe("WorkflowCaptureReviewPage — target-mode draft writes", () => {
     );
     const calls = fetchMock.mock.calls as unknown as FetchCall[];
     expect(
-      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "POST"),
+      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft?hiveId=hive-target` && opts?.method === "POST"),
     ).toBe(false);
   });
 
@@ -566,7 +568,7 @@ describe("WorkflowCaptureReviewPage — target-mode draft writes", () => {
     );
     const calls = fetchMock.mock.calls as unknown as FetchCall[];
     expect(
-      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft` && opts?.method === "DELETE"),
+      calls.some(([url, opts]) => url === `/api/capture-sessions/${sessionId}/draft?hiveId=hive-target` && opts?.method === "DELETE"),
     ).toBe(false);
   });
 });
@@ -581,7 +583,7 @@ describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
     workflowContextMock.searchParams = new URLSearchParams("targetHiveId=hive-target");
     const fetchMock = vi.fn(
       async (url: string): Promise<Response> => {
-        if (url === `/api/capture-sessions/${sessionId}`) {
+        if (url === `/api/capture-sessions/${sessionId}?hiveId=hive-target`) {
           return new Response(JSON.stringify({ data: makeCaptureSession(sessionId, "hive-test") }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -605,7 +607,7 @@ describe("WorkflowCaptureReviewPage — target hive mismatch", () => {
     expect(screen.queryByRole("button", { name: /reject draft/i })).toBeNull();
 
     const calls = fetchMock.mock.calls as unknown as FetchCall[];
-    expect(calls.some(([url]) => url === `/api/capture-sessions/${sessionId}/draft`)).toBe(false);
+    expect(calls.some(([url]) => url === `/api/capture-sessions/${sessionId}/draft?hiveId=hive-target`)).toBe(false);
     expect(calls.some(([, opts]) => opts?.method === "POST" || opts?.method === "DELETE")).toBe(false);
   });
 });
