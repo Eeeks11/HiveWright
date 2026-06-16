@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => {
     sql,
     requireApiAuth: vi.fn(),
     requireSystemOwner: vi.fn(),
+    requireApiUser: vi.fn(),
+    canAccessHive: vi.fn(),
   };
 });
 
@@ -16,9 +18,15 @@ vi.mock("../_lib/db", () => ({
 vi.mock("../_lib/auth", () => ({
   requireApiAuth: mocks.requireApiAuth,
   requireSystemOwner: mocks.requireSystemOwner,
+  requireApiUser: mocks.requireApiUser,
 }));
 
-import { POST } from "./route";
+vi.mock("@/auth/users", () => ({
+  canAccessHive: mocks.canAccessHive,
+}));
+
+import { GET, POST } from "./route";
+import { GET as GET_GLOBAL_ADAPTER_CONFIG } from "./global/route";
 
 function request(body: unknown) {
   return new Request("http://localhost/api/adapter-config", {
@@ -26,6 +34,94 @@ function request(body: unknown) {
     body: JSON.stringify(body),
   });
 }
+
+
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
+
+describe("GET /api/adapter-config explicit hive target", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.sql.mockReset();
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.canAccessHive.mockResolvedValue(true);
+  });
+
+  it("rejects missing hiveId before listing adapter config", async () => {
+    const res = await GET(new Request("http://localhost/api/adapter-config"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mocks.sql).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid hiveId before listing adapter config", async () => {
+    const res = await GET(new Request("http://localhost/api/adapter-config?hiveId=not-a-uuid"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
+    expect(mocks.sql).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-owner callers that cannot access the target hive", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
+    });
+    mocks.sql.mockResolvedValueOnce([{ id: HIVE_ID }]);
+    mocks.canAccessHive.mockResolvedValueOnce(false);
+
+    const res = await GET(new Request(`http://localhost/api/adapter-config?hiveId=${HIVE_ID}`));
+
+    expect(res.status).toBe(403);
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", HIVE_ID);
+  });
+
+  it("lists only global plus requested-hive adapter config rows", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([
+        { id: "global-config", hive_id: null, adapter_type: "auto", config: {}, created_at: new Date("2026-01-01T00:00:00Z") },
+        { id: "hive-config", hive_id: HIVE_ID, adapter_type: "codex", config: {}, created_at: new Date("2026-01-02T00:00:00Z") },
+      ]);
+
+    const res = await GET(new Request(`http://localhost/api/adapter-config?hiveId=${HIVE_ID}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.map((row: { hiveId: string | null }) => row.hiveId)).toEqual([null, HIVE_ID]);
+    const queryText = Array.from(mocks.sql.mock.calls[1][0] as TemplateStringsArray).join(" ");
+    expect(queryText).toContain("hive_id IS NULL");
+  });
+});
+
+describe("GET /api/adapter-config/global explicit global target", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.sql.mockReset();
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+  });
+
+  it("lists global adapter config without requiring a hiveId", async () => {
+    mocks.sql.mockResolvedValueOnce([
+      { id: "global-config", hive_id: null, adapter_type: "codex", config: {}, created_at: new Date("2026-01-01T00:00:00Z") },
+    ]);
+
+    const res = await GET_GLOBAL_ADAPTER_CONFIG(new Request("http://localhost/api/adapter-config/global?adapterType=codex"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toMatchObject([{ id: "global-config", hiveId: null, adapterType: "codex" }]);
+    const queryText = Array.from(mocks.sql.mock.calls[0][0] as TemplateStringsArray).join(" ");
+    expect(queryText).toContain("hive_id IS NULL");
+    expect(queryText).toContain("adapter_type =");
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
+  });
+});
 
 describe("POST /api/adapter-config owner gate", () => {
   beforeEach(() => {

@@ -51,7 +51,7 @@ export default function WorkIntakeSettingsPage() {
   const [testing, setTesting] = useState(false);
 
   const loadConfig = useCallback(async () => {
-    const res = await fetch("/api/adapter-config?adapterType=work-intake");
+    const res = await fetch("/api/adapter-config/global?adapterType=work-intake");
     const body = await res.json();
     const row = (body.data || []).find((c: { adapterType: string }) => c.adapterType === "work-intake");
     if (row?.config) setConfig({ ...DEFAULTS, ...row.config });

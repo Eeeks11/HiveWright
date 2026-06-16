@@ -95,7 +95,7 @@ export default function RolesPage() {
     if (includeInactive) params.set("includeInactive", "true");
     if (selectedHive?.id) params.set("hiveId", selectedHive.id);
     const query = params.toString();
-    return query ? `/api/roles?${query}` : "/api/roles";
+    return query ? `/api/roles?${query}` : "/api/roles/global";
   }, [selectedHive?.id]);
 
   useEffect(() => {
@@ -812,7 +812,7 @@ function DispatcherConcurrencyBanner() {
   const [flash, setFlash] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/adapter-config")
+    fetch("/api/adapter-config/global")
       .then((r) => r.json())
       .then((b) => {
         const row = (b.data || []).find((r: { adapterType: string }) => r.adapterType === "dispatcher");

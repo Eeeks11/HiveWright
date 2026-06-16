@@ -1,8 +1,8 @@
 import { NextRequest } from "next/server";
-import { canAccessHive } from "@/auth/users";
 import { sql } from "@/app/api/_lib/db";
 import { jsonOk, jsonError, parseSearchParams } from "@/app/api/_lib/responses";
 import { requireApiUser } from "@/app/api/_lib/auth";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 type InsightRow = {
   id: string;
@@ -27,18 +27,12 @@ export async function GET(req: NextRequest) {
   const { user } = authz;
   try {
     const params = parseSearchParams(req.url);
-    const hiveId = params.get("hiveId");
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request: req });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
     const status = params.get("status") ?? "new";
-    if (hiveId && !user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
-      }
-    }
 
-    let rows: InsightRow[];
-    if (hiveId) {
-      rows = await sql<InsightRow[]>`
+    const rows = await sql<InsightRow[]>`
           SELECT
             i.id::text AS id,
             i.hive_id::text AS hive_id,
@@ -60,54 +54,6 @@ export async function GET(req: NextRequest) {
             AND i.status = ${status}
           ORDER BY i.confidence DESC, i.created_at DESC
         `;
-    } else if (!user.isSystemOwner) {
-      rows = await sql<InsightRow[]>`
-          SELECT
-            i.id::text AS id,
-            i.hive_id::text AS hive_id,
-            b.name AS hive_name,
-            i.content,
-            i.connection_type,
-            i.affected_departments,
-            i.confidence,
-            i.priority,
-            i.status,
-            i.curator_reason,
-            i.curated_at,
-            i.decision_id::text AS decision_id,
-            i.created_at,
-            i.updated_at
-          FROM insights i
-          JOIN hives b ON b.id = i.hive_id
-          WHERE i.hive_id IN (
-              SELECT hive_id FROM hive_memberships WHERE user_id = ${user.id}
-            )
-            AND i.status = ${status}
-          ORDER BY i.confidence DESC, i.created_at DESC
-        `;
-    } else {
-      rows = await sql<InsightRow[]>`
-          SELECT
-            i.id::text AS id,
-            i.hive_id::text AS hive_id,
-            b.name AS hive_name,
-            i.content,
-            i.connection_type,
-            i.affected_departments,
-            i.confidence,
-            i.priority,
-            i.status,
-            i.curator_reason,
-            i.curated_at,
-            i.decision_id::text AS decision_id,
-            i.created_at,
-            i.updated_at
-          FROM insights i
-          JOIN hives b ON b.id = i.hive_id
-          WHERE i.status = ${status}
-          ORDER BY i.confidence DESC, i.created_at DESC
-        `;
-    }
 
     return jsonOk(rows);
   } catch (err) {

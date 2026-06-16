@@ -48,7 +48,7 @@ export default function DocsPage() {
       .then((r) => r.json())
       .then((b) => setConnectors(b.data ?? []))
       .catch(() => {});
-    fetch("/api/roles")
+    fetch("/api/roles/global")
       .then((r) => r.json())
       .then((b) => setRoles(b.data ?? []))
       .catch(() => {});

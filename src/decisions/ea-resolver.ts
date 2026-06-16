@@ -172,7 +172,7 @@ curl -sS -X POST http://localhost:3002/api/goals/<goal-id>/comments \\
   -d '{"body":"<your message to the supervisor>"}'
 
 # Look up valid role slugs
-curl -sS http://localhost:3002/api/roles \\
+curl -sS http://localhost:3002/api/roles/global \\
   -H 'Authorization: Bearer $INTERNAL_SERVICE_TOKEN' | jq '.data[].slug'
 \`\`\`
 

@@ -25,7 +25,7 @@ curl -sS -X POST http://localhost:3002/api/tasks \\
   -d '{"hiveId":"${goal.hive_id}","assignedTo":"<role-slug>","title":"...","brief":"...","goalId":"${goalId}","sprintNumber":<n>,"qaRequired":true,"createdBy":"goal-supervisor"${projectIdField}}'
 \`\`\`
 
-**Critical - how QA works:** set \`"qaRequired":true\` on the *work* task and the dispatcher automatically spawns a QA review task as its child AFTER the work task finishes, passing in the deliverable. **Never create a task assigned to \`qa\` yourself** - it would run in parallel with the work task and review nothing. Always assign to an executor role (e.g. \`dev-agent\`, \`designer\`, \`content-writer\`, \`bookkeeper\`). If in doubt about which role to use, \`curl\` /api/roles first.
+**Critical - how QA works:** set \`"qaRequired":true\` on the *work* task and the dispatcher automatically spawns a QA review task as its child AFTER the work task finishes, passing in the deliverable. **Never create a task assigned to \`qa\` yourself** - it would run in parallel with the work task and review nothing. Always assign to an executor role (e.g. \`dev-agent\`, \`designer\`, \`content-writer\`, \`bookkeeper\`). If in doubt about which role to use, \`curl\` /api/roles/global first.
 When creating replacement work for a failed or cancelled task, include \`"sourceTaskId":"<failed-or-cancelled-task-uuid>"\` in the task body. This links recovery work to the source task and enforces the recovery budget.
 
 ## List Pipeline Templates
@@ -103,12 +103,12 @@ curl -sS "http://localhost:3002/api/memory/search?hiveId=${goal.hive_id}&q=<sear
 
 ## Available Roles
 \`\`\`bash
-curl -sS http://localhost:3002/api/roles \\
+curl -sS http://localhost:3002/api/roles/global \\
   -H "Authorization: Bearer $INTERNAL_SERVICE_TOKEN"
 \`\`\`
 
 ## Expected workflow for this run
-1. \`curl\` /api/roles to see available role slugs. Never assign a task to \`qa\` yourself; QA is spawned by the dispatcher when a work task with \`"qaRequired":true\` completes.
+1. \`curl\` /api/roles/global to see available role slugs. Never assign a task to \`qa\` yourself; QA is spawned by the dispatcher when a work task with \`"qaRequired":true\` completes.
 2. PUT /api/goals/${goalId}/documents/plan with your markdown outcome plan and structured outcome classification before creating execution work. Record whether the goal is \`outcome-led\` or \`process-bound\`, and what policy/rule/pipeline references you checked.
 3. \`curl\` GET /api/pipelines?hiveId=${goal.hive_id} and inspect active templates as part of the policy/process check.
 4. If a template materially fits because it is mandatory, owner-approved, or order/evidence/approval matters, POST /api/pipelines with \`goalId\`, \`sourceContext\`, \`sprintNumber\`, and \`selectionRationale\`; do not create parallel manual sprint tasks for the same work.
