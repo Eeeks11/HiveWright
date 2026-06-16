@@ -299,6 +299,7 @@ describe("provider model discovery adapters", () => {
     const models = await discoverOpenAiModels({ fetch: fetchFn });
 
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5");
+    expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.5");
     expect(models[0]?.metadataSourceName).toBe("OpenAI static model fallback");
   });
 });
