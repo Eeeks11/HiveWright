@@ -22,7 +22,7 @@ describe("GET /api/voice/sessions/[id]/events", () => {
     const abort = new AbortController();
     setTimeout(() => abort.abort(), 300);
     const req = new Request(
-      `http://localhost/api/voice/sessions/${SESSION_ID}/events`,
+      `http://localhost/api/voice/sessions/${SESSION_ID}/events?hiveId=${HIVE_ID}`,
       { signal: abort.signal },
     );
     const res = await GET(req, {
@@ -47,4 +47,18 @@ describe("GET /api/voice/sessions/[id]/events", () => {
     expect(text).toContain("event: user_phrase");
     expect(text).toContain("event: ea_phrase");
   }, 10_000);
+
+  it("rejects requests that omit the explicit hive target", async () => {
+    const req = new Request(
+      `http://localhost/api/voice/sessions/${SESSION_ID}/events`,
+    );
+    const res = await GET(req, {
+      params: Promise.resolve({ id: SESSION_ID }),
+    });
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "hiveId is required",
+    });
+  });
 });

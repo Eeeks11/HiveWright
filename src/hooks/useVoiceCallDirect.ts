@@ -64,7 +64,9 @@ export function useVoiceCallDirect(hiveId: string) {
   const subscribeTranscript = useCallback((sessionId: string) => {
     eventSourceRef.current?.close();
     seenEventIdsRef.current = new Set();
-    const es = new EventSource(`/api/voice/sessions/${sessionId}/events`);
+    const es = new EventSource(
+      `/api/voice/sessions/${sessionId}/events?hiveId=${encodeURIComponent(hiveId)}`,
+    );
     eventSourceRef.current = es;
     const push = (role: "user" | "assistant") => (ev: MessageEvent) => {
       try {
@@ -90,7 +92,7 @@ export function useVoiceCallDirect(hiveId: string) {
       // EventSource auto-reconnects; swallow to avoid console spam.
       // The seen-id set above keeps replays from accumulating.
     });
-  }, []);
+  }, [hiveId]);
 
   const acquireWakeLock = useCallback(async () => {
     // Best-effort: not all browsers support this (most modern ones do).
