@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
 import { recordDecisionAuditEvent } from "../_audit";
 
@@ -31,24 +31,24 @@ export async function PATCH(
     if (!ownerResponse) {
       return jsonError("Missing required field: ownerResponse", 400);
     }
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [decisionRow] = await sql<{ hiveId: string; goalId: string | null; taskId: string | null }[]>`
-      SELECT hive_id AS "hiveId", goal_id AS "goalId", task_id AS "taskId" FROM decisions WHERE id = ${id}
+      SELECT hive_id AS "hiveId", goal_id AS "goalId", task_id AS "taskId" FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decisionRow) {
       return jsonError("Decision not found", 404);
     }
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decisionRow.hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this decision's hive", 403);
-      }
-    }
-
     const rows = await sql`
       UPDATE decisions
       SET status = 'resolved', owner_response = ${ownerResponse}, resolved_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       RETURNING id, task_id
     `;
 

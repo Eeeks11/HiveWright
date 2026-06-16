@@ -1,5 +1,5 @@
 import { sanitizeAuditString } from "@/actions/redaction";
-import { canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { ConnectorSyncError, syncConnectorInstall } from "@/connectors/sync";
 import { requireApiUser } from "../../../_lib/auth";
 import { sql } from "../../../_lib/db";
@@ -33,21 +33,20 @@ export async function POST(
       hiveId?: unknown;
       streams?: unknown;
     };
-    if (typeof body.hiveId !== "string" || !body.hiveId.trim()) {
-      return jsonError("hiveId is required", 400);
-    }
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
     const streams = parseStreams(body.streams);
     if (!streams) {
       return jsonError("streams must be a non-empty array of strings", 400);
     }
 
-    if (!authz.user.isSystemOwner) {
-      const canMutate = await canMutateHive(sql, authz.user.id, body.hiveId);
-      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
-    }
-
     const result = await syncConnectorInstall(sql, {
-      hiveId: body.hiveId,
+      hiveId: target.hiveId,
       installId: id,
       streams,
       actor: authz.user.id,

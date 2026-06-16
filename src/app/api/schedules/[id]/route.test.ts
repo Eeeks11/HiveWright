@@ -28,7 +28,7 @@ import { GET } from "./route";
 const detail = {
   schedule: {
     id: "schedule-1",
-    hiveId: "hive-1",
+    hiveId: "11111111-1111-4111-8111-111111111111",
     cronExpression: "0 9 * * 1",
     taskTemplate: { assignedTo: "developer-agent", title: "Review", brief: "Brief" },
     enabled: true,
@@ -44,7 +44,8 @@ const detail = {
 
 describe("GET /api/schedules/[id]", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
@@ -55,18 +56,18 @@ describe("GET /api/schedules/[id]", () => {
   it("requires hive access for non-owner callers", async () => {
     mocks.canAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/schedules/schedule-1"), {
+    const res = await GET(new Request("http://localhost/api/schedules/schedule-1?hiveId=11111111-1111-4111-8111-111111111111"), {
       params: Promise.resolve({ id: "schedule-1" }),
     });
     const body = await res.json();
 
     expect(res.status).toBe(403);
     expect(body.error).toBe("Forbidden: caller cannot access this hive");
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("returns the schedule detail when the caller can access the hive", async () => {
-    const res = await GET(new Request("http://localhost/api/schedules/schedule-1"), {
+    const res = await GET(new Request("http://localhost/api/schedules/schedule-1?hiveId=11111111-1111-4111-8111-111111111111"), {
       params: Promise.resolve({ id: "schedule-1" }),
     });
     const body = await res.json();
@@ -81,7 +82,7 @@ describe("GET /api/schedules/[id]", () => {
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
 
-    const res = await GET(new Request("http://localhost/api/schedules/schedule-1"), {
+    const res = await GET(new Request("http://localhost/api/schedules/schedule-1?hiveId=11111111-1111-4111-8111-111111111111"), {
       params: Promise.resolve({ id: "schedule-1" }),
     });
 

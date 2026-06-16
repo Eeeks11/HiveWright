@@ -4,7 +4,7 @@ import { requireApiUser } from "../../../_lib/auth";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { setConnectorInstallStatus } from "@/connectors/installs";
-import { canMutateHive } from "@/auth/users";
+import { requireResourceOwnedByHive, requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 /**
  * POST /api/connector-installs/:id/test
@@ -20,19 +20,23 @@ export async function POST(
   try {
     const { id } = await ctx.params;
     const body = (await request.json().catch(() => ({}))) as {
+      hiveId?: unknown;
       operation?: string;
       args?: Record<string, unknown>;
     };
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [install] = await sql`
       SELECT connector_slug, hive_id AS "hiveId" FROM connector_installs WHERE id = ${id}
     `;
-    if (!install) return jsonError("install not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const canMutate = await canMutateHive(sql, authz.user.id, install.hiveId as string);
-      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
-    }
+    const ownership = requireResourceOwnedByHive(install?.hiveId as string | undefined, target.hiveId, { resourceName: "Install" });
+    if (!ownership.ok) return ownership.response;
 
     const def = getConnectorDefinition(install.connector_slug as string);
     if (!def) return jsonError(`unknown connector ${install.connector_slug}`, 400);

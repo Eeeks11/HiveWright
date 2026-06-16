@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { isInternalServiceAccountUser, requireApiUser } from "../../../_lib/auth";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import {
   completeGoal,
   GoalCompletionBlockedOnOwnerDecisionsError,
@@ -11,6 +12,7 @@ import {
 import { parseLearningGateResult } from "@/goals/outcome-records";
 
 interface CompleteGoalBody {
+  hiveId?: unknown;
   summary?: unknown;
   evidenceTaskIds?: unknown;
   evidenceWorkProductIds?: unknown;
@@ -105,8 +107,16 @@ export async function POST(
       return jsonError("'completionStatus' must be achieved, execution_ready, or blocked_on_owner_channel", 400);
     }
 
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body: body as unknown as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
+
     const [goal] = await sql`
-      SELECT id, status, session_id FROM goals WHERE id = ${id}
+      SELECT id, status, session_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) {
       return jsonError("Goal not found", 404);
