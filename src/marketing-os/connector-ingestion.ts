@@ -161,6 +161,20 @@ export async function persistMarketingConnectorMetricSnapshots(
   const snapshots = normalizeMarketingConnectorMetricSnapshots(input);
   if (snapshots.length === 0) return { inserted: 0, skipped: 0 };
 
+  const snapshotRows = snapshots.map((snapshot) => ({
+    hive_id: snapshot.hiveId,
+    campaign_id: snapshot.campaignId,
+    connector_install_id: snapshot.connectorInstallId,
+    source_connector: snapshot.sourceConnector,
+    source_stream: snapshot.sourceStream,
+    external_id: snapshot.externalId,
+    values: snapshot.values,
+    attribution_confidence: snapshot.attributionConfidence,
+    freshness: snapshot.freshness,
+    trust_metadata: snapshot.trustMetadata,
+    captured_at: snapshot.capturedAt,
+  }));
+
   await sql`
     WITH staged AS (
       SELECT
@@ -175,7 +189,7 @@ export async function persistMarketingConnectorMetricSnapshots(
         snapshot.freshness,
         snapshot.trust_metadata,
         snapshot.captured_at::timestamptz AS captured_at
-      FROM jsonb_to_recordset(${JSON.stringify(snapshots)}::jsonb) AS snapshot(
+      FROM jsonb_to_recordset(${sql.json(snapshotRows)}::jsonb) AS snapshot(
         hive_id text,
         campaign_id text,
         connector_install_id text,
@@ -221,6 +235,7 @@ export async function persistMarketingConnectorMetricSnapshots(
       ON campaign.id = staged.claimed_campaign_id
       AND campaign.hive_id = staged.hive_id
     ON CONFLICT (hive_id, connector_install_id, source_connector, source_stream, external_id)
+    WHERE connector_install_id IS NOT NULL AND external_id IS NOT NULL
     DO UPDATE SET
       campaign_id = EXCLUDED.campaign_id,
       values = EXCLUDED.values,

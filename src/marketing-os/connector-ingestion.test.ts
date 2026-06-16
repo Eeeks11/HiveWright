@@ -9,6 +9,12 @@ const HIVE_ID = "11111111-1111-1111-1111-111111111111";
 const INSTALL_ID = "22222222-2222-2222-2222-222222222222";
 const CAMPAIGN_ID = "33333333-3333-3333-3333-333333333333";
 
+function createSqlMock() {
+  return Object.assign(vi.fn().mockResolvedValue([]), {
+    json: vi.fn((value: unknown) => value),
+  });
+}
+
 const ga4WebsiteTraffic: ConnectorSyncResult[] = [
   {
     stream: "website_traffic",
@@ -84,7 +90,7 @@ describe("marketing connector ingestion", () => {
   });
 
   it("persists connector snapshots without creating external actions or bypassing approvals", async () => {
-    const sql = vi.fn().mockResolvedValue([]);
+    const sql = createSqlMock();
 
     const result = await persistMarketingConnectorMetricSnapshots(sql as never, {
       hiveId: HIVE_ID,
@@ -98,12 +104,13 @@ describe("marketing connector ingestion", () => {
     expect(sql).toHaveBeenCalledTimes(1);
     const queryText = String(sql.mock.calls[0]?.[0] ?? "");
     expect(queryText).toContain("INSERT INTO marketing_metric_snapshots");
+    expect(queryText).toContain("WHERE connector_install_id IS NOT NULL AND external_id IS NOT NULL");
     expect(queryText).not.toContain("external_action_requests");
     expect(queryText).not.toContain("decisions");
   });
 
   it("only attaches connector metrics to campaigns owned by the target hive", async () => {
-    const sql = vi.fn().mockResolvedValue([]);
+    const sql = createSqlMock();
 
     await persistMarketingConnectorMetricSnapshots(sql as never, {
       hiveId: HIVE_ID,
