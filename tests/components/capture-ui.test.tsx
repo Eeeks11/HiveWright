@@ -22,22 +22,29 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CaptureConsentDialog } from "../../src/components/capture-consent-dialog";
 import { CaptureRecordingPill } from "../../src/components/capture-recording-pill";
 
+const captureHiveContextMock = vi.hoisted(() => ({
+  selected: {
+    id: "hive-111",
+    name: "Test Hive",
+    slug: "test-hive",
+    type: "digital",
+  },
+  hives: [{ id: "hive-111", name: "Test Hive", slug: "test-hive", type: "digital" }],
+  loading: false,
+  hasProvider: true,
+}));
+
 // ---- Next.js navigation mocks ----
 vi.mock("next/navigation", () => ({
   useParams: () => ({ captureId: "session-abc" }),
   useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/settings/workflow-capture/session-abc/review",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // ---- Hive context mock ----
 vi.mock("@/components/hive-context", () => ({
-  useHiveContext: () => ({
-    selected: {
-      id: "hive-111",
-      name: "Test Hive",
-      slug: "test-hive",
-      type: "digital",
-    },
-  }),
+  useHiveContext: () => captureHiveContextMock,
 }));
 
 // ---- next/link mock ----

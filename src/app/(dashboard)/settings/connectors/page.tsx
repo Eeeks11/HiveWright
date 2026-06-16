@@ -443,6 +443,7 @@ function ConnectorsPageContent() {
                       <button
                         onClick={() => testInstall(i)}
                         disabled={busy === i.id}
+                        aria-label={`Test ${i.displayName}`}
                         className="rounded bg-amber-500/15 px-3 py-1 text-xs text-amber-100 ring-1 ring-inset ring-amber-500/25 hover:bg-amber-500/25 disabled:opacity-50"
                       >
                         {busy === i.id ? "Testing…" : "Test"}

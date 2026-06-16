@@ -91,6 +91,7 @@ describe("ConnectorsPage", () => {
       return new Response("not found", { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<ConnectorsPage />);
 
