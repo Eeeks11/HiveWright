@@ -60,7 +60,7 @@ export function ScheduleEditModal({
     if (!open) return;
     let cancelled = false;
 
-    fetch("/api/roles")
+    fetch("/api/roles/global")
       .then((response) => response.json())
       .then((body) => {
         if (!cancelled) setRoles(body.data ?? []);

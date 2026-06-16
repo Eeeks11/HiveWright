@@ -464,7 +464,7 @@ export default function NewHiveWizard() {
   const useLocalEmbeddingSetup = () => runEmbeddingSetupAction("use");
 
   useEffect(() => {
-    fetch("/api/roles")
+    fetch("/api/roles/global")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

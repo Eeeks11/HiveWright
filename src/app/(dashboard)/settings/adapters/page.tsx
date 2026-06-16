@@ -96,7 +96,7 @@ export default function AdapterSettingsPage() {
   const [savedOpenclawFallback, setSavedOpenclawFallback] = useState(false);
 
   useEffect(() => {
-    fetch("/api/adapter-config")
+    fetch("/api/adapter-config/global")
       .then((r) => r.json())
       .then((body) => {
         const map: Record<string, Record<string, string>> = { codex: {}, "claude-code": {}, gemini: {}, openclaw: {}, ollama: {} };
@@ -173,7 +173,7 @@ export default function AdapterSettingsPage() {
     const res = await fetch("/api/openclaw-detect/configure", { method: "POST" });
     const body = await res.json();
     if (res.ok) {
-      const configRes = await fetch("/api/adapter-config");
+      const configRes = await fetch("/api/adapter-config/global");
       const configBody = await configRes.json();
       const map: Record<string, Record<string, string>> = { codex: {}, "claude-code": {}, gemini: {}, openclaw: {}, ollama: {} };
       for (const c of configBody.data || []) map[c.adapterType] = c.config || {};

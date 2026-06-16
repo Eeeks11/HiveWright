@@ -63,7 +63,7 @@ curl -sS -X POST http://localhost:3002/api/work \\
   -d '{"hiveId":"<hive>","input":"<owner request, verbatim or clarified>","assignedTo":"<role-slug when clear>"}'
 
 # Look up valid role slugs first if you're unsure:
-curl -sS http://localhost:3002/api/roles \\
+curl -sS http://localhost:3002/api/roles/global \\
   -H 'Authorization: Bearer $INTERNAL_SERVICE_TOKEN' | jq '.data[] | {slug,name}'
 \`\`\`
 

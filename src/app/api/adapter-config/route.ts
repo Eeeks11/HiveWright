@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   const { user } = authz;
   try {
     const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
-    if (!target.ok) return target.response;
+    if (target.ok === false) return target.response;
     const hiveId = target.hiveId;
     const rows = await sql`SELECT * FROM adapter_config WHERE hive_id = ${hiveId} OR hive_id IS NULL ORDER BY adapter_type`;
     const data = rows.map(r => ({

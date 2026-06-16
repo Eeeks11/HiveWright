@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
-import { GET as ROLES_GET } from "../../src/app/api/roles/route";
+import { GET as ROLES_GET } from "../../src/app/api/roles/global/route";
 import { POST as PROVISION_POST } from "../../src/app/api/roles/[slug]/provision/route";
 import { invalidateAll, getCachedStatus } from "../../src/provisioning/status-cache";
 
@@ -33,13 +33,13 @@ afterEach(() => {
 describe("roles route caching", () => {
   it("populates the cache after a GET /api/roles call", async () => {
     expect(getCachedStatus("cache-agent")).toBeUndefined();
-    const res = await ROLES_GET(new Request("http://localhost/api/roles"));
+    const res = await ROLES_GET(new Request("http://localhost/api/roles/global"));
     expect(res.status).toBe(200);
     expect(getCachedStatus("cache-agent")).toBeDefined();
   });
 
   it("provision invalidates the cached entry for that slug", async () => {
-    await ROLES_GET(new Request("http://localhost/api/roles"));
+    await ROLES_GET(new Request("http://localhost/api/roles/global"));
     expect(getCachedStatus("cache-agent")).toBeDefined();
 
     const req = new Request("http://x/api/roles/cache-agent/provision", { method: "POST" });
