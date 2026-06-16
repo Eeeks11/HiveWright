@@ -10,6 +10,7 @@ import { getConnectorDefinition } from "@/connectors/registry";
 import { importExternalRecords, type ExternalRecordImportError } from "@/hives/external-record-adapters";
 import { normalizeHiveKind, type HiveKind } from "@/hives/kind";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
+import { persistMarketingConnectorMetricSnapshots } from "@/marketing-os/connector-ingestion";
 import {
   getConnectorSyncCursor,
   markConnectorSyncFailure,
@@ -229,6 +230,15 @@ export async function syncConnectorInstall(
           ...error,
           stream: streamResult.stream,
         })));
+        if (hiveKind === "business") {
+          await persistMarketingConnectorMetricSnapshots(sql, {
+            hiveId: install.hiveId,
+            connectorInstallId: install.id,
+            sourceConnector: install.connectorSlug,
+            results: [streamResult],
+            syncedAt: new Date(),
+          });
+        }
         await markConnectorSyncSuccess(sql, {
           installId: install.id,
           stream: streamResult.stream,

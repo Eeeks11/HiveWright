@@ -19,6 +19,8 @@ describe("dashboard navigation model", () => {
     expect(groups.map((group) => group.id)).toEqual([
       "dashboard",
       "supervision",
+      "marketing",
+      "sales",
       "work",
       "inbox",
       "schedules",

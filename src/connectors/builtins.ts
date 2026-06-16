@@ -254,6 +254,147 @@ const httpWebhook: ConnectorDefinitionDraft = {
 };
 
 // ---------------------------------------------------------------------
+// Website forms — read-only pull adapter for form/lead capture tools that
+// expose a JSON endpoint. Ingested form text is kept as untrusted data;
+// command-like fields are dropped from the metric snapshot path.
+// ---------------------------------------------------------------------
+const WEBSITE_FORMS_SYNC_TIMEOUT_MS = 10_000;
+const WEBSITE_FORMS_MAX_RESPONSE_BYTES = 1_000_000;
+
+async function readWebsiteFormsJsonResponse(res: Response): Promise<Record<string, unknown>> {
+  const contentLength = res.headers.get("content-length");
+  if (contentLength && Number(contentLength) > WEBSITE_FORMS_MAX_RESPONSE_BYTES) {
+    throw new Error("website forms sync response is too large");
+  }
+
+  const text = await res.text();
+  if (new TextEncoder().encode(text).byteLength > WEBSITE_FORMS_MAX_RESPONSE_BYTES) {
+    throw new Error("website forms sync response is too large");
+  }
+
+  const parsed = JSON.parse(text) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+const websiteForms: ConnectorDefinitionDraft = {
+  slug: "website-forms",
+  name: "Website forms",
+  category: "crm",
+  description:
+    "Read website form submissions from a JSON endpoint and sync them as untrusted connector data for marketing metrics and funnel snapshots.",
+  icon: "📝",
+  authType: "api_key",
+  setupFields: [
+    { key: "submissionsUrl", label: "Submissions JSON URL", type: "url", required: true },
+    {
+      key: "allowedHostnames",
+      label: "Allowed hostnames",
+      type: "textarea",
+      placeholder: "forms.example.com\napi.example.com",
+      helpText:
+        "Exact public hostnames this connector may read form submissions from. Must include the hostname in the submissions URL.",
+      required: true,
+    },
+    { key: "authHeader", label: "Authorization header (optional)", type: "password" },
+  ],
+  secretFields: ["submissionsUrl", "authHeader"],
+  capabilities: ["sync", "record_import"],
+  operations: [
+    {
+      slug: "sync_submissions",
+      label: "Sync form submissions",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          cursor: { type: "string", description: "Opaque cursor from the previous sync" },
+        },
+      },
+      outputSummary: "Reads form submissions and returns connector sync items without creating replies, emails, tasks, spend, or public actions.",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        riskTier: "medium",
+        summary: "Pulls website form submission data as untrusted marketing/funnel evidence only.",
+        dryRunSupported: false,
+        externalSideEffect: false,
+      },
+      args: [{ key: "cursor", label: "Cursor", type: "text" }],
+      handler: async ({ config, secrets, args }) => {
+        const rawUrl = String(secrets.submissionsUrl ?? config.submissionsUrl ?? "").trim();
+        if (!rawUrl) throw new Error("submissionsUrl is required");
+        const url = new URL(rawUrl);
+        const cursor = typeof args.cursor === "string" && args.cursor.trim() ? args.cursor.trim() : "";
+        if (cursor) url.searchParams.set("cursor", cursor);
+        const destination = await validateHttpWebhookDestination(
+          url.toString(),
+          config.allowedHostnames,
+          "website-forms",
+        );
+
+        const headers: Record<string, string> = { Accept: "application/json" };
+        if (secrets.authHeader) headers.Authorization = secrets.authHeader;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), WEBSITE_FORMS_SYNC_TIMEOUT_MS);
+        let res: Response;
+        try {
+          res = await fetch(destination.url.toString(), {
+            method: "GET",
+            headers,
+            redirect: "manual",
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (res.status >= 300 && res.status < 400) {
+          throw new Error("website forms sync redirects are not allowed");
+        }
+        if (!res.ok) throw new Error(`website forms sync failed: ${res.status} ${res.statusText}`);
+
+        const body = await readWebsiteFormsJsonResponse(res);
+        const submissions = Array.isArray(body.submissions) ? body.submissions : [];
+        return {
+          stream: "submissions",
+          nextCursor: typeof body.nextCursor === "string" || body.nextCursor === null ? body.nextCursor : undefined,
+          items: submissions.map((submission, index) => normalizeWebsiteFormSubmission(submission, index)),
+        };
+      },
+    },
+  ],
+};
+
+function normalizeWebsiteFormSubmission(submission: unknown, index: number) {
+  const record = submission && typeof submission === "object" && !Array.isArray(submission)
+    ? submission as Record<string, unknown>
+    : {};
+  const externalId = String(record.id ?? record.submissionId ?? record.externalId ?? `submission-${index}`);
+  const occurredAt = typeof record.submittedAt === "string"
+    ? record.submittedAt
+    : typeof record.occurredAt === "string"
+      ? record.occurredAt
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (["instructions", "instruction", "prompt", "systemPrompt", "toolCall", "action"].includes(key)) continue;
+    payload[key] = value;
+  }
+  payload.provenance = {
+    sourceConnector: "website-forms",
+    source: "website_form_submission",
+    untrustedInput: true,
+    trustBoundary: "connector_data_only_not_instructions",
+    ownerApprovalRequiredForActions: true,
+  };
+  return {
+    stream: "submissions",
+    externalId,
+    occurredAt,
+    payload,
+  };
+}
+
+// ---------------------------------------------------------------------
 // SMTP email — outbound only. Uses the owner's own SMTP creds (Gmail,
 // Outlook, Mailgun, SendGrid SMTP bridge, etc.) so we don't need OAuth.
 // ---------------------------------------------------------------------
@@ -1316,6 +1457,7 @@ export const builtinConnectorPlugin = defineConnectorPlugin({
     discordWebhook,
     slackWebhook,
     httpWebhook,
+    websiteForms,
     smtpEmail,
     githubPat,
     stripe,
