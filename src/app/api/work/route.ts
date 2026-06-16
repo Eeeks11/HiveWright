@@ -3,7 +3,7 @@ import { jsonOk, jsonError } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, isInternalServiceAccountUser, requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { validateAttachmentFiles } from "@/attachments/constants";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError } from "@/projects/default-project";
 import {
   assertHiveCreationAllowed,
@@ -45,6 +45,7 @@ export async function POST(request: Request) {
     let acceptanceCriteria: string | undefined;
     let forceType: "goal" | undefined;
     let requestedCreatedBy: string | undefined;
+    let destinationHiveConfirmation: string | undefined;
     let files: File[] = [];
 
     if (isMultipart) {
@@ -66,6 +67,7 @@ export async function POST(request: Request) {
       acceptanceCriteria = (formData.get("acceptanceCriteria") as string) || undefined;
       forceType = formData.get("forceType") === "goal" ? "goal" : undefined;
       requestedCreatedBy = (formData.get("createdBy") as string) || undefined;
+      destinationHiveConfirmation = (formData.get("destinationHiveConfirmation") as string) || undefined;
       files = formData.getAll("files") as File[];
       const validationError = validateAttachmentFiles(files);
       if (validationError) return jsonError(validationError, 400);
@@ -75,9 +77,17 @@ export async function POST(request: Request) {
       projectId = projectId ?? body.project_id;
       forceType = body.forceType === "goal" ? "goal" : undefined;
       requestedCreatedBy = typeof body.createdBy === "string" ? body.createdBy : undefined;
+      destinationHiveConfirmation = typeof body.destinationHiveConfirmation === "string"
+        ? body.destinationHiveConfirmation
+        : undefined;
     }
 
     if (!hiveId || !input) return jsonError("Missing required fields: hiveId, input", 400);
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(appSql, request, hiveId, {
+      destinationHiveConfirmation,
+    });
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const taskScope = await enforceInternalTaskHiveScope(hiveId);
     if (!taskScope.ok) return taskScope.response;

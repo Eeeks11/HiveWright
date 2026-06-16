@@ -1,5 +1,5 @@
 import { canAccessHive } from "@/auth/users";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import {
   OWNER_FEEDBACK_ADAPTER_TYPE,
   loadOwnerFeedbackSamplingConfig,
@@ -80,6 +80,9 @@ export async function PATCH(request: Request) {
 
   const hiveId = typeof body.hiveId === "string" ? body.hiveId : "";
   if (!hiveId) return jsonError("hiveId is required", 400);
+
+  const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+  if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
   const denied = await requireHiveAccess(authz.user, hiveId);
   if (denied) return denied;

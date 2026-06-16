@@ -2,7 +2,7 @@ import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../../_lib/auth";
 import { canMutateHive } from "@/auth/users";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import {
   assertHiveMemoryWriteAllowed,
   markMemoryWritten,
@@ -20,6 +20,9 @@ export async function POST(request: Request) {
     if (!hiveId || !content) {
       return jsonError("Missing required fields: hiveId, content", 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const taskScope = await enforceInternalTaskHiveScope(hiveId);
     if (!taskScope.ok) return taskScope.response;

@@ -15,6 +15,7 @@ vi.mock("@/auth/users", () => ({
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: vi.fn(),
+  requireEaDestinationHiveConfirmation: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 vi.mock("@/memory/governance", () => ({

@@ -13,7 +13,7 @@ import {
   recordEaDirectCreateBypass,
   requireEaDirectCreateBypassReason,
 } from "@/ea/native/direct-create-bypass";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError, resolveDefaultProjectIdForHive } from "@/projects/default-project";
 import { rejectDirectContentTaskWhenPipelineFits } from "@/goals/supervisor-tools";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
@@ -264,6 +264,9 @@ export async function POST(request: Request) {
       createdBy: requestedCreatedBy,
     });
     if (supervisorProof) return supervisorProof;
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, requestedHiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;

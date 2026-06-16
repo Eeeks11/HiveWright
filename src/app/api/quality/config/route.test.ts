@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
   canAccessHive: vi.fn(),
   maybeRecordEaHiveSwitch: vi.fn(),
+  requireEaDestinationHiveConfirmation: vi.fn(),
   loadOwnerFeedbackSamplingConfigState: vi.fn(),
   saveOwnerFeedbackSamplingConfig: vi.fn(),
 }));
@@ -23,6 +24,7 @@ vi.mock("@/auth/users", () => ({
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: mocks.maybeRecordEaHiveSwitch,
+  requireEaDestinationHiveConfirmation: mocks.requireEaDestinationHiveConfirmation,
 }));
 
 vi.mock("@/quality/owner-feedback-config", async (importOriginal) => {
@@ -52,6 +54,7 @@ describe("/api/quality/config", () => {
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.loadOwnerFeedbackSamplingConfigState.mockResolvedValue({
       source: "hive",
       rawRow: { hiveId: HIVE_ID, config: { ai_peer_feedback_sample_rate: 0.15 } },
