@@ -33,10 +33,11 @@ vi.mock("postgres", () => {
 
 // sql.unsafe controls what rows come back from the replay query.
 let mockReplayRows: unknown[] = [];
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
 
 vi.mock("../../../_lib/db", () => ({
   sql: Object.assign(
-    vi.fn(async () => [{ hive_id: "hive-a" }]),
+    vi.fn(async () => [{ hive_id: HIVE_ID, id: HIVE_ID }]),
     { unsafe: vi.fn(async () => mockReplayRows) },
   ),
 }));
@@ -135,7 +136,7 @@ describe("GET /api/goals/:id/stream", () => {
       makeDbRow({ id: 3, task_id: "task-a", chunk: "", type: "done" }),
     ];
 
-    const request = new Request("http://localhost/api/goals/goal-1/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-1/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(2000),
     });
 
@@ -166,7 +167,7 @@ describe("GET /api/goals/:id/stream", () => {
     mockReplayRows = [];
 
     let listenCallbackReady = false;
-    const request = new Request("http://localhost/api/goals/goal-2/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-2/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(3000),
     });
 
@@ -206,7 +207,7 @@ describe("GET /api/goals/:id/stream", () => {
       makeDbRow({ id: 4, task_id: "task-a", chunk: "New line after reconnect\n", type: "stdout" }),
     ];
 
-    const request = new Request("http://localhost/api/goals/goal-3/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-3/stream?hiveId=${HIVE_ID}`, {
       headers: { "last-event-id": "3" },
       signal: AbortSignal.timeout(2000),
     });
@@ -227,7 +228,7 @@ describe("GET /api/goals/:id/stream", () => {
       makeDbRow({ id: 5, task_id: "task-a", chunk: "overlap chunk", type: "stdout" }),
     ];
 
-    const request = new Request("http://localhost/api/goals/goal-3b/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-3b/stream?hiveId=${HIVE_ID}`, {
       headers: { "last-event-id": "4" },
       signal: AbortSignal.timeout(2000),
     });
@@ -268,7 +269,7 @@ describe("GET /api/goals/:id/stream", () => {
     // No history — no tasks have produced output yet at connect time
     mockReplayRows = [];
 
-    const request = new Request("http://localhost/api/goals/goal-5/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-5/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(3000),
     });
 
@@ -308,7 +309,7 @@ describe("GET /api/goals/:id/stream", () => {
       makeDbRow({ id: 4, task_id: "task-b", chunk: "", type: "done" }),
     ];
 
-    const request = new Request("http://localhost/api/goals/goal-4/stream", {
+    const request = new Request(`http://localhost/api/goals/goal-4/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(2000),
     });
 

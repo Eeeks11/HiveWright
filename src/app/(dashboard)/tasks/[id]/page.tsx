@@ -202,6 +202,7 @@ export default async function TaskDetailPage({
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-zinc-500 uppercase tracking-wide">Agent Output</h2>
         <LiveActivityPanel
+          hiveId={task.hive_id}
           taskId={task.id}
           taskTitle={task.title}
           taskStatus={task.status as "pending" | "active" | "completed" | "failed"}
