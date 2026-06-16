@@ -11,6 +11,7 @@ vi.mock("@/auth/users", () => ({
 }));
 
 import {
+  requireHiveTargetMatchesPath,
   readHiveTarget,
   requireResourceOwnedByHive,
   requireStrictHiveTarget,
@@ -170,5 +171,38 @@ describe("strict hive target helper", () => {
       expect(mismatch.response.status).toBe(403);
       expect((await json(mismatch.response)).error).toBe("Forbidden: schedule does not belong to this hive");
     }
+  });
+
+  it("rejects mismatched query and body hiveId values against the path target", async () => {
+    const queryMismatch = requireHiveTargetMatchesPath(
+      { kind: "query", request: new Request(`http://localhost/api/hives/${HIVE_ID}/targets?hiveId=${OTHER_HIVE_ID}`) },
+      HIVE_ID,
+    );
+    expect(queryMismatch.ok).toBe(false);
+    if (!queryMismatch.ok) {
+      expect(queryMismatch.response.status).toBe(400);
+      expect((await json(queryMismatch.response)).error).toBe("hiveId must match path hive id");
+    }
+
+    const bodyMismatch = requireHiveTargetMatchesPath(
+      { kind: "body", body: { hiveId: OTHER_HIVE_ID } },
+      HIVE_ID,
+    );
+    expect(bodyMismatch.ok).toBe(false);
+    if (!bodyMismatch.ok) {
+      expect(bodyMismatch.response.status).toBe(400);
+      expect((await json(bodyMismatch.response)).error).toBe("hiveId must match path hive id");
+    }
+  });
+
+  it("accepts missing or matching optional hiveId values against the path target", () => {
+    expect(requireHiveTargetMatchesPath(
+      { kind: "query", request: new Request(`http://localhost/api/hives/${HIVE_ID}/targets`) },
+      HIVE_ID,
+    )).toEqual({ ok: true });
+    expect(requireHiveTargetMatchesPath(
+      { kind: "body", body: { hiveId: HIVE_ID } },
+      HIVE_ID,
+    )).toEqual({ ok: true });
   });
 });
