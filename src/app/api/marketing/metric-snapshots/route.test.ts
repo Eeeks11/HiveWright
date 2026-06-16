@@ -63,6 +63,31 @@ describe("POST /api/marketing/metric-snapshots", () => {
     expect(mocks.sql).toHaveBeenCalledTimes(1);
   });
 
+  it("persists paid ads and downstream conversion metrics needed for spend and quality policy", async () => {
+    mocks.sql.mockResolvedValueOnce([
+      {
+        id: METRIC_ID,
+        hive_id: HIVE_ID,
+        campaign_id: CAMPAIGN_ID,
+        source: "manual_import",
+        values: { ad_spend_cents: 42000, leads: 12, qualified_leads: 7, bookings: 3, sales: 1 },
+        attribution_confidence: "manual_unverified",
+        freshness: "current",
+        captured_at: new Date("2026-06-16T02:00:00Z"),
+      },
+    ]);
+
+    const res = await POST(request({
+      hiveId: HIVE_ID,
+      campaignId: CAMPAIGN_ID,
+      values: { ad_spend_cents: 42000, leads: 12, qualified_leads: 7, bookings: 3, sales: 1, refund_amount: 99 },
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.metricSnapshot.values).toEqual({ ad_spend_cents: 42000, leads: 12, qualified_leads: 7, bookings: 3, sales: 1 });
+  });
+
   it("rejects cross-hive callers that cannot mutate the metric hive", async () => {
     mocks.requireApiUser.mockResolvedValue({ user: { id: "member-1", email: "member@example.com", isSystemOwner: false } });
     mocks.canMutateHive.mockResolvedValue(false);

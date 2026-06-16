@@ -90,9 +90,16 @@ export default function MarketingPage() {
   const [offer, setOffer] = useState("owner-approved introductory offer");
   const [channels, setChannels] = useState<MarketingChannel[]>(DEFAULT_CHANNELS);
   const [metricCampaignId, setMetricCampaignId] = useState("");
+  const [budgetCampaignId, setBudgetCampaignId] = useState("");
+  const [budgetCents, setBudgetCents] = useState("50000");
   const [impressions, setImpressions] = useState("");
   const [clicks, setClicks] = useState("");
   const [landingPageVisits, setLandingPageVisits] = useState("");
+  const [adSpendCents, setAdSpendCents] = useState("");
+  const [leads, setLeads] = useState("");
+  const [qualifiedLeads, setQualifiedLeads] = useState("");
+  const [bookings, setBookings] = useState("");
+  const [sales, setSales] = useState("");
 
   async function refresh() {
     if (!selected) return;
@@ -112,6 +119,7 @@ export default function MarketingPage() {
 
   const allVisibleCampaigns = useMemo(() => snapshot?.activeCampaigns ?? [], [snapshot]);
   const selectedMetricCampaignId = metricCampaignId || allVisibleCampaigns[0]?.id || "";
+  const selectedBudgetCampaignId = budgetCampaignId || allVisibleCampaigns.find((campaign) => campaign.channels.includes("ads"))?.id || "";
 
   async function createObjective(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -166,6 +174,65 @@ export default function MarketingPage() {
     }
   }
 
+  async function approvePaidBudget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected || !selectedBudgetCampaignId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await readJson(await fetch(`/api/marketing/campaigns/${selectedBudgetCampaignId}/budget`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hiveId: selected.id,
+          requestedBudgetCents: Number(budgetCents),
+          reason: "Owner-approved paid ads cap from Marketing OS dashboard.",
+        }),
+      }));
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to approve paid ads budget cap");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startPaidCampaign(campaignId: string) {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await readJson(await fetch(`/api/marketing/campaigns/${campaignId}/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hiveId: selected.id }),
+      }));
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start paid ads campaign");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function evaluatePaidPolicy(campaignId: string) {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await readJson(await fetch(`/api/marketing/campaigns/${campaignId}/policy-evaluation`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hiveId: selected.id, maxCostPerLeadCents: 5000, minLeadQualityRate: 0.4, minLeadToBookingRate: 0.15 }),
+      }));
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to evaluate paid ads policy");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function recordManualMetrics(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
@@ -176,9 +243,19 @@ export default function MarketingPage() {
       const parsedImpressions = Number(impressions);
       const parsedClicks = Number(clicks);
       const parsedVisits = Number(landingPageVisits);
+      const parsedAdSpend = Number(adSpendCents);
+      const parsedLeads = Number(leads);
+      const parsedQualifiedLeads = Number(qualifiedLeads);
+      const parsedBookings = Number(bookings);
+      const parsedSales = Number(sales);
       if (Number.isFinite(parsedImpressions) && parsedImpressions >= 0) values.impressions = parsedImpressions;
       if (Number.isFinite(parsedClicks) && parsedClicks >= 0) values.clicks = parsedClicks;
       if (Number.isFinite(parsedVisits) && parsedVisits >= 0) values.landing_page_visits = parsedVisits;
+      if (Number.isFinite(parsedAdSpend) && parsedAdSpend >= 0) values.ad_spend_cents = parsedAdSpend;
+      if (Number.isFinite(parsedLeads) && parsedLeads >= 0) values.leads = parsedLeads;
+      if (Number.isFinite(parsedQualifiedLeads) && parsedQualifiedLeads >= 0) values.qualified_leads = parsedQualifiedLeads;
+      if (Number.isFinite(parsedBookings) && parsedBookings >= 0) values.bookings = parsedBookings;
+      if (Number.isFinite(parsedSales) && parsedSales >= 0) values.sales = parsedSales;
       if (values.impressions && values.clicks) values.ctr = values.clicks / values.impressions;
       await readJson(await fetch("/api/marketing/metric-snapshots", {
         method: "POST",
@@ -188,6 +265,11 @@ export default function MarketingPage() {
       setImpressions("");
       setClicks("");
       setLandingPageVisits("");
+      setAdSpendCents("");
+      setLeads("");
+      setQualifiedLeads("");
+      setBookings("");
+      setSales("");
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to record manual marketing metrics");
@@ -279,6 +361,17 @@ export default function MarketingPage() {
                   <span className="rounded-full bg-emerald-500/12 px-2 py-1 text-[11px] text-emerald-100">{campaign.status}</span>
                 </div>
                 <p className="mt-2 text-[13px] text-muted-foreground">Channels: {campaign.channels.map((channel) => channel.replaceAll("_", " ")).join(", ")}</p>
+                {campaign.channels.includes("ads") ? (
+                  <div className="mt-3 flex flex-wrap gap-2 text-[12px]">
+                    <button disabled={busy || campaign.status !== "approved" || !campaign.spendBudgetCents} onClick={() => startPaidCampaign(campaign.id)} className="rounded bg-honey-500/20 px-2 py-1 text-honey-100 disabled:opacity-50">
+                      Start paid ads spend
+                    </button>
+                    <button disabled={busy} onClick={() => evaluatePaidPolicy(campaign.id)} className="rounded bg-emerald-500/20 px-2 py-1 text-emerald-100 disabled:opacity-50">
+                      Evaluate paid policy
+                    </button>
+                    <span className="py-1 text-muted-foreground">Cap {campaign.spendBudgetCents ? `$${(campaign.spendBudgetCents / 100).toFixed(2)}` : "not approved"}</span>
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>
@@ -335,6 +428,28 @@ export default function MarketingPage() {
           </div>
         </article>
 
+        <form onSubmit={approvePaidBudget} className="rounded-[14px] border border-border bg-card/70 p-5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-honey-300/80">Paid ads budget gate</p>
+          <p className="mt-2 text-[13px] text-muted-foreground">Owner-approved cap required before paid ads spend can start. This stores the approval policy snapshot on the campaign.</p>
+          <label className="mt-4 block text-[12px] text-muted-foreground">Ads campaign
+            <select
+              className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground"
+              value={selectedBudgetCampaignId}
+              onChange={(event) => setBudgetCampaignId(event.target.value)}
+            >
+              {allVisibleCampaigns.filter((campaign) => campaign.channels.includes("ads")).map((campaign) => (
+                <option key={campaign.id} value={campaign.id}>{campaign.objective}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mt-3 block text-[12px] text-muted-foreground">Budget cap, cents
+            <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={budgetCents} onChange={(event) => setBudgetCents(event.target.value)} />
+          </label>
+          <button disabled={busy || !selectedBudgetCampaignId || Number(budgetCents) <= 0} className="mt-4 rounded bg-honey-500 px-3 py-2 text-[13px] font-semibold text-black disabled:opacity-50">
+            Approve paid ads cap
+          </button>
+        </form>
+
         <form onSubmit={recordManualMetrics} className="rounded-[14px] border border-border bg-card/70 p-5">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-honey-300/80">Manual/imported metrics</p>
           <p className="mt-2 text-[13px] text-muted-foreground">Record owner-entered results while connectors are not ready. Metrics stay hive-scoped and feed the results panel.</p>
@@ -359,8 +474,23 @@ export default function MarketingPage() {
             <label className="text-[12px] text-muted-foreground">Landing visits
               <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={landingPageVisits} onChange={(event) => setLandingPageVisits(event.target.value)} />
             </label>
+            <label className="text-[12px] text-muted-foreground">Ad spend, cents
+              <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={adSpendCents} onChange={(event) => setAdSpendCents(event.target.value)} />
+            </label>
+            <label className="text-[12px] text-muted-foreground">Leads
+              <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={leads} onChange={(event) => setLeads(event.target.value)} />
+            </label>
+            <label className="text-[12px] text-muted-foreground">Qualified leads
+              <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={qualifiedLeads} onChange={(event) => setQualifiedLeads(event.target.value)} />
+            </label>
+            <label className="text-[12px] text-muted-foreground">Bookings
+              <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={bookings} onChange={(event) => setBookings(event.target.value)} />
+            </label>
+            <label className="text-[12px] text-muted-foreground">Sales
+              <input className="mt-1 w-full rounded border border-border bg-background p-2 text-foreground" inputMode="numeric" value={sales} onChange={(event) => setSales(event.target.value)} />
+            </label>
           </div>
-          <button disabled={busy || allVisibleCampaigns.length === 0 || (!impressions && !clicks && !landingPageVisits)} className="mt-4 rounded bg-honey-500 px-3 py-2 text-[13px] font-semibold text-black disabled:opacity-50">
+          <button disabled={busy || allVisibleCampaigns.length === 0 || (!impressions && !clicks && !landingPageVisits && !adSpendCents && !leads && !qualifiedLeads && !bookings && !sales)} className="mt-4 rounded bg-honey-500 px-3 py-2 text-[13px] font-semibold text-black disabled:opacity-50">
             Record manual metrics
           </button>
         </form>

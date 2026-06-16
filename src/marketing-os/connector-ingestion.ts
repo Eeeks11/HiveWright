@@ -13,7 +13,18 @@ const PRIORITY_MARKETING_CONNECTORS = new Set([
   "phone-call-tracking",
 ]);
 
-const METRIC_KEYS = ["impressions", "clicks", "ctr", "landing_page_visits", "cost_per_lead"] as const;
+const METRIC_KEYS = [
+  "impressions",
+  "clicks",
+  "ctr",
+  "landing_page_visits",
+  "cost_per_lead",
+  "ad_spend_cents",
+  "leads",
+  "qualified_leads",
+  "bookings",
+  "sales",
+] as const;
 
 type MarketingConnectorMetricValueKey = (typeof METRIC_KEYS)[number];
 
@@ -54,11 +65,11 @@ export type PersistMarketingConnectorMetricSnapshotsResult = {
 
 type SqlExecutor = Sql;
 
-function numberOrUndefined(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+function nonNegativeNumberOrUndefined(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
   if (typeof value === "string" && value.trim() !== "") {
     const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   }
   return undefined;
 }
@@ -68,22 +79,32 @@ function stringOrNull(value: unknown): string | null {
 }
 
 function metricValuesForPayload(payload: Record<string, unknown>): Partial<Record<MarketingConnectorMetricValueKey, number>> {
-  const landingPageVisits = numberOrUndefined(payload.landing_page_visits)
-    ?? numberOrUndefined(payload.landingPageVisits)
-    ?? numberOrUndefined(payload.sessions)
-    ?? numberOrUndefined(payload.pageviews);
-  const costPerLead = numberOrUndefined(payload.cost_per_lead) ?? numberOrUndefined(payload.costPerLead);
+  const landingPageVisits = nonNegativeNumberOrUndefined(payload.landing_page_visits)
+    ?? nonNegativeNumberOrUndefined(payload.landingPageVisits)
+    ?? nonNegativeNumberOrUndefined(payload.sessions)
+    ?? nonNegativeNumberOrUndefined(payload.pageviews);
+  const costPerLead = nonNegativeNumberOrUndefined(payload.cost_per_lead) ?? nonNegativeNumberOrUndefined(payload.costPerLead);
+  const adSpendCents = nonNegativeNumberOrUndefined(payload.ad_spend_cents) ?? nonNegativeNumberOrUndefined(payload.adSpendCents) ?? nonNegativeNumberOrUndefined(payload.spend);
+  const leads = nonNegativeNumberOrUndefined(payload.leads);
+  const qualifiedLeads = nonNegativeNumberOrUndefined(payload.qualified_leads) ?? nonNegativeNumberOrUndefined(payload.qualifiedLeads);
+  const bookings = nonNegativeNumberOrUndefined(payload.bookings);
+  const sales = nonNegativeNumberOrUndefined(payload.sales);
   const values: Partial<Record<MarketingConnectorMetricValueKey, number>> = {};
 
-  const impressions = numberOrUndefined(payload.impressions);
-  const clicks = numberOrUndefined(payload.clicks);
-  const ctr = numberOrUndefined(payload.ctr);
+  const impressions = nonNegativeNumberOrUndefined(payload.impressions);
+  const clicks = nonNegativeNumberOrUndefined(payload.clicks);
+  const ctr = nonNegativeNumberOrUndefined(payload.ctr);
 
   if (impressions !== undefined) values.impressions = impressions;
   if (clicks !== undefined) values.clicks = clicks;
   if (ctr !== undefined) values.ctr = ctr;
   if (landingPageVisits !== undefined) values.landing_page_visits = landingPageVisits;
   if (costPerLead !== undefined) values.cost_per_lead = costPerLead;
+  if (adSpendCents !== undefined) values.ad_spend_cents = adSpendCents;
+  if (leads !== undefined) values.leads = leads;
+  if (qualifiedLeads !== undefined) values.qualified_leads = qualifiedLeads;
+  if (bookings !== undefined) values.bookings = bookings;
+  if (sales !== undefined) values.sales = sales;
 
   return values;
 }
@@ -141,6 +162,33 @@ export async function persistMarketingConnectorMetricSnapshots(
   if (snapshots.length === 0) return { inserted: 0, skipped: 0 };
 
   await sql`
+    WITH staged AS (
+      SELECT
+        snapshot.hive_id::uuid AS hive_id,
+        NULLIF(snapshot.campaign_id, '')::uuid AS claimed_campaign_id,
+        snapshot.connector_install_id::uuid AS connector_install_id,
+        snapshot.source_connector,
+        snapshot.source_stream,
+        snapshot.external_id,
+        snapshot.values,
+        snapshot.attribution_confidence,
+        snapshot.freshness,
+        snapshot.trust_metadata,
+        snapshot.captured_at::timestamptz AS captured_at
+      FROM jsonb_to_recordset(${JSON.stringify(snapshots)}::jsonb) AS snapshot(
+        hive_id text,
+        campaign_id text,
+        connector_install_id text,
+        source_connector text,
+        source_stream text,
+        external_id text,
+        values jsonb,
+        attribution_confidence text,
+        freshness text,
+        trust_metadata jsonb,
+        captured_at text
+      )
+    )
     INSERT INTO marketing_metric_snapshots (
       hive_id,
       campaign_id,
@@ -156,31 +204,22 @@ export async function persistMarketingConnectorMetricSnapshots(
       captured_at
     )
     SELECT
-      snapshot.hive_id::uuid,
-      NULLIF(snapshot.campaign_id, '')::uuid,
-      snapshot.connector_install_id::uuid,
-      snapshot.source_connector,
-      snapshot.source_stream,
-      snapshot.external_id,
+      staged.hive_id,
+      campaign.id,
+      staged.connector_install_id,
+      staged.source_connector,
+      staged.source_stream,
+      staged.external_id,
       'connector',
-      snapshot.values,
-      snapshot.attribution_confidence,
-      snapshot.freshness,
-      snapshot.trust_metadata,
-      snapshot.captured_at::timestamptz
-    FROM jsonb_to_recordset(${JSON.stringify(snapshots)}::jsonb) AS snapshot(
-      hive_id text,
-      campaign_id text,
-      connector_install_id text,
-      source_connector text,
-      source_stream text,
-      external_id text,
-      values jsonb,
-      attribution_confidence text,
-      freshness text,
-      trust_metadata jsonb,
-      captured_at text
-    )
+      staged.values,
+      staged.attribution_confidence,
+      staged.freshness,
+      staged.trust_metadata,
+      staged.captured_at
+    FROM staged
+    LEFT JOIN marketing_campaigns campaign
+      ON campaign.id = staged.claimed_campaign_id
+      AND campaign.hive_id = staged.hive_id
     ON CONFLICT (hive_id, connector_install_id, source_connector, source_stream, external_id)
     DO UPDATE SET
       campaign_id = EXCLUDED.campaign_id,

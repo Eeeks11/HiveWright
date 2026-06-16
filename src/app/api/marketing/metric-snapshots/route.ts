@@ -4,7 +4,18 @@ import { jsonError, jsonOk } from "../../_lib/responses";
 import { canMutateHive } from "@/auth/users";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ALLOWED_METRICS = new Set(["impressions", "clicks", "ctr", "landing_page_visits", "cost_per_lead"]);
+const ALLOWED_METRICS = new Set([
+  "impressions",
+  "clicks",
+  "ctr",
+  "landing_page_visits",
+  "cost_per_lead",
+  "ad_spend_cents",
+  "leads",
+  "qualified_leads",
+  "bookings",
+  "sales",
+]);
 const ALLOWED_SOURCES = new Set(["manual_import", "connector"]);
 const ALLOWED_ATTRIBUTION = new Set(["manual_unverified", "imported", "connector_verified"]);
 const ALLOWED_FRESHNESS = new Set(["current", "stale", "missing"]);
