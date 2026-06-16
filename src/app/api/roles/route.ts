@@ -1,6 +1,6 @@
-import { canAccessHive } from "@/auth/users";
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError } from "../_lib/responses";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 import { requireApiUser, requireSystemOwner } from "../_lib/auth";
 import { provisionerFor } from "../../../provisioning";
 import type { ProvisionStatus } from "../../../provisioning";
@@ -40,12 +40,9 @@ export async function GET(request: Request) {
   try {
     const searchParams = new URL(request.url).searchParams;
     const includeInactive = searchParams.get("includeInactive") === "true";
-    const hiveId = searchParams.get("hiveId");
-
-    if (hiveId && !authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
-    }
+    const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
 
     const rows = await sql`
       SELECT
@@ -72,6 +69,7 @@ export async function GET(request: Request) {
           COUNT(*) FILTER (WHERE status IN ('pending', 'active')) AS active_count,
           COUNT(*) FILTER (WHERE status = 'active') AS running_count
         FROM tasks
+        WHERE hive_id = ${hiveId}
         GROUP BY assigned_to
       ) counts ON counts.assigned_to = rt.slug
       ${includeInactive ? sql`` : sql`WHERE rt.active = true`}

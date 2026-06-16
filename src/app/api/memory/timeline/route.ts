@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonError, jsonPaginated, parseSearchParams } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "../../_lib/hive-target";
 
 const VALID_STORES = ["role_memory", "hive_memory", "insights"] as const;
 type StoreType = (typeof VALID_STORES)[number];
@@ -75,23 +75,16 @@ function buildStoreQuery(store: StoreType, hiveId: string) {
 export async function GET(request: Request) {
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
     const store = params.get("store") as StoreType | null;
     const limit = params.getInt("limit", 50);
     const offset = params.getInt("offset", 0);
     const includeContent = wantsFullView(params.get("view"));
 
-    if (!hiveId) {
-      return jsonError("Missing required parameter: hiveId", 400);
-    }
     const authz = await requireApiUser();
     if ("response" in authz) return authz.response;
-    if (!authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: hive access required", 403);
-      }
-    }
+    const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
 
     if (store && !VALID_STORES.includes(store)) {
       return jsonError(

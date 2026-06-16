@@ -1,34 +1,17 @@
 import { sql } from "../_lib/db";
-import { jsonOk, jsonError, parseSearchParams } from "../_lib/responses";
+import { jsonOk, jsonError } from "../_lib/responses";
 import { requireApiAuth, requireApiUser, requireSystemOwner } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 
 export async function GET(request: Request) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   const { user } = authz;
   try {
-    const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
-    let rows;
-    if (hiveId) {
-      if (!user.isSystemOwner) {
-        const hasAccess = await canAccessHive(sql, user.id, hiveId);
-        if (!hasAccess) {
-          return jsonError("Forbidden: caller cannot access this hive", 403);
-        }
-      }
-      rows = await sql`SELECT * FROM adapter_config WHERE hive_id = ${hiveId} OR hive_id IS NULL ORDER BY adapter_type`;
-    } else if (user.isSystemOwner) {
-      rows = await sql`SELECT * FROM adapter_config ORDER BY adapter_type`;
-    } else {
-      rows = await sql`
-        SELECT * FROM adapter_config
-        WHERE hive_id IS NULL
-           OR hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = ${user.id})
-        ORDER BY adapter_type
-      `;
-    }
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
+    const rows = await sql`SELECT * FROM adapter_config WHERE hive_id = ${hiveId} OR hive_id IS NULL ORDER BY adapter_type`;
     const data = rows.map(r => ({
       id: r.id, hiveId: r.hive_id ?? null, adapterType: r.adapter_type,
       config: r.config, createdAt: r.created_at,

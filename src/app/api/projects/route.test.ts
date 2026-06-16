@@ -42,7 +42,7 @@ vi.mock("../_lib/responses", () => ({
   },
 }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 import { sql } from "../_lib/db";
 import { requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
@@ -81,6 +81,56 @@ function projectRequest(body: Record<string, unknown>) {
     body: JSON.stringify(body),
   });
 }
+
+
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
+
+describe("GET /api/projects explicit hive target", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSql.mockReset();
+    mockRequireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@local", isSystemOwner: true },
+    });
+    mockCanAccessHive.mockResolvedValue(true);
+  });
+
+  it("rejects missing hiveId before querying projects", async () => {
+    const res = await GET(new Request("http://localhost/api/projects"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid hiveId before querying projects", async () => {
+    const res = await GET(new Request("http://localhost/api/projects?hiveId=not-a-uuid"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
+    expect(mockSql).not.toHaveBeenCalled();
+  });
+
+  it("lists only projects for the requested hive", async () => {
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([{ total: "1" }])
+      .mockResolvedValueOnce([{ id: "project-1", hive_id: HIVE_ID, slug: "alpha", name: "Alpha", workspace_path: null, git_repo: false, created_at: new Date("2026-01-01T00:00:00Z"), updated_at: new Date("2026-01-01T00:00:00Z") }]);
+
+    const res = await GET(new Request(`http://localhost/api/projects?hiveId=${HIVE_ID}`));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0].hiveId).toBe(HIVE_ID);
+    const countQuery = Array.from(mockSql.mock.calls[1][0] as TemplateStringsArray).join(" ");
+    const dataQuery = Array.from(mockSql.mock.calls[2][0] as TemplateStringsArray).join(" ");
+    expect(countQuery).toContain("WHERE hive_id =");
+    expect(dataQuery).toContain("WHERE hive_id =");
+  });
+});
 
 describe("POST /api/projects", () => {
   beforeEach(() => {
