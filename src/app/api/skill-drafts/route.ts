@@ -14,7 +14,7 @@ import {
   rejectSkill,
   reviewSkill,
 } from "@/skills/self-creation";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { requireStrictHiveTarget } from "../_lib/hive-target";
 import {
   AGENT_AUDIT_EVENTS,
@@ -228,6 +228,9 @@ export async function POST(request: Request) {
     if (sourceType && sourceType !== "internal" && sourceType !== "external") {
       return jsonError('sourceType must be "internal" or "external"', 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const taskScope = await enforceInternalTaskHiveScope(hiveId);
     if (!taskScope.ok) return taskScope.response;

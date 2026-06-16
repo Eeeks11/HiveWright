@@ -8,7 +8,7 @@ import {
   recordEaDirectCreateBypass,
   requireEaDirectCreateBypassReason,
 } from "@/ea/native/direct-create-bypass";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError, resolveDefaultProjectIdForHive } from "@/projects/default-project";
 import {
   assertHiveCreationAllowed,
@@ -175,6 +175,9 @@ export async function POST(request: Request) {
     if (!hiveId || !title) {
       return jsonError("Missing required fields: hiveId, title", 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;

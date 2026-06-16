@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
     requireApiUser: vi.fn(),
     enforceInternalTaskHiveScope: vi.fn(),
     canAccessHive: vi.fn(),
+    requireEaDestinationHiveConfirmation: vi.fn(),
   };
 });
 
@@ -31,6 +32,7 @@ vi.mock("@/auth/users", () => ({
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: vi.fn(),
+  requireEaDestinationHiveConfirmation: mocks.requireEaDestinationHiveConfirmation,
 }));
 
 vi.mock("@/skills/self-creation", () => ({
@@ -123,6 +125,7 @@ describe("GET /api/skill-drafts access control", () => {
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.unsafe.mockResolvedValue([]);
   });
@@ -231,6 +234,7 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
     });
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.sql.mockResolvedValue([{ id: "draft-123", hiveId: "11111111-1111-4111-8111-111111111111" }]);
   });
 
@@ -457,6 +461,7 @@ describe("POST /api/skill-drafts access control", () => {
     });
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
   });
 
   it("returns 403 before proposing when the caller cannot manage the hive", async () => {

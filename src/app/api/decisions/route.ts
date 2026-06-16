@@ -2,7 +2,7 @@ import { sql } from "../_lib/db";
 import { jsonError, jsonOk, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../_lib/auth";
 import { canAccessHive } from "@/auth/users";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
 import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import { recordDecisionAuditEvent } from "./_audit";
@@ -207,6 +207,9 @@ export async function POST(request: Request) {
     if (!hiveId || !taskId || !question || !context || options === undefined) {
       return jsonError("Missing required fields: hiveId, taskId, question, context, options", 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const taskScope = await enforceInternalTaskHiveScope(hiveId);
     if (!taskScope.ok) return taskScope.response;
