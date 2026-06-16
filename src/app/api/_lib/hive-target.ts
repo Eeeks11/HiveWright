@@ -91,6 +91,23 @@ export async function requireStrictHiveTarget(
   return { ok: true, hiveId };
 }
 
+export function requireHiveTargetMatchesPath(
+  source: StrictHiveTargetSource,
+  pathHiveId: string,
+  options: { label?: string } = {},
+): ResourceOwnershipResult {
+  const label = options.label ?? source.key ?? "hiveId";
+  const suppliedHiveId = normalizeTarget(readHiveTarget(source));
+  if (!suppliedHiveId) return { ok: true };
+  if (!HIVE_TARGET_UUID_RE.test(suppliedHiveId)) {
+    return { ok: false, response: jsonError(`${label} must be a valid UUID`, 400) };
+  }
+  if (suppliedHiveId !== pathHiveId) {
+    return { ok: false, response: jsonError(`${label} must match path hive id`, 400) };
+  }
+  return { ok: true };
+}
+
 export function requireResourceOwnedByHive(
   resourceHiveId: string | null | undefined,
   hiveId: string,
