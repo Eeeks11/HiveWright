@@ -50,7 +50,30 @@ describe("PATCH /api/hives/[id]/targets/[targetId] target consistency", () => {
     mockCanMutateHive.mockResolvedValue(true);
   });
 
-  it("rejects a mismatched body hiveId before nested resource lookup", async () => {
+  it("returns 401 for signed-out callers before parsing a mismatched body hiveId", async () => {
+    mockRequireApiUser.mockResolvedValueOnce({
+      response: Response.json({ error: "Unauthorized" }, { status: 401 }),
+    });
+
+    const res = await PATCH(
+      new Request(`http://localhost/api/hives/${HIVE_ID}/targets/${TARGET_ID}`, {
+        method: "PATCH",
+        body: JSON.stringify({ hiveId: OTHER_HIVE_ID, title: "Wrong hive" }),
+      }),
+      params,
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(401);
+    expect(body.error).toBe("Unauthorized");
+    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockCanAccessHive).not.toHaveBeenCalled();
+    expect(mockCanMutateHive).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched body hiveId after path hive authorization but before nested resource lookup", async () => {
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
+
     const res = await PATCH(
       new Request(`http://localhost/api/hives/${HIVE_ID}/targets/${TARGET_ID}`, {
         method: "PATCH",
@@ -62,8 +85,9 @@ describe("PATCH /api/hives/[id]/targets/[targetId] target consistency", () => {
 
     expect(res.status).toBe(400);
     expect(body.error).toBe("hiveId must match path hive id");
-    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockSql).toHaveBeenCalledTimes(1);
     expect(mockCanAccessHive).not.toHaveBeenCalled();
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_ID);
   });
 
   it("fails closed when the nested target belongs to another hive", async () => {

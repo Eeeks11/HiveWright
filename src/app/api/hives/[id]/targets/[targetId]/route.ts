@@ -28,16 +28,6 @@ export async function PATCH(
 ) {
   const { id, targetId } = await params;
 
-  let body: Record<string, unknown>;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonError("invalid JSON", 400);
-  }
-
-  const requestedHive = requireHiveTargetMatchesPath({ kind: "body", body }, id);
-  if (requestedHive.ok === false) return requestedHive.response;
-
   // Audit d20f7b46 Sprint 2: hive-scoped mutation must require hive access.
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
@@ -48,6 +38,16 @@ export async function PATCH(
     { mode: "mutate", label: "id" },
   );
   if (target.ok === false) return target.response;
+
+  let body: Record<string, unknown>;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonError("invalid JSON", 400);
+  }
+
+  const requestedHive = requireHiveTargetMatchesPath({ kind: "body", body }, id);
+  if (requestedHive.ok === false) return requestedHive.response;
 
   const [existing] = await sql`
     SELECT id FROM hive_targets WHERE id = ${targetId} AND hive_id = ${id}
