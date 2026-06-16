@@ -31,7 +31,7 @@ describe("DeliverableDetailPage", () => {
   it("renders a sandboxed HTML preview with source context and actions", async () => {
     mocks.getDeliverable.mockResolvedValueOnce({
       id: "deliverable-1",
-      hiveId: "hive-1",
+      hiveId: "00000000-0000-4000-8000-000000000001",
       taskId: "task-1",
       goalId: "goal-1",
       title: "Landing page draft",
@@ -40,8 +40,8 @@ describe("DeliverableDetailPage", () => {
       mimeType: "text/html",
       renderMode: "html",
       reviewStatus: "needs_review",
-      openUrl: "/api/deliverables/deliverable-1/content",
-      downloadUrl: "/api/deliverables/deliverable-1/download",
+      openUrl: "/api/deliverables/deliverable-1/content?hiveId=00000000-0000-4000-8000-000000000001",
+      downloadUrl: "/api/deliverables/deliverable-1/download?hiveId=00000000-0000-4000-8000-000000000001",
       sourceTaskTitle: "Build landing page",
       sourceGoalTitle: "Launch site",
       createdAt: "2026-05-16T20:00:00.000Z",
@@ -57,14 +57,14 @@ describe("DeliverableDetailPage", () => {
 
     expect(screen.getByRole("heading", { name: "Landing page draft" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Open full page" }).getAttribute("href")).toBe("/deliverables/deliverable-1/open");
-    expect(screen.getByRole("link", { name: "Download" }).getAttribute("href")).toBe("/api/deliverables/deliverable-1/download");
-    expect(screen.getByRole("link", { name: "Raw" }).getAttribute("href")).toBe("/api/deliverables/deliverable-1/content");
+    expect(screen.getByRole("link", { name: "Download" }).getAttribute("href")).toBe("/api/deliverables/deliverable-1/download?hiveId=00000000-0000-4000-8000-000000000001");
+    expect(screen.getByRole("link", { name: "Raw" }).getAttribute("href")).toBe("/api/deliverables/deliverable-1/content?hiveId=00000000-0000-4000-8000-000000000001");
     expect(screen.getByRole("link", { name: "Build landing page" }).getAttribute("href")).toBe("/tasks/task-1");
     expect(screen.getByRole("link", { name: "Launch site" }).getAttribute("href")).toBe("/goals/goal-1");
 
     const iframe = container.querySelector("iframe");
     expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute("src")).toBe("/api/deliverables/deliverable-1/content");
+    expect(iframe?.getAttribute("src")).toBe("/api/deliverables/deliverable-1/content?hiveId=00000000-0000-4000-8000-000000000001");
     expect(iframe?.getAttribute("sandbox")).toBe("");
     expect(iframe?.getAttribute("sandbox") ?? "").not.toContain("allow-same-origin");
   });

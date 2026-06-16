@@ -3,7 +3,7 @@ import { fallbackFilename, fallbackTitle, listDeliverables, mapDeliverableRow } 
 
 const baseRow = {
   id: "wp-1",
-  hive_id: "hive-1",
+  hive_id: "00000000-0000-4000-8000-000000000001",
   task_id: "task-1",
   goal_id: "goal-1",
   title: null,
@@ -29,8 +29,8 @@ describe("deliverable query helpers", () => {
     expect(mapped.filename).toBe("summary-first-line.md");
     expect(mapped.renderMode).toBe("markdown");
     expect(mapped.reviewStatus).toBe("ready");
-    expect(mapped.openUrl).toBe("/api/deliverables/wp-1/content");
-    expect(mapped.downloadUrl).toBe("/api/deliverables/wp-1/download");
+    expect(mapped.openUrl).toBe("/api/deliverables/wp-1/content?hiveId=00000000-0000-4000-8000-000000000001");
+    expect(mapped.downloadUrl).toBe("/api/deliverables/wp-1/download?hiveId=00000000-0000-4000-8000-000000000001");
   });
 
   it("uses task title and file basename fallbacks", () => {
