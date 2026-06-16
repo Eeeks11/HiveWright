@@ -120,7 +120,7 @@ export function buildRuntimeRouteDriftReport(
   const declaredCandidates = view.basePolicyState.policy?.candidates.length ?? 0;
   const runtimeProjectedCandidates = view.policy.candidates.length;
   const blockedRoutes = view.models.filter((model) => (
-    !model.hiveModelEnabled || !model.routingEnabled || model.status === "unhealthy"
+    !model.hiveModelEnabled || !model.routingEnabled || !hasFreshHealthyRouteEvidence(model)
   )).length;
   const quarantinedRoutes = view.models.filter((model) => model.failureClass === "quarantined").length;
   const staleRoutes = view.models.filter((model) => model.probeFreshness === "due").length;
@@ -155,6 +155,13 @@ async function defaultLoadHeartbeat(sql: Sql, input: { now: Date }): Promise<Dis
 
 async function defaultLoadSupervisorSummary(sql: Sql, hiveId: string): Promise<SupervisorReportSummary | null> {
   return summarizeSupervisorReport(await fetchLatestSupervisorReport(sql, hiveId));
+}
+
+function hasFreshHealthyRouteEvidence(model: {
+  status: string;
+  probeFreshness: string;
+}): boolean {
+  return model.status === "healthy" && model.probeFreshness === "fresh";
 }
 
 function readGitSha(repoPath: string): string | null {

@@ -87,9 +87,10 @@ export function buildAnalystModelRoutingSummary(
     increment(adapterCounts, sanitizeBucket(model.adapterType));
 
     const enabled = model.hiveModelEnabled && model.routingEnabled;
-    if (enabled && model.status !== "unhealthy") routableRoutes += 1;
+    const healthEligible = hasFreshHealthyRouteEvidence(model);
+    if (enabled && healthEligible) routableRoutes += 1;
     if (!model.hiveModelEnabled || !model.routingEnabled) disabledRoutes += 1;
-    if (!enabled || model.status === "unhealthy") blockedRoutes += 1;
+    if (!enabled || !healthEligible) blockedRoutes += 1;
     if (model.status === "unhealthy") unhealthyRoutes += 1;
     if (model.status === "unknown") unknownHealthRoutes += 1;
     if (model.failureClass === "quarantined") quarantinedRoutes += 1;
@@ -145,6 +146,13 @@ function sanitizeBucket(value: string | null | undefined): string {
 
 function increment(record: Record<string, number>, key: string) {
   record[key] = (record[key] ?? 0) + 1;
+}
+
+function hasFreshHealthyRouteEvidence(model: {
+  status: string;
+  probeFreshness: string;
+}): boolean {
+  return model.status === "healthy" && model.probeFreshness === "fresh";
 }
 
 async function defaultLoadHeartbeat(sql: Sql, input: { now: Date }): Promise<DispatcherHeartbeatRecord> {
