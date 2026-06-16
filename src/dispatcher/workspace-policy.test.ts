@@ -314,6 +314,24 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("allows secret-free read-only infrastructure verification without a git-backed project", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "infrastructure-agent",
+      title: "Verify live site, repo, DB, and infrastructure state",
+      brief: "Conduct a secret-free, read-only verification of the shortstaysales.com.au live site, GitHub repo integrity, Supabase database state, and Vercel/Resend deployment posture. Document current findings without modifying any production or config secrets.",
+      acceptanceCriteria: "Produce a current-state report only; do not modify code, repositories, deployment config, or secrets.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("does not treat quality/doctor diagnosis context as product code work", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
