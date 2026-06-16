@@ -13,10 +13,6 @@ function previewText(deliverable: DeliverableDetail) {
   return deliverable.content;
 }
 
-function contentUrl(deliverable: DeliverableDetail) {
-  return `/api/deliverables/${deliverable.id}/content`;
-}
-
 export function DeliverablePreview({ deliverable }: { deliverable: DeliverableDetail }) {
   if (deliverable.renderMode === "external_url") {
     return (
@@ -35,7 +31,7 @@ export function DeliverablePreview({ deliverable }: { deliverable: DeliverableDe
     return (
       <iframe
         title={deliverable.title}
-        src={contentUrl(deliverable)}
+        src={deliverable.openUrl}
         sandbox=""
         className="h-[70vh] min-h-96 w-full rounded-lg border bg-white dark:border-zinc-800"
       />
@@ -44,7 +40,7 @@ export function DeliverablePreview({ deliverable }: { deliverable: DeliverableDe
 
   if (deliverable.renderMode === "image") {
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={contentUrl(deliverable)} alt={deliverable.title} className="max-h-[75vh] w-full rounded-lg border object-contain dark:border-zinc-800" />;
+    return <img src={deliverable.openUrl} alt={deliverable.title} className="max-h-[75vh] w-full rounded-lg border object-contain dark:border-zinc-800" />;
   }
 
   const text = previewText(deliverable);

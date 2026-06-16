@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { readTaskSecurityPreflight } from "@/security/preflight-report";
 
 const LOCAL_PREFLIGHT_ROUTE = {
@@ -19,7 +19,7 @@ const LOCAL_PREFLIGHT_ROUTE = {
 } as const;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -27,21 +27,16 @@ export async function GET(
     if ("response" in authz) return authz.response;
     const { user } = authz;
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
 
     const [task] = await sql<{ id: string; hive_id: string }[]>`
       SELECT id, hive_id
       FROM tasks
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!task) {
       return jsonError("Task not found", 404);
-    }
-
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, task.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this task", 403);
-      }
     }
 
     const preflight = readTaskSecurityPreflight();

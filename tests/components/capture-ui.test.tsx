@@ -22,22 +22,29 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { CaptureConsentDialog } from "../../src/components/capture-consent-dialog";
 import { CaptureRecordingPill } from "../../src/components/capture-recording-pill";
 
+const captureHiveContextMock = vi.hoisted(() => ({
+  selected: {
+    id: "hive-111",
+    name: "Test Hive",
+    slug: "test-hive",
+    type: "digital",
+  },
+  hives: [{ id: "hive-111", name: "Test Hive", slug: "test-hive", type: "digital" }],
+  loading: false,
+  hasProvider: true,
+}));
+
 // ---- Next.js navigation mocks ----
 vi.mock("next/navigation", () => ({
   useParams: () => ({ captureId: "session-abc" }),
   useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => "/settings/workflow-capture/session-abc/review",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // ---- Hive context mock ----
 vi.mock("@/components/hive-context", () => ({
-  useHiveContext: () => ({
-    selected: {
-      id: "hive-111",
-      name: "Test Hive",
-      slug: "test-hive",
-      type: "digital",
-    },
-  }),
+  useHiveContext: () => captureHiveContextMock,
 }));
 
 // ---- next/link mock ----
@@ -225,13 +232,17 @@ describe("CaptureReviewPage (review shell)", () => {
     draftDelete?: Response;
     session?: Response;
   }) {
+    const hiveTarget = "hiveId=hive-111";
     const sessionResponse = overrides?.session ?? new Response(
       JSON.stringify({ data: stoppedSession }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
 
     const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
-      if (url === "/api/capture-sessions/session-abc/draft" && (!opts || opts.method === undefined)) {
+      if (url === `/api/capture-sessions/session-abc?${hiveTarget}` && (!opts || opts.method === undefined)) {
+        return sessionResponse.clone();
+      }
+      if (url === `/api/capture-sessions/session-abc/draft?${hiveTarget}` && (!opts || opts.method === undefined)) {
         return overrides?.draftGet ?? new Response(
           JSON.stringify({
             data: {
@@ -263,7 +274,7 @@ describe("CaptureReviewPage (review shell)", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url === "/api/capture-sessions/session-abc/draft" && opts?.method === "POST") {
+      if (url === `/api/capture-sessions/session-abc/draft?${hiveTarget}` && opts?.method === "POST") {
         return overrides?.draftPost ?? new Response(
           JSON.stringify({
             data: {
@@ -286,7 +297,7 @@ describe("CaptureReviewPage (review shell)", () => {
           { status: 201, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url === "/api/capture-sessions/session-abc/draft" && opts?.method === "DELETE") {
+      if (url === `/api/capture-sessions/session-abc/draft?${hiveTarget}` && opts?.method === "DELETE") {
         return overrides?.draftDelete ?? new Response(
           JSON.stringify({
             data: {
@@ -298,7 +309,7 @@ describe("CaptureReviewPage (review shell)", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      return sessionResponse.clone();
+      return new Response("not found", { status: 404 });
     });
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
     return fetchMock;
@@ -374,6 +385,8 @@ describe("CaptureReviewPage (review shell)", () => {
     await renderReviewPage();
 
     await waitFor(() => expect(screen.getByText("session-abc")).toBeTruthy());
+    expect(fetchMock).toHaveBeenCalledWith("/api/capture-sessions/session-abc?hiveId=hive-111");
+    expect(fetchMock).toHaveBeenCalledWith("/api/capture-sessions/session-abc/draft?hiveId=hive-111");
     const editor = await screen.findByLabelText(/skill\.md draft body/i);
     fireEvent.change(editor, {
       target: { value: "# Edited draft\n\n## Observed steps\n\n- Owner reviewed step" },
@@ -384,7 +397,7 @@ describe("CaptureReviewPage (review shell)", () => {
     expect(screen.getByText(/status: pending/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /inactive draft created/i })).toBeTruthy();
     const postCall = fetchMock.mock.calls.find(
-      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft" &&
+      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft?hiveId=hive-111" &&
         opts?.method === "POST",
     );
     expect(postCall).toBeTruthy();
@@ -450,12 +463,12 @@ describe("CaptureReviewPage (review shell)", () => {
 
     await waitFor(() => expect(screen.getByRole("button", { name: /draft rejected/i })).toBeTruthy());
     const deleteCall = fetchMock.mock.calls.find(
-      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft" &&
+      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft?hiveId=hive-111" &&
         opts?.method === "DELETE",
     );
     expect(deleteCall).toBeTruthy();
     const postCall = fetchMock.mock.calls.find(
-      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft" &&
+      ([url, opts]) => url === "/api/capture-sessions/session-abc/draft?hiveId=hive-111" &&
         opts?.method === "POST",
     );
     expect(postCall).toBeFalsy();

@@ -29,6 +29,7 @@ vi.mock("@/audit/agent-events", () => ({
 import { DELETE, PATCH } from "./route";
 
 const params = { params: Promise.resolve({ id: "install-1" }) };
+const hiveId = "11111111-1111-4111-8111-111111111111";
 
 describe("DELETE /api/connector-installs/[id] access control", () => {
   beforeEach(() => {
@@ -57,15 +58,15 @@ describe("DELETE /api/connector-installs/[id] access control", () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mocks.sql.mockResolvedValueOnce([{ hiveId: "hive-a" }]);
+    mocks.sql.mockResolvedValueOnce([{ id: hiveId }]);
     mocks.canMutateHive.mockResolvedValueOnce(false);
 
-    const res = await DELETE(new Request("http://localhost/api/connector-installs/install-1"), params);
+    const res = await DELETE(new Request(`http://localhost/api/connector-installs/install-1?hiveId=${hiveId}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
+    expect(body.error).toBe("Forbidden: caller cannot manage this hive");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", hiveId);
     expect(mocks.sql).toHaveBeenCalledTimes(1);
   });
 
@@ -74,25 +75,26 @@ describe("DELETE /api/connector-installs/[id] access control", () => {
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
     mocks.sql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([{
-        hiveId: "hive-a",
+        hiveId,
         connectorSlug: "discord-webhook",
         displayName: "Discord",
       }])
       .mockResolvedValueOnce([]);
     mocks.canMutateHive.mockResolvedValueOnce(true);
 
-    const res = await DELETE(new Request("http://localhost/api/connector-installs/install-1"), params);
+    const res = await DELETE(new Request(`http://localhost/api/connector-installs/install-1?hiveId=${hiveId}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ deleted: true });
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", "hive-a");
-    expect(mocks.sql).toHaveBeenCalledTimes(2);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", hiveId);
+    expect(mocks.sql).toHaveBeenCalledTimes(3);
     expect(mocks.recordAgentAuditEventBestEffort).toHaveBeenCalledWith(mocks.sql, {
       actor: { type: "owner", id: "member-1", label: "member@example.com" },
       eventType: "connector.revoked_by_owner",
-      hiveId: "hive-a",
+      hiveId,
       targetType: "connector_install",
       targetId: "install-1",
       outcome: "success",
@@ -109,10 +111,11 @@ describe("DELETE /api/connector-installs/[id] access control", () => {
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
     mocks.sql
-      .mockResolvedValueOnce([{ hiveId: "hive-a" }])
+      .mockResolvedValueOnce([{ id: hiveId }])
+      .mockResolvedValueOnce([{ hiveId }])
       .mockResolvedValueOnce([{
         id: "install-1",
-        hiveId: "hive-a",
+        hiveId,
         connectorSlug: "discord-webhook",
         displayName: "Discord",
         status: "disabled",
@@ -122,18 +125,18 @@ describe("DELETE /api/connector-installs/[id] access control", () => {
 
     const res = await PATCH(new Request("http://localhost/api/connector-installs/install-1", {
       method: "PATCH",
-      body: JSON.stringify({ status: "disabled" }),
+      body: JSON.stringify({ hiveId, status: "disabled" }),
     }), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toMatchObject({ id: "install-1", status: "disabled" });
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", "hive-a");
-    expect(mocks.sql).toHaveBeenCalledTimes(2);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", hiveId);
+    expect(mocks.sql).toHaveBeenCalledTimes(3);
     expect(mocks.recordAgentAuditEventBestEffort).toHaveBeenCalledWith(mocks.sql, {
       actor: { type: "owner", id: "member-1", label: "member@example.com" },
       eventType: "connector.revoked_by_owner",
-      hiveId: "hive-a",
+      hiveId,
       targetType: "connector_install",
       targetId: "install-1",
       outcome: "success",

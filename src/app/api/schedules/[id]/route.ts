@@ -1,11 +1,11 @@
-import { canAccessHive } from "@/auth/users";
+import { requireResourceOwnedByHive, requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { loadScheduleDetail } from "@/schedules/detail";
 import { sql } from "../../_lib/db";
 import { jsonError, jsonOk } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
@@ -15,15 +15,11 @@ export async function GET(
   if (!id) return jsonError("id is required", 400);
 
   try {
+    const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+    if (!target.ok) return target.response;
     const detail = await loadScheduleDetail(sql, id);
-    if (!detail) return jsonError("schedule not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, detail.schedule.hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
-      }
-    }
+    const ownership = requireResourceOwnedByHive(detail?.schedule.hiveId, target.hiveId, { resourceName: "Schedule" });
+    if (!ownership.ok) return ownership.response;
 
     return jsonOk(detail);
   } catch {

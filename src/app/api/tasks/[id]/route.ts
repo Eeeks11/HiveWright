@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
 import { serializeGoalBudgetStatus } from "@/budget/status";
@@ -149,7 +149,7 @@ function mapTaskRow(r: TaskRow, workProducts: WorkProductRow[] = []) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -157,6 +157,8 @@ export async function GET(
     if ("response" in authz) return authz.response;
     const { user } = authz;
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
 
     const rows = await sql`
       SELECT t.id, t.hive_id, t.assigned_to, t.created_by, t.status, t.priority, t.title, t.brief,
@@ -174,7 +176,7 @@ export async function GET(
              g.budget_enforcement_reason AS goal_budget_enforcement_reason
       FROM tasks t
       LEFT JOIN goals g ON g.id = t.goal_id
-      WHERE t.id = ${id}
+      WHERE t.id = ${id} AND t.hive_id = ${target.hiveId}::uuid
     `;
 
     if (rows.length === 0) {
@@ -182,12 +184,6 @@ export async function GET(
     }
 
     const taskRow = rows[0] as unknown as TaskRow;
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, taskRow.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this task", 403);
-      }
-    }
 
     const diagnostic = await readLatestCodexEmptyOutputDiagnostic(sql, id);
     const provenance = await readLatestTaskContextProvenance(sql, id);
@@ -198,7 +194,7 @@ export async function GET(
              usage_details,
              metadata, created_at
       FROM work_products
-      WHERE task_id = ${id}
+      WHERE task_id = ${id} AND hive_id = ${target.hiveId}::uuid
       ORDER BY created_at ASC
     `;
     const task = mapTaskRow(taskRow, workProducts as unknown as WorkProductRow[]);

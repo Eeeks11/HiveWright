@@ -118,7 +118,8 @@ function CaptureReviewPageContent() {
     setDraftPreview(null);
     setDraftResult(null);
     setEditedSkillContent("");
-    fetch(`/api/capture-sessions/${id}`)
+    const hiveTarget = `hiveId=${encodeURIComponent(effectiveHiveId)}`;
+    fetch(`/api/capture-sessions/${id}?${hiveTarget}`)
       .then(async (res) => {
         const body = await res.json() as { data?: CaptureSession; error?: string };
         if (!res.ok) throw new Error(body.error ?? "Failed to load session");
@@ -134,7 +135,7 @@ function CaptureReviewPageContent() {
         }
         setSession(body.data);
         setDraftPreviewLoading(true);
-        const draftRes = await fetch(`/api/capture-sessions/${id}/draft`);
+        const draftRes = await fetch(`/api/capture-sessions/${id}/draft?${hiveTarget}`);
         const draftBody = await draftRes.json() as { data?: DraftPreviewResult; error?: string };
         if (!draftRes.ok) throw new Error(draftBody.error ?? "Failed to load draft preview");
         if (draftBody.data) {
@@ -150,7 +151,7 @@ function CaptureReviewPageContent() {
   }, [effectiveHiveId, params.captureId, target.activeHive, target.targetHive]);
 
   async function handleDelete() {
-    if (!session) return;
+    if (!session || !effectiveHiveId) return;
     if (!window.confirm("Delete this capture session and all metadata? This cannot be undone.")) {
       return;
     }
@@ -159,7 +160,7 @@ function CaptureReviewPageContent() {
     }
     setDeleting(true);
     try {
-      const res = await fetch(`/api/capture-sessions/${session.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/capture-sessions/${session.id}?hiveId=${encodeURIComponent(effectiveHiveId)}`, { method: "DELETE" });
       if (!res.ok) {
         const body = await res.json() as { error?: string };
         throw new Error(body.error ?? "Delete failed");
@@ -172,14 +173,14 @@ function CaptureReviewPageContent() {
   }
 
   async function handleApproveDraft() {
-    if (!session || draftResult || draftCreating) return;
+    if (!session || !effectiveHiveId || draftResult || draftCreating) return;
     if (!target.confirmCrossHiveWrite("Approve workflow capture draft")) {
       return;
     }
     setDraftCreating(true);
     setDraftError(null);
     try {
-      const res = await fetch(`/api/capture-sessions/${session.id}/draft`, {
+      const res = await fetch(`/api/capture-sessions/${session.id}/draft?hiveId=${encodeURIComponent(effectiveHiveId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -199,14 +200,14 @@ function CaptureReviewPageContent() {
   }
 
   async function handleRejectDraft() {
-    if (!session || draftRejecting) return;
+    if (!session || !effectiveHiveId || draftRejecting) return;
     if (!target.confirmCrossHiveWrite("Reject workflow capture draft")) {
       return;
     }
     setDraftRejecting(true);
     setDraftError(null);
     try {
-      const res = await fetch(`/api/capture-sessions/${session.id}/draft`, {
+      const res = await fetch(`/api/capture-sessions/${session.id}/draft?hiveId=${encodeURIComponent(effectiveHiveId)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: "Rejected in capture review shell." }),

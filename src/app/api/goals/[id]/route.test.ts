@@ -27,7 +27,7 @@ const params = { params: Promise.resolve({ id: "goal-1" }) };
 
 const goalRow = {
   id: "goal-1",
-  hive_id: "hive-1",
+  hive_id: "11111111-1111-4111-8111-111111111111",
   parent_id: null,
   title: "Goal",
   description: null,
@@ -46,7 +46,7 @@ const goalRow = {
 
 describe("GET /api/goals/[id]", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
@@ -57,7 +57,7 @@ describe("GET /api/goals/[id]", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(401);
     expect(mockSql).not.toHaveBeenCalled();
@@ -68,39 +68,42 @@ describe("GET /api/goals/[id]", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql.mockResolvedValueOnce([goalRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot access this goal");
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(body.error).toBe("Forbidden: caller cannot access this hive");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
     expect(mockSql).toHaveBeenCalledTimes(1);
   });
 
   it("allows system-owner callers without hive membership lookup", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql
       .mockResolvedValueOnce([goalRow])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data).toMatchObject({ id: "goal-1", hiveId: "hive-1" });
+    expect(body.data).toMatchObject({ id: "goal-1", hiveId: "11111111-1111-4111-8111-111111111111" });
     expect(mockCanAccessHive).not.toHaveBeenCalled();
   });
 
   it("returns recorded budget status for the goal", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql
       .mockResolvedValueOnce([goalRow])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -120,21 +123,22 @@ describe("GET /api/goals/[id]", () => {
 
 describe("PATCH /api/goals/[id]", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockRequireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
   });
 
   it("updates allowed fields", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql
-      .mockResolvedValueOnce([{ id: "goal-1", hive_id: "hive-1" }])
+      .mockResolvedValueOnce([{ id: "goal-1", hive_id: "11111111-1111-4111-8111-111111111111" }])
       .mockResolvedValueOnce([{ ...goalRow, title: "Updated", description: "New", priority: 3 }]);
 
     const res = await PATCH(
       new Request("http://localhost/api/goals/goal-1", {
         method: "PATCH",
-        body: JSON.stringify({ title: " Updated ", description: " New ", priority: 3 }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", title: " Updated ", description: " New ", priority: 3 }),
       }),
       params,
     );
@@ -163,12 +167,13 @@ describe("PATCH /api/goals/[id]", () => {
   });
 
   it("returns 404 for unknown goals", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql.mockResolvedValueOnce([]);
 
     const res = await PATCH(
       new Request("http://localhost/api/goals/goal-1", {
         method: "PATCH",
-        body: JSON.stringify({ title: "Updated" }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", title: "Updated" }),
       }),
       params,
     );
@@ -184,7 +189,7 @@ describe("PATCH /api/goals/[id]", () => {
     const res = await PATCH(
       new Request("http://localhost/api/goals/goal-1", {
         method: "PATCH",
-        body: JSON.stringify({ title: "Updated" }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", title: "Updated" }),
       }),
       params,
     );
@@ -197,19 +202,19 @@ describe("PATCH /api/goals/[id]", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "goal-1", hive_id: "hive-1" }]);
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await PATCH(
       new Request("http://localhost/api/goals/goal-1", {
         method: "PATCH",
-        body: JSON.stringify({ title: "Updated" }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", title: "Updated" }),
       }),
       params,
     );
 
     expect(res.status).toBe(403);
-    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
     expect(mockSql).toHaveBeenCalledTimes(1);
   });
 });

@@ -123,14 +123,14 @@ function ConnectorsPageContent() {
   }, [effectiveHiveId]);
 
   useEffect(() => {
-    if (installs.length === 0) {
+    if (!effectiveHiveId || installs.length === 0) {
       setActionsByInstall({});
       return;
     }
     let cancelled = false;
     Promise.all(installs.map(async (install) => {
       try {
-        const body = await fetch(`/api/connector-installs/${install.id}/actions`).then((r) => r.json());
+        const body = await fetch(`/api/connector-installs/${install.id}/actions?hiveId=${encodeURIComponent(effectiveHiveId)}`).then((r) => r.json());
         return [install.id, body.data ?? []] as const;
       } catch {
         return [install.id, []] as const;
@@ -141,7 +141,7 @@ function ConnectorsPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [installs]);
+  }, [effectiveHiveId, installs]);
 
   const byCategory = useMemo(() => {
     const m: Record<string, Connector[]> = {};
@@ -193,6 +193,8 @@ function ConnectorsPageContent() {
         try {
           const testRes = await fetch(`/api/connector-installs/${justInstalled.id}/test`, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hiveId: effectiveHiveId }),
           });
           const testBody = await testRes.json();
           const r = testBody.data ?? {};
@@ -254,11 +256,16 @@ function ConnectorsPageContent() {
   }
 
   async function testInstall(install: Install) {
+    if (!effectiveHiveId) return;
     if (!target.confirmCrossHiveWrite(`Testing ${install.displayName}`)) return;
     setBusy(install.id);
     setFlash(null);
     try {
-      const res = await fetch(`/api/connector-installs/${install.id}/test`, { method: "POST" });
+      const res = await fetch(`/api/connector-installs/${install.id}/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiveId: effectiveHiveId }),
+      });
       const body = await res.json();
       const r = body.data ?? {};
       const msg = r.success
@@ -278,13 +285,14 @@ function ConnectorsPageContent() {
   }
 
   async function removeInstall(install: Install) {
+    if (!effectiveHiveId) return;
     if (!target.confirmCrossHiveWrite(`Removing ${install.displayName}`)) return;
     if (!window.confirm(`Remove ${install.displayName}? Existing agent calls using it will start failing.`)) {
       return;
     }
     setBusy(install.id);
     try {
-      await fetch(`/api/connector-installs/${install.id}`, { method: "DELETE" });
+      await fetch(`/api/connector-installs/${install.id}?hiveId=${encodeURIComponent(effectiveHiveId)}`, { method: "DELETE" });
       if (effectiveHiveId) {
         const refreshed = await fetch(`/api/connector-installs?hiveId=${effectiveHiveId}`).then((r) => r.json());
         setInstalls(refreshed.data ?? []);
@@ -295,6 +303,7 @@ function ConnectorsPageContent() {
   }
 
   async function toggleInstallStatus(install: Install) {
+    if (!effectiveHiveId) return;
     const targetStatus = install.status === "active" ? "disabled" : "active";
     const action = targetStatus === "disabled" ? "Disable" : "Enable";
     if (!target.confirmCrossHiveWrite(`${action} ${install.displayName}`)) return;
@@ -307,7 +316,7 @@ function ConnectorsPageContent() {
       const res = await fetch(`/api/connector-installs/${install.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: targetStatus }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, status: targetStatus }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -434,6 +443,7 @@ function ConnectorsPageContent() {
                       <button
                         onClick={() => testInstall(i)}
                         disabled={busy === i.id}
+                        aria-label={`Test ${i.displayName}`}
                         className="rounded bg-amber-500/15 px-3 py-1 text-xs text-amber-100 ring-1 ring-inset ring-amber-500/25 hover:bg-amber-500/25 disabled:opacity-50"
                       >
                         {busy === i.id ? "Testing…" : "Test"}

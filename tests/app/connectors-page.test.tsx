@@ -54,7 +54,7 @@ describe("ConnectorsPage", () => {
       if (url === "/api/connector-installs?hiveId=hive-1") {
         return jsonResponse({ data: [installFixture()] });
       }
-      if (url === "/api/connector-installs/install-1/actions") {
+      if (url === "/api/connector-installs/install-1/actions?hiveId=hive-1") {
         return jsonResponse({ data: [actionFixture()] });
       }
       return new Response("not found", { status: 404 });
@@ -64,7 +64,7 @@ describe("ConnectorsPage", () => {
     render(<ConnectorsPage />);
 
     expect(await screen.findByRole("heading", { name: "Connectors" })).toBeTruthy();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/connector-installs/install-1/actions"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/connector-installs/install-1/actions?hiveId=hive-1"));
 
     expect(screen.getByText("active")).toBeTruthy();
     expect(screen.getByText(/last tested/i)).toBeTruthy();
@@ -74,6 +74,47 @@ describe("ConnectorsPage", () => {
     expect(screen.getByText("discord-webhook:send_message")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Action policies" }).getAttribute("href")).toBe("/setup/action-policies");
     expect(screen.getAllByText((_content, element) => element?.textContent?.includes("send_message · succeeded") ?? false).length).toBeGreaterThan(0);
+  });
+
+  it("passes the explicit hive target to connector install resource actions", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/connectors") return jsonResponse({ data: [connectorFixture()] });
+      if (url === "/api/connector-installs?hiveId=hive-1") return jsonResponse({ data: [installFixture()] });
+      if (url === "/api/connector-installs/install-1/actions?hiveId=hive-1") return jsonResponse({ data: [] });
+      if (url === "/api/connector-installs/install-1/test" && init?.method === "POST") {
+        return jsonResponse({ data: { success: true, durationMs: 5 } });
+      }
+      if (url === "/api/connector-installs/install-1" && init?.method === "PATCH") {
+        return jsonResponse({ data: { ...installFixture(), status: "disabled" } });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ConnectorsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Test Discord" }));
+    await waitFor(() => {
+      const testCall = fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/connector-installs/install-1/test" && init?.method === "POST",
+      );
+      expect(testCall).toBeTruthy();
+      expect(JSON.parse(testCall![1]!.body as string).hiveId).toBe("hive-1");
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disable Discord" }));
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/connector-installs/install-1" && init?.method === "PATCH",
+      );
+      expect(patchCall).toBeTruthy();
+      expect(JSON.parse(patchCall![1]!.body as string)).toMatchObject({
+        hiveId: "hive-1",
+        status: "disabled",
+      });
+    });
   });
 
   it("preserves targetHiveId when linking from the setup connectors mirror", async () => {

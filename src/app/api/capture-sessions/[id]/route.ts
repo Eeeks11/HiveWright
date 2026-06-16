@@ -4,8 +4,6 @@ import { jsonError, jsonOk } from "../../_lib/responses";
 import {
   canTransitionCaptureSession,
   captureSessionRowToApi,
-  ensureCanMutateHive,
-  ensureCanReadHive,
   isCaptureSessionStatus,
   optionalObject,
   optionalStringArray,
@@ -13,6 +11,7 @@ import {
   type CaptureSessionStatus,
 } from "../_shared";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { maybeRecordRedactionApplied, recordCaptureAuditEvent } from "../_audit";
 
 export const runtime = "nodejs";
@@ -22,24 +21,23 @@ function jsonParam(value: unknown) {
   return sql.json(value as Parameters<typeof sql.json>[0]);
 }
 
-async function loadSession(id: string) {
-  const [row] = await sql`SELECT * FROM capture_sessions WHERE id = ${id} LIMIT 1`;
+async function loadSession(id: string, hiveId: string) {
+  const [row] = await sql`SELECT * FROM capture_sessions WHERE id = ${id} AND hive_id = ${hiveId}::uuid LIMIT 1`;
   return row as Record<string, unknown> | undefined;
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const row = await loadSession(id);
+  const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+  if (!target.ok) return target.response;
+  const row = await loadSession(id, target.hiveId);
   if (!row) return jsonError("capture session not found", 404);
-
-  const accessError = await ensureCanReadHive(authz.user, row.hive_id as string);
-  if (accessError) return accessError;
 
   return jsonOk(captureSessionRowToApi(row));
 }
@@ -52,15 +50,18 @@ export async function PATCH(
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const existing = await loadSession(id);
-  if (!existing) return jsonError("capture session not found", 404);
-
-  const accessError = await ensureCanMutateHive(authz.user, existing.hive_id as string);
-  if (accessError) return accessError;
-
   const parsed = await readMetadataOnlyJson(request);
   if (!parsed.ok) return parsed.response;
   const body = parsed.body;
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "body", body },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+  const existing = await loadSession(id, target.hiveId);
+  if (!existing) return jsonError("capture session not found", 404);
 
   const currentStatus = existing.status as CaptureSessionStatus;
   const requestedStatus = body.status;
@@ -138,7 +139,7 @@ export async function PATCH(
         ELSE work_product_refs
       END,
       updated_at = NOW()
-    WHERE id = ${id}
+    WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     RETURNING *
   `;
 
@@ -180,22 +181,26 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const existing = await loadSession(id);
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "query", request },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+  const existing = await loadSession(id, target.hiveId);
   if (!existing) return jsonError("capture session not found", 404);
-
-  const accessError = await ensureCanMutateHive(authz.user, existing.hive_id as string);
-  if (accessError) return accessError;
 
   await recordCaptureAuditEvent({
     sql,
-    request: _request,
+    request,
     user: authz.user,
     eventType: AGENT_AUDIT_EVENTS.draftWorkflowDeleted,
     session: existing,
@@ -209,6 +214,6 @@ export async function DELETE(
     },
   });
 
-  await sql`DELETE FROM capture_sessions WHERE id = ${id}`;
+  await sql`DELETE FROM capture_sessions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid`;
   return jsonOk({ id, purged: true });
 }

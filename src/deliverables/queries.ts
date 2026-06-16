@@ -91,14 +91,18 @@ function normalizeRenderMode(row: DeliverableRow, filename: string): Deliverable
   return inferRenderMode(row.mime_type, filename || row.file_path, row.artifact_kind);
 }
 
+function internalDeliverableUrl(row: Pick<DeliverableRow, "id" | "hive_id">, action: "content" | "download"): string {
+  return `/api/deliverables/${encodeURIComponent(row.id)}/${action}?hiveId=${encodeURIComponent(row.hive_id)}`;
+}
+
 export function mapDeliverableRow(row: DeliverableRow): DeliverableDetail {
   const title = fallbackTitle(row);
   const filename = fallbackFilename({ ...row, title });
   const renderMode = normalizeRenderMode(row, filename);
   const openUrl = renderMode === "external_url" && row.public_url
     ? row.public_url
-    : `/api/deliverables/${row.id}/content`;
-  const downloadUrl = renderMode === "external_url" ? null : `/api/deliverables/${row.id}/download`;
+    : internalDeliverableUrl(row, "content");
+  const downloadUrl = renderMode === "external_url" ? null : internalDeliverableUrl(row, "download");
 
   return {
     id: row.id,

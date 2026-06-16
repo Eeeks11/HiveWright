@@ -36,11 +36,12 @@ vi.mock("@/connectors/installs", () => ({
 import { POST } from "./route";
 
 const params = { params: Promise.resolve({ id: "install-1" }) };
+const hiveId = "11111111-1111-4111-8111-111111111111";
 
 function testRequest(body: Record<string, unknown> = {}) {
   return new Request("http://localhost/api/connector-installs/install-1/test", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ hiveId, ...body }),
   });
 }
 
@@ -51,7 +52,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
     mocks.canMutateHive.mockResolvedValue(true);
-    mocks.sql.mockResolvedValue([{ connector_slug: "discord-webhook", hiveId: "hive-a" }]);
+    mocks.sql.mockResolvedValue([{ connector_slug: "discord-webhook", hiveId }]);
     mocks.getConnectorDefinition.mockReturnValue({
       slug: "discord-webhook",
       operations: [
@@ -90,8 +91,8 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
+    expect(body.error).toBe("Forbidden: caller cannot manage this hive");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", hiveId);
     expect(mocks.invokeConnectorReadOnlyOrSystem).not.toHaveBeenCalled();
   });
 
@@ -106,7 +107,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ success: true, durationMs: 1 });
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", "hive-a");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", hiveId);
     expect(mocks.invokeConnectorReadOnlyOrSystem).toHaveBeenCalledWith(mocks.sql, {
       installId: "install-1",
       operation: "test_connection",
@@ -121,7 +122,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
     expect(res.status).toBe(200);
     expect(mocks.setConnectorInstallStatus).toHaveBeenCalledWith(mocks.sql, {
       installId: "install-1",
-      hiveId: "hive-a",
+      hiveId,
       status: "active",
       tested: true,
       lastError: null,
@@ -142,7 +143,7 @@ describe("POST /api/connector-installs/[id]/test access control", () => {
     expect(body.data.success).toBe(false);
     expect(mocks.setConnectorInstallStatus).toHaveBeenCalledWith(mocks.sql, {
       installId: "install-1",
-      hiveId: "hive-a",
+      hiveId,
       status: "broken",
       tested: true,
       lastError: "webhook token secret-token failed",

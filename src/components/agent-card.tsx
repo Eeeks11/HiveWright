@@ -7,6 +7,7 @@ import { shapeAgentChunk } from "./utils/agent-chunk";
 const MAX_OUTPUT_CHARS = 8000;
 
 interface AgentCardProps {
+  hiveId: string;
   taskId: string;
   assignedTo: string;
   title: string;
@@ -44,6 +45,7 @@ function relativeTime(iso: string | null | undefined): string {
 }
 
 export function AgentCard({
+  hiveId,
   taskId,
   assignedTo,
   title,
@@ -65,7 +67,7 @@ export function AgentCard({
 
   useEffect(() => {
     if (cancelled) return;
-    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+    const es = new EventSource(`/api/tasks/${taskId}/stream?hiveId=${encodeURIComponent(hiveId)}`);
     es.onmessage = (event) => {
       let parsed: { type?: string; chunk?: string };
       try {
@@ -93,7 +95,7 @@ export function AgentCard({
     return () => {
       es.close();
     };
-  }, [taskId, cancelled]);
+  }, [hiveId, taskId, cancelled]);
 
   useEffect(() => {
     if (outputRef.current) {
@@ -108,7 +110,7 @@ export function AgentCard({
       const res = await fetch(`/api/tasks/${taskId}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ hiveId }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };

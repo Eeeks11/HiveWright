@@ -41,13 +41,14 @@ import { GET } from "./route";
 const params = { params: Promise.resolve({ id: "session-1" }) };
 
 function request() {
-  return new Request("http://localhost/api/voice/sessions/session-1/events");
+  return new Request("http://localhost/api/voice/sessions/session-1/events?hiveId=11111111-1111-4111-8111-111111111111");
 }
 
 describe("GET /api/voice/sessions/[id]/events access control", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.useRealTimers();
+    mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
@@ -67,27 +68,27 @@ describe("GET /api/voice/sessions/[id]/events access control", () => {
   });
 
   it("returns 403 when the signed-in caller cannot access the session's owning hive", async () => {
-    mocks.dbSelect.mockReturnValueOnce(mockDrizzleRows([{ hiveId: "hive-1" }]));
+    mocks.dbSelect.mockReturnValueOnce(mockDrizzleRows([{ hiveId: "11111111-1111-4111-8111-111111111111" }]));
     mocks.canAccessHive.mockResolvedValueOnce(false);
 
     const res = await GET(request(), params);
 
     expect(res.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
-    expect(mocks.dbSelect).toHaveBeenCalledTimes(1);
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mocks.dbSelect).not.toHaveBeenCalled();
   });
 
   it("returns 200 after resolving the session's owning hive for an allowed caller", async () => {
     vi.useFakeTimers();
     mocks.dbSelect
-      .mockReturnValueOnce(mockDrizzleRows([{ hiveId: "hive-1" }]))
+      .mockReturnValueOnce(mockDrizzleRows([{ hiveId: "11111111-1111-4111-8111-111111111111" }]))
       .mockReturnValue(mockDrizzleRows([]));
 
     const res = await GET(request(), params);
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/event-stream");
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
 
     await res.body?.cancel();
     await vi.advanceTimersByTimeAsync(500);

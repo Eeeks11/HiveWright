@@ -45,7 +45,8 @@ function syncRequest(body: Record<string, unknown> = {}) {
 
 describe("POST /api/connector-installs/[id]/sync", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
@@ -67,7 +68,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const res = await POST(syncRequest({ hiveId: "hive-a" }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111" }), params);
 
     expect(res.status).toBe(401);
     expect(mocks.canMutateHive).not.toHaveBeenCalled();
@@ -90,12 +91,12 @@ describe("POST /api/connector-installs/[id]/sync", () => {
     });
     mocks.canMutateHive.mockResolvedValueOnce(false);
 
-    const res = await POST(syncRequest({ hiveId: "hive-a", streams: ["messages"] }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111", streams: ["messages"] }), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
+    expect(body.error).toBe("Forbidden: caller cannot manage this hive");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
     expect(mocks.syncConnectorInstall).not.toHaveBeenCalled();
   });
 
@@ -105,7 +106,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
     });
     mocks.canMutateHive.mockResolvedValueOnce(true);
 
-    const res = await POST(syncRequest({ hiveId: "hive-a", streams: ["messages"] }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111", streams: ["messages"] }), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -115,7 +116,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
       itemCount: 2,
     });
     expect(mocks.syncConnectorInstall).toHaveBeenCalledWith(mocks.sql, {
-      hiveId: "hive-a",
+      hiveId: "11111111-1111-4111-8111-111111111111",
       installId: "install-1",
       streams: ["messages"],
       actor: "member-1",
@@ -123,7 +124,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
   });
 
   it("defaults to the default stream when streams are omitted", async () => {
-    const res = await POST(syncRequest({ hiveId: "hive-a" }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111" }), params);
 
     expect(res.status).toBe(200);
     expect(mocks.syncConnectorInstall).toHaveBeenCalledWith(mocks.sql, expect.objectContaining({
@@ -132,7 +133,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
   });
 
   it("rejects invalid stream lists", async () => {
-    const res = await POST(syncRequest({ hiveId: "hive-a", streams: ["messages", ""] }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111", streams: ["messages", ""] }), params);
     const body = await res.json();
 
     expect(res.status).toBe(400);
@@ -144,7 +145,7 @@ describe("POST /api/connector-installs/[id]/sync", () => {
     const error = new mocks.ConnectorSyncError("install is disabled token=secret-token", 409);
     mocks.syncConnectorInstall.mockRejectedValueOnce(error);
 
-    const res = await POST(syncRequest({ hiveId: "hive-a", streams: ["messages"] }), params);
+    const res = await POST(syncRequest({ hiveId: "11111111-1111-4111-8111-111111111111", streams: ["messages"] }), params);
     const body = await res.json();
 
     expect(res.status).toBe(409);
