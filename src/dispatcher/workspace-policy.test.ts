@@ -274,6 +274,26 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision.signals).not.toContain("hivewright_product_code_task");
   });
 
+  it("allows read-only project-scoped technical maps without requiring code workspace policy", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "dev-agent",
+      projectId: "short-stay-sales-app",
+      title: "Sprint 7: Fresh project-scoped technical map and gate test targets",
+      brief: "Produce a fresh, read-only project-scoped technical implementation map and test-target handoff for the approved Short Stay Sales app project. Read and map the approved app repository only. Do not create, edit, delete, or commit files in this task. Do not add tests or test stubs in this task; instead, identify exact future test file paths, cases, and commands.",
+      acceptanceCriteria: "Verify the registered project workspace and provide future test file paths without changing files.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      gitBackedProject: true,
+      workspaceIsolation: null,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("lets non-code business tasks run in clean task workspaces", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
