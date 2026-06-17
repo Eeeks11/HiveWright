@@ -156,7 +156,14 @@ describe("analyst telemetry summary", () => {
       unknownHealthRoutes: 1,
       quarantinedRoutes: 1,
       staleRoutes: 1,
+      freshRoutes: 1,
       localRoutes: 1,
+      staleRouteRecovery: {
+        staleRoutes: 1,
+        automaticProbeRoutes: 2,
+        recoveryEligibleRoutes: 0,
+        recoveryBlockedRoutes: 1,
+      },
       providerCounts: { openai: 1, local: 1, anthropic: 1 },
       adapterCounts: { codex: 1, ollama: 1, claude: 1 },
     });
@@ -193,9 +200,15 @@ describe("analyst telemetry summary", () => {
           status: "drift",
           declaredCandidates: 1,
           runtimeProjectedCandidates: 3,
+          projectedInventoryBasis: "declared_policy",
           blockedRoutes: 2,
           quarantinedRoutes: 1,
           staleRoutes: 1,
+          staleRecovery: {
+            staleRoutes: 1,
+            automaticProbeRoutes: 2,
+            recoveryEligibleRoutes: 0,
+          },
         },
       },
       modelRouting: {

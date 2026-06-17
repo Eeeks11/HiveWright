@@ -12,10 +12,17 @@ export interface AnalystModelRoutingSummary {
   unhealthyRoutes: number;
   quarantinedRoutes: number;
   staleRoutes: number;
+  freshRoutes: number;
   unknownHealthRoutes: number;
   localRoutes: number;
   automaticProbeRoutes: number;
   onDemandProbeRoutes: number;
+  staleRouteRecovery: {
+    staleRoutes: number;
+    automaticProbeRoutes: number;
+    recoveryEligibleRoutes: number;
+    recoveryBlockedRoutes: number;
+  };
   providerCounts: Record<string, number>;
   adapterCounts: Record<string, number>;
 }
@@ -77,10 +84,12 @@ export function buildAnalystModelRoutingSummary(
   let unhealthyRoutes = 0;
   let quarantinedRoutes = 0;
   let staleRoutes = 0;
+  let freshRoutes = 0;
   let unknownHealthRoutes = 0;
   let localRoutes = 0;
   let automaticProbeRoutes = 0;
   let onDemandProbeRoutes = 0;
+  let recoveryEligibleRoutes = 0;
 
   for (const model of view.models) {
     increment(providerCounts, sanitizeBucket(model.provider));
@@ -95,9 +104,13 @@ export function buildAnalystModelRoutingSummary(
     if (model.status === "unknown") unknownHealthRoutes += 1;
     if (model.failureClass === "quarantined") quarantinedRoutes += 1;
     if (model.probeFreshness === "due") staleRoutes += 1;
+    if (model.probeFreshness === "fresh") freshRoutes += 1;
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
     if (model.probeMode === "on_demand") onDemandProbeRoutes += 1;
+    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled) {
+      recoveryEligibleRoutes += 1;
+    }
   }
 
   return {
@@ -109,10 +122,17 @@ export function buildAnalystModelRoutingSummary(
     unhealthyRoutes,
     quarantinedRoutes,
     staleRoutes,
+    freshRoutes,
     unknownHealthRoutes,
     localRoutes,
     automaticProbeRoutes,
     onDemandProbeRoutes,
+    staleRouteRecovery: {
+      staleRoutes,
+      automaticProbeRoutes,
+      recoveryEligibleRoutes,
+      recoveryBlockedRoutes: Math.max(0, staleRoutes - recoveryEligibleRoutes),
+    },
     providerCounts,
     adapterCounts,
   };

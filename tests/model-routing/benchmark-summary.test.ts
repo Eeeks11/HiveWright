@@ -7,9 +7,17 @@ const drifted: RuntimeRouteDriftReport = {
   status: "drift",
   declaredCandidates: 0,
   runtimeProjectedCandidates: 2,
+  projectedInventoryBasis: "usable_runtime_routes",
   blockedRoutes: 0,
   quarantinedRoutes: 0,
   staleRoutes: 1,
+  freshRoutes: 1,
+  unknownHealthRoutes: 0,
+  staleRecovery: {
+    staleRoutes: 1,
+    automaticProbeRoutes: 1,
+    recoveryEligibleRoutes: 1,
+  },
   driftReasons: ["declared candidates (0) differ from runtime-projected candidates (2)"],
 };
 
@@ -17,9 +25,17 @@ const inSync: RuntimeRouteDriftReport = {
   status: "in_sync",
   declaredCandidates: 2,
   runtimeProjectedCandidates: 2,
+  projectedInventoryBasis: "declared_policy",
   blockedRoutes: 0,
   quarantinedRoutes: 0,
   staleRoutes: 0,
+  freshRoutes: 2,
+  unknownHealthRoutes: 0,
+  staleRecovery: {
+    staleRoutes: 0,
+    automaticProbeRoutes: 2,
+    recoveryEligibleRoutes: 0,
+  },
   driftReasons: [],
 };
 

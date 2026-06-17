@@ -22,9 +22,17 @@ export interface RuntimeRouteDriftReport {
   status: RuntimeDriftStatus;
   declaredCandidates: number;
   runtimeProjectedCandidates: number;
+  projectedInventoryBasis: "declared_policy" | "usable_runtime_routes";
   blockedRoutes: number;
   quarantinedRoutes: number;
   staleRoutes: number;
+  freshRoutes: number;
+  unknownHealthRoutes: number;
+  staleRecovery: {
+    staleRoutes: number;
+    automaticProbeRoutes: number;
+    recoveryEligibleRoutes: number;
+  };
   driftReasons: string[];
 }
 
@@ -118,12 +126,22 @@ export function buildRuntimeRouteDriftReport(
   heartbeat: Pick<DispatcherHeartbeatRecord, "state">,
 ): RuntimeRouteDriftReport {
   const declaredCandidates = view.basePolicyState.policy?.candidates.length ?? 0;
-  const runtimeProjectedCandidates = view.policy.candidates.length;
+  const runtimeUsableCandidates = view.policy.candidates.filter((candidate) => (
+    candidate.enabled !== false && hasFreshHealthyRouteEvidence(candidate)
+  )).length;
+  const runtimeProjectedCandidates = declaredCandidates > 0 ? view.policy.candidates.length : runtimeUsableCandidates;
+  const projectedInventoryBasis = declaredCandidates > 0 ? "declared_policy" : "usable_runtime_routes";
   const blockedRoutes = view.models.filter((model) => (
     !model.hiveModelEnabled || !model.routingEnabled || !hasFreshHealthyRouteEvidence(model)
   )).length;
   const quarantinedRoutes = view.models.filter((model) => model.failureClass === "quarantined").length;
   const staleRoutes = view.models.filter((model) => model.probeFreshness === "due").length;
+  const freshRoutes = view.models.filter((model) => model.probeFreshness === "fresh").length;
+  const unknownHealthRoutes = view.models.filter((model) => model.status === "unknown").length;
+  const automaticProbeRoutes = view.models.filter((model) => model.probeMode === "automatic").length;
+  const recoveryEligibleRoutes = view.models.filter((model) => (
+    model.probeFreshness === "due" && model.probeMode === "automatic" && model.hiveModelEnabled && model.routingEnabled
+  )).length;
   const driftReasons: string[] = [];
 
   if (declaredCandidates !== runtimeProjectedCandidates) {
@@ -131,20 +149,32 @@ export function buildRuntimeRouteDriftReport(
       `declared candidates (${declaredCandidates}) differ from runtime-projected candidates (${runtimeProjectedCandidates})`,
     );
   }
+  if (projectedInventoryBasis === "usable_runtime_routes") {
+    driftReasons.push("runtime-projected candidates are narrowed to usable runtime routes because no declared policy candidates exist");
+  }
   if (heartbeat.state !== "fresh") {
     driftReasons.push(`dispatcher heartbeat is ${heartbeat.state}`);
   }
   if (blockedRoutes > 0) driftReasons.push(`${blockedRoutes} route(s) are blocked or disabled`);
   if (quarantinedRoutes > 0) driftReasons.push(`${quarantinedRoutes} route(s) are quarantined`);
   if (staleRoutes > 0) driftReasons.push(`${staleRoutes} route(s) have stale probe evidence`);
+  if (unknownHealthRoutes > 0) driftReasons.push(`${unknownHealthRoutes} route(s) have unknown health`);
 
   return {
     status: heartbeat.state === "missing" ? "runtime_unavailable" : driftReasons.length > 0 ? "drift" : "in_sync",
     declaredCandidates,
     runtimeProjectedCandidates,
+    projectedInventoryBasis,
     blockedRoutes,
     quarantinedRoutes,
     staleRoutes,
+    freshRoutes,
+    unknownHealthRoutes,
+    staleRecovery: {
+      staleRoutes,
+      automaticProbeRoutes,
+      recoveryEligibleRoutes,
+    },
     driftReasons,
   };
 }
@@ -158,8 +188,8 @@ async function defaultLoadSupervisorSummary(sql: Sql, hiveId: string): Promise<S
 }
 
 function hasFreshHealthyRouteEvidence(model: {
-  status: string;
-  probeFreshness: string;
+  status?: string;
+  probeFreshness?: string;
 }): boolean {
   return model.status === "healthy" && model.probeFreshness === "fresh";
 }

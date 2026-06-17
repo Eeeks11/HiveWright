@@ -4,6 +4,7 @@ import type { Sql } from "postgres";
 import { sql as apiSql } from "@/app/api/_lib/db";
 import { getBundledMigrationFiles, getExpectedLatestMigration } from "@/db/migration-metadata";
 import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
+import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import {
   buildFailureFingerprint,
   groupFailureFingerprints,
@@ -76,6 +77,7 @@ export async function collectHiveWrightDiagnostics(
   diagnostics.push(await checkQueueState(sql, now));
   diagnostics.push(await checkExecutionRuns(sql, now));
   diagnostics.push(await checkProviderState(sql, now));
+  diagnostics.push(await checkModelRoutePoolCapacity(sql, now));
 
   const recentFailureGroups = await collectRecentFailureGroups(sql);
   if (recentFailureGroups.length > 0) {
@@ -351,6 +353,133 @@ async function checkProviderState(sql: Sql, now: Date): Promise<DiagnosticStatus
       checkedAt: now,
     });
   }
+}
+
+export type ModelRoutePoolCapacityCounts = {
+  totalRoutes: number;
+  routableRoutes: number;
+  disabledRoutes: number;
+  unhealthyRoutes: number;
+  unknownHealthRoutes: number;
+  staleRoutes: number;
+  freshRoutes: number;
+  recoveryEligibleStaleRoutes: number;
+};
+
+async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
+  try {
+    const modelRows = await sql<{
+      provider: string;
+      adapter_type: string;
+      model_id: string;
+      enabled: boolean;
+      credential_fingerprint: string | null;
+    }[]>`
+      SELECT
+        hm.provider,
+        hm.adapter_type,
+        hm.model_id,
+        hm.enabled,
+        c.fingerprint AS credential_fingerprint
+      FROM hive_models hm
+      LEFT JOIN credentials c ON c.id = hm.credential_id
+    `;
+    const healthRows = await sql<{
+      fingerprint: string;
+      adapter_type: string;
+      model_id: string;
+      status: string | null;
+      next_probe_at: Date | null;
+    }[]>`
+      SELECT fingerprint, adapter_type, model_id, status, next_probe_at
+      FROM model_health
+    `;
+    const healthByRoute = new Map(healthRows.map((row) => [
+      `${row.fingerprint}:${row.adapter_type}:${row.model_id}`,
+      row,
+    ]));
+
+    const counts: ModelRoutePoolCapacityCounts = {
+      totalRoutes: modelRows.length,
+      routableRoutes: 0,
+      disabledRoutes: 0,
+      unhealthyRoutes: 0,
+      unknownHealthRoutes: 0,
+      staleRoutes: 0,
+      freshRoutes: 0,
+      recoveryEligibleStaleRoutes: 0,
+    };
+
+    for (const model of modelRows) {
+      const fingerprint = model.credential_fingerprint ?? createRuntimeCredentialFingerprint({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        baseUrl: null,
+      });
+      const health = healthByRoute.get(`${fingerprint}:${model.adapter_type}:${model.model_id}`);
+      const status = health?.status ?? "unknown";
+      const stale = health?.next_probe_at ? health.next_probe_at <= now : false;
+      if (!model.enabled) counts.disabledRoutes += 1;
+      if (status === "unhealthy" || status === "quarantined") counts.unhealthyRoutes += 1;
+      if (status === "unknown") counts.unknownHealthRoutes += 1;
+      if (stale) counts.staleRoutes += 1;
+      else counts.freshRoutes += 1;
+      if (model.enabled && status === "healthy" && !stale) counts.routableRoutes += 1;
+      if (model.enabled && stale && status !== "quarantined") counts.recoveryEligibleStaleRoutes += 1;
+    }
+
+    return buildModelRoutePoolCapacityDiagnostic(counts, now);
+  } catch (err) {
+    return buildDiagnosticStatus({
+      id: "providers.route_pool_capacity",
+      label: "Model route pool capacity",
+      severity: "warning",
+      summary: "Model route-pool capacity could not be verified.",
+      details: err instanceof Error ? err.message : String(err),
+      recommendedAction: "Run analyst telemetry and model health probes to verify usable model-route capacity.",
+      checkedAt: now,
+    });
+  }
+}
+
+export function buildModelRoutePoolCapacityDiagnostic(
+  counts: ModelRoutePoolCapacityCounts,
+  now: Date,
+): DiagnosticStatus {
+  if (counts.totalRoutes === 0) {
+    return buildDiagnosticStatus({
+      id: "providers.route_pool_capacity",
+      label: "Model route pool capacity",
+      severity: "info",
+      summary: "No model routes are configured for capacity scoring.",
+      recommendedAction: "Configure at least one model route before expecting autonomous runtime work.",
+      checkedAt: now,
+    });
+  }
+
+  const constrainedRatio = counts.routableRoutes / counts.totalRoutes;
+  const staleOrUnknownRoutes = counts.staleRoutes + counts.unknownHealthRoutes;
+  const staleOrUnknownRatio = staleOrUnknownRoutes / counts.totalRoutes;
+  const severity = counts.routableRoutes === 0 || constrainedRatio < 0.25
+    ? "critical"
+    : constrainedRatio < 0.5 || staleOrUnknownRatio >= 0.25
+      ? "warning"
+      : "ok";
+  const blockedRoutes = Math.max(0, counts.totalRoutes - counts.routableRoutes);
+
+  return buildDiagnosticStatus({
+    id: "providers.route_pool_capacity",
+    label: "Model route pool capacity",
+    severity,
+    summary: `${counts.routableRoutes}/${counts.totalRoutes} model route(s) are currently routable; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
+    details: `fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes}`,
+    recommendedAction: severity === "critical"
+      ? "Treat route-pool capacity as degraded: run model health probe recovery and restore routable routes before presenting runtime readiness as normal."
+      : counts.staleRoutes > 0
+        ? "Run or wait for model health probe recovery; compare staleRecoveryEligible against stale route count to spot standing drift."
+        : undefined,
+    checkedAt: now,
+  });
 }
 
 export async function collectRecentFailureGroups(sql: Sql = apiSql): Promise<FailureFingerprintGroup[]> {
