@@ -6,6 +6,7 @@ import { getBundledMigrationFiles, getExpectedLatestMigration } from "@/db/migra
 import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import {
   buildFailureFingerprint,
   groupFailureFingerprints,
@@ -375,12 +376,14 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       model_id: string;
       enabled: boolean;
       credential_fingerprint: string | null;
+      capabilities: string[] | null;
     }[]>`
       SELECT
         hm.provider,
         hm.adapter_type,
         hm.model_id,
         hm.enabled,
+        hm.capabilities,
         c.fingerprint AS credential_fingerprint
       FROM hive_models hm
       LEFT JOIN credentials c ON c.id = hm.credential_id
@@ -419,15 +422,22 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       const canonicalModelId = canonicalModelIdForAdapter(model.adapter_type, model.model_id);
       const health = healthByRoute.get(`${fingerprint}:${canonicalModelId}`)
         ?? healthByRoute.get(`${fingerprint}:${model.model_id}`);
+      const probeMode = getModelHealthProbePolicy({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        modelId: canonicalModelId,
+        capabilities: model.capabilities ?? [],
+        sampleCostUsd: null,
+      }).mode;
       const status = health?.status ?? "unknown";
       const stale = health?.next_probe_at ? health.next_probe_at <= now : false;
       if (!model.enabled) counts.disabledRoutes += 1;
       if (status === "unhealthy" || status === "quarantined") counts.unhealthyRoutes += 1;
-      if (status === "unknown") counts.unknownHealthRoutes += 1;
-      if (stale) counts.staleRoutes += 1;
+      if (status === "unknown" && probeMode === "automatic") counts.unknownHealthRoutes += 1;
+      if (stale && probeMode === "automatic") counts.staleRoutes += 1;
       else counts.freshRoutes += 1;
       if (model.enabled && status === "healthy" && !stale) counts.routableRoutes += 1;
-      if (model.enabled && stale && status !== "quarantined") counts.recoveryEligibleStaleRoutes += 1;
+      if (model.enabled && stale && probeMode === "automatic" && status !== "quarantined") counts.recoveryEligibleStaleRoutes += 1;
     }
 
     return buildModelRoutePoolCapacityDiagnostic(counts, now);

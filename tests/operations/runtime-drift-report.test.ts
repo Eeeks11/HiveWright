@@ -222,14 +222,16 @@ describe("runtime drift report builder", () => {
     expect(drift.driftReasons.join("\n")).toContain("declared candidates");
   });
 
-  it("narrows projected inventory to usable routes when no declared candidates exist", () => {
+  it("declares configured route inventory when no explicit policy candidates exist", () => {
     const drift = buildRuntimeRouteDriftReport(routingView({ declared: 0, runtime: 85, blocked: true, stale: true }), heartbeat("fresh"));
 
     expect(drift).toMatchObject({
       status: "drift",
-      declaredCandidates: 0,
-      runtimeProjectedCandidates: 84,
-      projectedInventoryBasis: "usable_runtime_routes",
+      declaredCandidates: 85,
+      explicitDeclaredCandidates: 0,
+      runtimeProjectedCandidates: 85,
+      projectedInventoryBasis: "configured_route_inventory",
+      inventoryExpectation: "broader_usable_capacity_repaired",
       blockedRoutes: 1,
       staleRoutes: 1,
       staleRecovery: {
@@ -238,6 +240,25 @@ describe("runtime drift report builder", () => {
         recoveryEligibleRoutes: 0,
       },
     });
-    expect(drift.driftReasons.join("\n")).toContain("narrowed to usable runtime routes");
+    expect(drift.inventoryJustification).toContain("configured hive model inventory");
+    expect(drift.driftReasons.join("\n")).toContain("configured hive model inventory");
+  });
+
+  it("excludes on-demand unprobed routes from unknown-health and stale debt", () => {
+    const view = routingView({ declared: 0, runtime: 2 });
+    view.models[0].status = "unknown";
+    view.models[0].probeFreshness = "unknown";
+    view.models[0].probeMode = "on_demand";
+    view.models[1].status = "unknown";
+    view.models[1].probeFreshness = "due";
+    view.models[1].probeMode = "automatic";
+
+    const drift = buildRuntimeRouteDriftReport(view, heartbeat("fresh"));
+
+    expect(drift).toMatchObject({
+      unknownHealthRoutes: 1,
+      onDemandUnknownHealthRoutes: 1,
+      staleRoutes: 1,
+    });
   });
 });

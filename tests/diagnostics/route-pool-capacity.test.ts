@@ -67,6 +67,31 @@ describe("model route-pool capacity diagnostic", () => {
     expect(diagnostic.recommendedAction).toContain("route-pool capacity as degraded");
   });
 
+  it("does not count on-demand unprobed routes as automatic unknown-health debt", async () => {
+    const fakeSql = ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (query.includes("FROM hive_models")) {
+        return Promise.resolve([
+          {
+            provider: "openai",
+            adapter_type: "openai-image",
+            model_id: "gpt-image-2",
+            enabled: true,
+            credential_fingerprint: "credential-fingerprint",
+            capabilities: ["image"],
+          },
+        ]);
+      }
+      if (query.includes("FROM model_health")) return Promise.resolve([]);
+      return Promise.resolve([]);
+    }) as unknown as Sql;
+
+    const diagnostic = await checkModelRoutePoolCapacity(fakeSql, NOW);
+
+    expect(diagnostic.summary).toBe("0/1 model route(s) are currently routable; 1 blocked, 0 stale, 0 unknown.");
+    expect(diagnostic.details).toBe("fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0");
+  });
+
   it("keeps normal capacity ok while still reporting stale-recovery measurement", () => {
     const diagnostic = buildModelRoutePoolCapacityDiagnostic({
       totalRoutes: 12,
