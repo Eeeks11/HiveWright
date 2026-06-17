@@ -14,6 +14,7 @@ export interface AnalystModelRoutingSummary {
   staleRoutes: number;
   freshRoutes: number;
   unknownHealthRoutes: number;
+  onDemandUnknownHealthRoutes: number;
   localRoutes: number;
   automaticProbeRoutes: number;
   onDemandProbeRoutes: number;
@@ -86,6 +87,7 @@ export function buildAnalystModelRoutingSummary(
   let staleRoutes = 0;
   let freshRoutes = 0;
   let unknownHealthRoutes = 0;
+  let onDemandUnknownHealthRoutes = 0;
   let localRoutes = 0;
   let automaticProbeRoutes = 0;
   let onDemandProbeRoutes = 0;
@@ -101,9 +103,10 @@ export function buildAnalystModelRoutingSummary(
     if (!model.hiveModelEnabled || !model.routingEnabled) disabledRoutes += 1;
     if (!enabled || !healthEligible) blockedRoutes += 1;
     if (model.status === "unhealthy") unhealthyRoutes += 1;
-    if (model.status === "unknown") unknownHealthRoutes += 1;
+    if (model.status === "unknown" && model.probeMode === "automatic") unknownHealthRoutes += 1;
+    if (model.status === "unknown" && model.probeMode === "on_demand") onDemandUnknownHealthRoutes += 1;
     if (model.failureClass === "quarantined") quarantinedRoutes += 1;
-    if (model.probeFreshness === "due") staleRoutes += 1;
+    if (model.probeFreshness === "due" && model.probeMode === "automatic") staleRoutes += 1;
     if (model.probeFreshness === "fresh") freshRoutes += 1;
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
@@ -124,6 +127,7 @@ export function buildAnalystModelRoutingSummary(
     staleRoutes,
     freshRoutes,
     unknownHealthRoutes,
+    onDemandUnknownHealthRoutes,
     localRoutes,
     automaticProbeRoutes,
     onDemandProbeRoutes,
@@ -153,7 +157,10 @@ function buildAnalystTelemetryNotices(
     notices.push(`${modelRouting.quarantinedRoutes} model route(s) are quarantined.`);
   }
   if (modelRouting.staleRoutes > 0) {
-    notices.push(`${modelRouting.staleRoutes} model route(s) have stale probe evidence.`);
+    notices.push(`${modelRouting.staleRoutes} automatically probed model route(s) have stale probe evidence.`);
+  }
+  if (modelRouting.onDemandUnknownHealthRoutes > 0) {
+    notices.push(`${modelRouting.onDemandUnknownHealthRoutes} on-demand model route(s) have no automatic health evidence and are excluded from unknown-health debt.`);
   }
   if (notices.length === 0) notices.push("Runtime drift and model routing summaries are in sync.");
   return notices;

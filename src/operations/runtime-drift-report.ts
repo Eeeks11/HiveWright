@@ -21,13 +21,17 @@ export interface RuntimeBuildProvenance {
 export interface RuntimeRouteDriftReport {
   status: RuntimeDriftStatus;
   declaredCandidates: number;
+  explicitDeclaredCandidates: number;
   runtimeProjectedCandidates: number;
-  projectedInventoryBasis: "declared_policy" | "usable_runtime_routes";
+  projectedInventoryBasis: "declared_policy" | "configured_route_inventory" | "usable_runtime_routes";
+  inventoryExpectation: "declared_policy" | "broader_usable_capacity_repaired" | "fixed_inventory_unconfigured";
+  inventoryJustification: string;
   blockedRoutes: number;
   quarantinedRoutes: number;
   staleRoutes: number;
   freshRoutes: number;
   unknownHealthRoutes: number;
+  onDemandUnknownHealthRoutes: number;
   staleRecovery: {
     staleRoutes: number;
     automaticProbeRoutes: number;
@@ -125,19 +129,40 @@ export function buildRuntimeRouteDriftReport(
   view: Pick<ModelRoutingView, "models" | "policy" | "basePolicyState">,
   heartbeat: Pick<DispatcherHeartbeatRecord, "state">,
 ): RuntimeRouteDriftReport {
-  const declaredCandidates = view.basePolicyState.policy?.candidates.length ?? 0;
+  const explicitDeclaredCandidates = view.basePolicyState.policy?.candidates.length ?? 0;
+  const configuredRouteInventory = view.policy.candidates.length;
   const runtimeUsableCandidates = view.policy.candidates.filter((candidate) => (
     candidate.enabled !== false && hasFreshHealthyRouteEvidence(candidate)
   )).length;
-  const runtimeProjectedCandidates = declaredCandidates > 0 ? view.policy.candidates.length : runtimeUsableCandidates;
-  const projectedInventoryBasis = declaredCandidates > 0 ? "declared_policy" : "usable_runtime_routes";
+  const declaredCandidates = explicitDeclaredCandidates > 0 ? explicitDeclaredCandidates : configuredRouteInventory;
+  const runtimeProjectedCandidates = explicitDeclaredCandidates > 0
+    ? configuredRouteInventory
+    : configuredRouteInventory > 0
+      ? configuredRouteInventory
+      : runtimeUsableCandidates;
+  const projectedInventoryBasis = explicitDeclaredCandidates > 0
+    ? "declared_policy"
+    : configuredRouteInventory > 0
+      ? "configured_route_inventory"
+      : "usable_runtime_routes";
+  const inventoryExpectation = explicitDeclaredCandidates > 0
+    ? "declared_policy"
+    : configuredRouteInventory > 0
+      ? "broader_usable_capacity_repaired"
+      : "fixed_inventory_unconfigured";
+  const inventoryJustification = explicitDeclaredCandidates > 0
+    ? "Model routing declares an explicit candidate set in policy configuration."
+    : configuredRouteInventory > 0
+      ? "No explicit model-routing policy candidates exist, so telemetry declares the configured hive model inventory as the route pool expected to regain broader usable capacity."
+      : "No explicit policy candidates or configured hive model routes exist; the route pool is intentionally empty until models are configured.";
   const blockedRoutes = view.models.filter((model) => (
     !model.hiveModelEnabled || !model.routingEnabled || !hasFreshHealthyRouteEvidence(model)
   )).length;
   const quarantinedRoutes = view.models.filter((model) => model.failureClass === "quarantined").length;
-  const staleRoutes = view.models.filter((model) => model.probeFreshness === "due").length;
+  const staleRoutes = view.models.filter((model) => model.probeFreshness === "due" && model.probeMode === "automatic").length;
   const freshRoutes = view.models.filter((model) => model.probeFreshness === "fresh").length;
-  const unknownHealthRoutes = view.models.filter((model) => model.status === "unknown").length;
+  const unknownHealthRoutes = view.models.filter((model) => model.status === "unknown" && model.probeMode === "automatic").length;
+  const onDemandUnknownHealthRoutes = view.models.filter((model) => model.status === "unknown" && model.probeMode === "on_demand").length;
   const automaticProbeRoutes = view.models.filter((model) => model.probeMode === "automatic").length;
   const recoveryEligibleRoutes = view.models.filter((model) => (
     model.probeFreshness === "due" && model.probeMode === "automatic" && model.hiveModelEnabled && model.routingEnabled
@@ -149,8 +174,11 @@ export function buildRuntimeRouteDriftReport(
       `declared candidates (${declaredCandidates}) differ from runtime-projected candidates (${runtimeProjectedCandidates})`,
     );
   }
+  if (projectedInventoryBasis === "configured_route_inventory") {
+    driftReasons.push("declared candidates are derived from configured hive model inventory because no explicit routing policy candidates exist");
+  }
   if (projectedInventoryBasis === "usable_runtime_routes") {
-    driftReasons.push("runtime-projected candidates are narrowed to usable runtime routes because no declared policy candidates exist");
+    driftReasons.push("runtime-projected candidates are narrowed to usable runtime routes because no declared policy candidates or configured hive model routes exist");
   }
   if (heartbeat.state !== "fresh") {
     driftReasons.push(`dispatcher heartbeat is ${heartbeat.state}`);
@@ -163,13 +191,17 @@ export function buildRuntimeRouteDriftReport(
   return {
     status: heartbeat.state === "missing" ? "runtime_unavailable" : driftReasons.length > 0 ? "drift" : "in_sync",
     declaredCandidates,
+    explicitDeclaredCandidates,
     runtimeProjectedCandidates,
     projectedInventoryBasis,
+    inventoryExpectation,
+    inventoryJustification,
     blockedRoutes,
     quarantinedRoutes,
     staleRoutes,
     freshRoutes,
     unknownHealthRoutes,
+    onDemandUnknownHealthRoutes,
     staleRecovery: {
       staleRoutes,
       automaticProbeRoutes,
