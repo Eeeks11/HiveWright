@@ -4,6 +4,7 @@ import type { Sql } from "postgres";
 import { sql as apiSql } from "@/app/api/_lib/db";
 import { getBundledMigrationFiles, getExpectedLatestMigration } from "@/db/migration-metadata";
 import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
+import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import {
   buildFailureFingerprint,
@@ -366,7 +367,7 @@ export type ModelRoutePoolCapacityCounts = {
   recoveryEligibleStaleRoutes: number;
 };
 
-async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
+export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
   try {
     const modelRows = await sql<{
       provider: string;
@@ -386,16 +387,15 @@ async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<Diagnos
     `;
     const healthRows = await sql<{
       fingerprint: string;
-      adapter_type: string;
       model_id: string;
       status: string | null;
       next_probe_at: Date | null;
     }[]>`
-      SELECT fingerprint, adapter_type, model_id, status, next_probe_at
+      SELECT fingerprint, model_id, status, next_probe_at
       FROM model_health
     `;
     const healthByRoute = new Map(healthRows.map((row) => [
-      `${row.fingerprint}:${row.adapter_type}:${row.model_id}`,
+      `${row.fingerprint}:${row.model_id}`,
       row,
     ]));
 
@@ -416,7 +416,9 @@ async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<Diagnos
         adapterType: model.adapter_type,
         baseUrl: null,
       });
-      const health = healthByRoute.get(`${fingerprint}:${model.adapter_type}:${model.model_id}`);
+      const canonicalModelId = canonicalModelIdForAdapter(model.adapter_type, model.model_id);
+      const health = healthByRoute.get(`${fingerprint}:${canonicalModelId}`)
+        ?? healthByRoute.get(`${fingerprint}:${model.model_id}`);
       const status = health?.status ?? "unknown";
       const stale = health?.next_probe_at ? health.next_probe_at <= now : false;
       if (!model.enabled) counts.disabledRoutes += 1;

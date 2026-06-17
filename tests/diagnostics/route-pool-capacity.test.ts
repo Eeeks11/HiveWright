@@ -1,9 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { buildModelRoutePoolCapacityDiagnostic } from "@/diagnostics/checks";
+import type { Sql } from "postgres";
+import {
+  buildModelRoutePoolCapacityDiagnostic,
+  checkModelRoutePoolCapacity,
+} from "@/diagnostics/checks";
 
 const NOW = new Date("2026-06-17T00:00:00.000Z");
 
 describe("model route-pool capacity diagnostic", () => {
+  it("reads model_health by fingerprint and model_id without requiring adapter_type", async () => {
+    const fakeSql = ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ");
+      if (query.includes("FROM hive_models")) {
+        return Promise.resolve([
+          {
+            provider: "openai",
+            adapter_type: "codex",
+            model_id: "gpt-5.5",
+            enabled: true,
+            credential_fingerprint: "credential-fingerprint",
+          },
+        ]);
+      }
+      if (query.includes("FROM model_health")) {
+        expect(query).not.toMatch(/\badapter_type\b/);
+        return Promise.resolve([
+          {
+            fingerprint: "credential-fingerprint",
+            model_id: "openai-codex/gpt-5.5",
+            status: "healthy",
+            next_probe_at: new Date("2026-06-17T01:00:00.000Z"),
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    }) as unknown as Sql;
+
+    const diagnostic = await checkModelRoutePoolCapacity(fakeSql, NOW);
+
+    expect(diagnostic).toMatchObject({
+      id: "providers.route_pool_capacity",
+      severity: "ok",
+      summary: "1/1 model route(s) are currently routable; 0 blocked, 0 stale, 0 unknown.",
+      details: "fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0",
+    });
+  });
+
   it("marks severe route drift critical instead of allowing readiness to look normal", () => {
     const diagnostic = buildModelRoutePoolCapacityDiagnostic({
       totalRoutes: 85,
