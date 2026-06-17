@@ -262,7 +262,7 @@ function buildImprovementScanBacklogDisposition(
   const githubRefs = Array.from(new Set([
     ...Array.from(text.matchAll(/https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+/gi)),
     ...Array.from(text.matchAll(/\b(?:github\s+)?(?:issue|pr)\s*#?\d+\b/gi)),
-    ...Array.from(text.matchAll(/\b#\d+\b/g)),
+    ...Array.from(text.matchAll(/(?<![\w/])#\d+\b/g)),
   ].map((match) => match[0]))).slice(0, 10);
 
   return {

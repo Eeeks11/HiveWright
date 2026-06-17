@@ -2143,8 +2143,8 @@ describe.sequential("reference-only terminal dispositions", () => {
         (
           ${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
           'HiveWright improvement scan: performance analyst refresh',
-          'Scheduled improvement scan. Already-routed to existing GitHub issue #107; no owner action required.',
-          'Proposal routing found the downstream backlog route: https://github.com/Eeeks11/HiveWright/issues/107. No new decision needed.',
+          'Scheduled improvement scan. Already-routed to existing backlog item #107; no owner action required.',
+          'Proposal routing found the downstream backlog route #107. No new decision needed.',
           NOW() - interval '2 hours', NOW() - interval '2 hours'
         ),
         (
@@ -2158,7 +2158,7 @@ describe.sequential("reference-only terminal dispositions", () => {
     await sql`
       INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
       VALUES
-        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to GitHub issue #107.', 'Improvement scan route', 'reference_report'),
+        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to backlog item #107.', 'Improvement scan route', 'reference_report'),
         (${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'No-action terminal closeout.', 'Improvement scan no-action closeout', 'reference_report')
     `;
 
@@ -2186,7 +2186,7 @@ describe.sequential("reference-only terminal dispositions", () => {
       final_disposition_label: "github_issue_backlog_open",
       closure_scope: "github_issue",
       decision_boundary: "external_state_only",
-      evidence: { disposition: "already_routed", githubRefs: expect.arrayContaining(["https://github.com/Eeeks11/HiveWright/issues/107"]) },
+      evidence: { disposition: "already_routed", githubRefs: expect.arrayContaining(["#107"]) },
     });
     expect(rows[1].terminal_disposition).toMatchObject({
       terminal_status: "closed",
