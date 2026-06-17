@@ -119,7 +119,8 @@ export function evaluateTaskWorkspacePolicy(
     );
   }
 
-  const productCodeTask = isHiveWrightProductCodeTask(ctx.task);
+  const hiveSlug = ctx.hiveSlug?.trim().toLowerCase() ?? null;
+  const productCodeTask = (hiveSlug === null || hiveSlug === "hivewright") && isHiveWrightProductCodeTask(ctx.task);
   if (productCodeTask) {
     signals.push("hivewright_product_code_task");
     if (!approvedCodeWorkspaceRoots.some((root) => pathWithin(normalizedBase, root))) {
