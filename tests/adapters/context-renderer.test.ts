@@ -182,7 +182,9 @@ describe("renderSessionPrompt", () => {
 
     expect(prompt).toContain("## Analyst Telemetry API");
     expect(prompt).toContain("/api/analyst-telemetry?hiveId=$HIVEWRIGHT_HIVE_ID");
-    expect(prompt).toContain("Authorization: Bearer $(printenv " + ["INTERNAL", "SERVICE", "TOKEN"].join("_") + ")");
+    const tokenLookup = "$(" + "printenv " + ["INTERNAL", "SERVICE", "TOKEN"].join("_") + ")";
+    expect(prompt).toContain(`Authorization: Bearer ${tokenLookup}`);
+    expect(prompt).not.toContain("Authorization: Bearer *** ");
     expect(prompt).toContain("X-HiveWright-Task-Id: $HIVEWRIGHT_TASK_ID");
     expect(prompt).toContain("primary runtime/model-routing evidence source");
     expect(prompt).toContain("secondary security signal only");

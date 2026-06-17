@@ -100,7 +100,7 @@ function renderAnalystTelemetryGuidance(ctx: SessionContext): string | null {
     "Use the internal task-scoped auth path instead of unauthenticated probes:",
     "```bash",
     "curl -fsS \"http://localhost:3002/api/analyst-telemetry?hiveId=$HIVEWRIGHT_HIVE_ID\" \\",
-    "  -H \"Authorization: Bearer " + tokenLookup + "\" \\",
+    `  -H "Authorization: Bearer ${tokenLookup}" \\,`,
     "  -H \"X-HiveWright-Task-Id: $HIVEWRIGHT_TASK_ID\"",
     "```",
     "If this request returns 401 or 403, report it as an unexpected analyst telemetry auth failure with the HTTP status and response body. Do not silently fall back to raw privileged endpoint failures as the scan result.",
