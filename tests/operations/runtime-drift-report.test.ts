@@ -208,10 +208,36 @@ describe("runtime drift report builder", () => {
       status: "drift",
       declaredCandidates: 1,
       runtimeProjectedCandidates: 2,
+      projectedInventoryBasis: "declared_policy",
       blockedRoutes: 1,
       quarantinedRoutes: 1,
       staleRoutes: 1,
+      freshRoutes: 1,
+      staleRecovery: {
+        staleRoutes: 1,
+        automaticProbeRoutes: 2,
+        recoveryEligibleRoutes: 0,
+      },
     });
     expect(drift.driftReasons.join("\n")).toContain("declared candidates");
+  });
+
+  it("narrows projected inventory to usable routes when no declared candidates exist", () => {
+    const drift = buildRuntimeRouteDriftReport(routingView({ declared: 0, runtime: 85, blocked: true, stale: true }), heartbeat("fresh"));
+
+    expect(drift).toMatchObject({
+      status: "drift",
+      declaredCandidates: 0,
+      runtimeProjectedCandidates: 84,
+      projectedInventoryBasis: "usable_runtime_routes",
+      blockedRoutes: 1,
+      staleRoutes: 1,
+      staleRecovery: {
+        staleRoutes: 1,
+        automaticProbeRoutes: 85,
+        recoveryEligibleRoutes: 0,
+      },
+    });
+    expect(drift.driftReasons.join("\n")).toContain("narrowed to usable runtime routes");
   });
 });
