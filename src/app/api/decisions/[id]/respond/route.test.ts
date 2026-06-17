@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => {
       calls.push(strings.join("?"));
       return Promise.resolve(queue.shift() ?? []);
     }),
-    { calls, queue, json: vi.fn((value: unknown) => value) },
+    { calls, queue, json: vi.fn((value: unknown) => value), begin: vi.fn() },
   );
   return {
     sql,
@@ -82,6 +82,7 @@ describe("POST /api/decisions/[id]/respond quality feedback", () => {
     vi.clearAllMocks();
     mocks.sql.calls.length = 0;
     mocks.sql.queue.length = 0;
+    mocks.sql.begin.mockImplementation(async (callback: (tx: typeof mocks.sql) => unknown) => callback(mocks.sql));
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: false },
     });
@@ -180,6 +181,66 @@ describe("POST /api/decisions/[id]/respond quality feedback", () => {
     };
     expect(JSON.stringify(auditPayload.metadata)).not.toContain("Ship it");
     expect(JSON.stringify(auditPayload.metadata)).not.toContain("owner_response");
+  });
+
+  it("approves a Phase 3 Sales OS action by queueing it without connector runtime", async () => {
+    const requestId = "66666666-6666-4666-8666-666666666666";
+    const decisionForAuth = {
+      hive_id: "hive-1",
+      kind: "external_action_approval",
+      options: { options: [{ key: "approve", label: "Approve" }, { key: "reject", label: "Reject" }] },
+      route_metadata: { externalActionRequestId: requestId, domain: "sales-conversion", operation: "execute_sales_conversion_action" },
+      status: "pending",
+      owner_response: null,
+      is_qa_fixture: false,
+    };
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.sql.queue.push(
+      [decisionForAuth],
+      [{ id: requestId }],
+      [{
+        ...qualityDecision,
+        id: "decision-1",
+        kind: "external_action_approval",
+        status: "resolved",
+        owner_response: "approved",
+        selected_option_key: "approve",
+        selected_option_label: "Approve",
+        route_metadata: decisionForAuth.route_metadata,
+        is_qa_fixture: false,
+      }],
+      [],
+      [{
+        id: "draft-1",
+        hive_id: "hive-1",
+        action_plan_id: "plan-1",
+        workflow: "lead_follow_up",
+        request_payload: { title: "Follow up", draftBody: "Message draft" },
+      }],
+      [{ id: requestId, state: "succeeded", response_payload: { queued: true, mode: "manual_queue" } }],
+      [{ id: "draft-1", approval_status: "approved", execution_status: "queued" }],
+      [{ id: "log-1" }],
+    );
+
+    const res = await POST(request({
+      response: "approved",
+      selectedOptionKey: "approve",
+    }), { params: Promise.resolve({ id: "decision-1" }) });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.externalActionResult).toMatchObject({
+      requestId,
+      status: "succeeded",
+      result: { queued: true, mode: "manual_queue" },
+    });
+    expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
+    const sqlText = mocks.sql.calls.join("\n");
+    expect(sqlText).toContain("sales_action_drafts");
+    expect(sqlText).toContain("sales_execution_logs");
+    expect(sqlText).not.toContain("connector_installs");
   });
 
   it("rejects invalid quality ratings", async () => {

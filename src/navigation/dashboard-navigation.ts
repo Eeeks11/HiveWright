@@ -87,6 +87,20 @@ export function buildDashboardNavigation({
       links: [],
     },
     {
+      id: "marketing",
+      label: "Marketing",
+      href: "/marketing",
+      isActive: (pathname) => pathname === "/marketing" || pathname.startsWith("/marketing/"),
+      links: [],
+    },
+    {
+      id: "sales",
+      label: "Sales",
+      href: "/sales",
+      isActive: (pathname) => pathname === "/sales" || pathname.startsWith("/sales/"),
+      links: [],
+    },
+    {
       id: "work",
       label: "Work",
       links: [

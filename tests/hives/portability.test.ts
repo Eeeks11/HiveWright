@@ -144,6 +144,41 @@ describe("hive portability", () => {
     expect(first.roles.some((role) => role.slug === "dev-agent")).toBe(true);
   });
 
+  it("scrubs website form tokenized submission URLs from portable exports", async () => {
+    const hive = await seedPortableHive();
+    const [credential] = await sql<{ id: string }[]>`
+      INSERT INTO credentials (hive_id, name, key, value)
+      VALUES (${hive.id}::uuid, 'Website forms secret', 'connector:website-forms:test', 'encrypted-website-secret')
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, credential_id, status)
+      VALUES (
+        ${hive.id}::uuid,
+        'website-forms',
+        'Marketing website forms',
+        ${sql.json({
+          allowedHostnames: 'forms.example.test',
+          submissionsUrl: 'https://forms.example.test/submissions?token=tokenized-url-secret',
+        })},
+        ${sql.json(['website-forms:sync_submissions'])},
+        ${credential.id}::uuid,
+        'active'
+      )
+    `;
+
+    const pkg = await exportHiveTemplate(sql, hive.id);
+    const exportedWebsiteForms = pkg.connectors.find((connector) => connector.connectorSlug === "website-forms");
+
+    expect(exportedWebsiteForms?.config).toEqual({ allowedHostnames: "forms.example.test" });
+    expect(exportedWebsiteForms?.envInputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: "WEBSITE_FORMS_SUBMISSIONS_URL", field: "submissionsUrl", secret: true }),
+      expect.objectContaining({ key: "WEBSITE_FORMS_AUTH_HEADER", field: "authHeader", secret: true }),
+    ]));
+    expect(JSON.stringify(pkg)).not.toContain("tokenized-url-secret");
+    expect(JSON.stringify(pkg)).not.toContain("encrypted-website-secret");
+  });
+
   it("previews collisions and reconnect-needed env inputs before import", async () => {
     const hive = await seedPortableHive();
     const pkg = await exportHiveTemplate(sql, hive.id);
