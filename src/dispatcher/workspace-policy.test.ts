@@ -274,6 +274,63 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision.signals).not.toContain("hivewright_product_code_task");
   });
 
+  it("does not treat business-hive app implementation tasks that mention HiveWright context as HiveWright product code", () => {
+    const workspace = "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales";
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      hiveSlug: "short-stay-sales",
+      projectWorkspace: workspace,
+      baseProjectWorkspace: workspace,
+      gitBackedProject: true,
+      task: {
+        ...baseTask,
+        assignedTo: "dev-agent",
+        projectId: "short-stay-sales-app",
+        title: "Sprint 8: Buyer inquiry and seller reply flow",
+        brief: "Use Sprint 7 work product and the HiveWright Runtime Metadata Controls project context. Modify inquiry/reply UI/API/server files for the Short Stay Sales app repository only.",
+        acceptanceCriteria: "Add or update tests for buyer inquiry and seller reply behavior.",
+      },
+      workspaceIsolation: {
+        status: "active",
+        baseWorkspacePath: workspace,
+        worktreePath: `${workspace}/.claude/worktrees/task-1`,
+        branchName: "hw/task/task-1-dev-agent",
+        isolationActive: true,
+        reused: false,
+        reason: null,
+      },
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+    expect(decision.signals).toContain("code_changing_task");
+    expect(decision.signals).not.toContain("hivewright_product_code_task");
+  });
+
+  it("still enforces approved HiveWright source roots for HiveWright-hive product code", () => {
+    const workspace = "/home/trent/.hivewright/hives/hivewright/projects/not-approved";
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      hiveSlug: "hivewright",
+      projectWorkspace: workspace,
+      baseProjectWorkspace: workspace,
+      gitBackedProject: true,
+      task: { ...baseTask, projectId: "hivewright-product" },
+      workspaceIsolation: {
+        status: "active",
+        baseWorkspacePath: workspace,
+        worktreePath: `${workspace}/.claude/worktrees/task-1`,
+        branchName: "hw/task-task-1-dev-agent",
+        isolationActive: true,
+        reused: false,
+        reason: null,
+      },
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("unapproved workspace");
+    }
+    expect(decision.signals).toContain("hivewright_product_code_task");
+  });
+
   it("allows read-only project-scoped technical maps without requiring code workspace policy", () => {
     const task = {
       ...baseTask,
