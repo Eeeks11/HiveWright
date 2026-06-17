@@ -126,6 +126,35 @@ describe("marketing connector ingestion", () => {
     expect(queryText).toContain("campaign.id");
   });
 
+  it("drops malformed connector campaign IDs instead of letting untrusted payloads abort persistence", () => {
+    const snapshots = normalizeMarketingConnectorMetricSnapshots({
+      hiveId: HIVE_ID,
+      connectorInstallId: INSTALL_ID,
+      sourceConnector: "google-analytics-4",
+      results: [
+        {
+          stream: "website_traffic",
+          items: [
+            {
+              stream: "website_traffic",
+              externalId: "ga4:bad-campaign-id",
+              payload: {
+                campaignId: "not-a-uuid",
+                impressions: 25,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      campaignId: null,
+      values: { impressions: 25 },
+    });
+  });
+
   it("drops negative connector metric values from untrusted payloads", () => {
     const snapshots = normalizeMarketingConnectorMetricSnapshots({
       hiveId: HIVE_ID,

@@ -78,6 +78,15 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function uuidOrNull(value: unknown): string | null {
+  const candidate = stringOrNull(value);
+  if (!candidate) return null;
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate)
+    ? candidate
+    : null;
+}
+
 function metricValuesForPayload(payload: Record<string, unknown>): Partial<Record<MarketingConnectorMetricValueKey, number>> {
   const landingPageVisits = nonNegativeNumberOrUndefined(payload.landing_page_visits)
     ?? nonNegativeNumberOrUndefined(payload.landingPageVisits)
@@ -129,7 +138,7 @@ export function normalizeMarketingConnectorMetricSnapshots(
 
       snapshots.push({
         hiveId: input.hiveId,
-        campaignId: stringOrNull(item.payload.campaignId) ?? stringOrNull(item.payload.campaign_id),
+        campaignId: uuidOrNull(item.payload.campaignId) ?? uuidOrNull(item.payload.campaign_id),
         connectorInstallId: input.connectorInstallId,
         sourceConnector: input.sourceConnector,
         sourceStream,

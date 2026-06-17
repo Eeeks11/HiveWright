@@ -94,4 +94,59 @@ describe("persistMarketingConnectorMetricSnapshots against Postgres", () => {
       }),
     });
   });
+
+  it("persists metric payloads with malformed campaign IDs as unattributed snapshots", async () => {
+    const fixture = createFixtureNamespace("connector-metric-bad-campaign");
+    const hiveId = fixture.uuid("hive");
+
+    await sql`
+      INSERT INTO hives (id, slug, name, type)
+      VALUES (${hiveId}, ${fixture.slug("hive")}, 'Connector Metric Bad Campaign Hive', 'digital')
+    `;
+
+    const [install] = await sql<{ id: string }[]>`
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, granted_scopes, status)
+      VALUES (${hiveId}, 'google-ads', 'Google Ads', '{}'::jsonb, '[]'::jsonb, 'active')
+      RETURNING id
+    `;
+
+    await persistMarketingConnectorMetricSnapshots(sql, {
+      hiveId,
+      connectorInstallId: install.id,
+      sourceConnector: "google-ads",
+      results: [
+        {
+          ...SYNC_RESULT,
+          items: [
+            {
+              ...SYNC_RESULT.items[0],
+              externalId: "google-ads:bad-campaign-id:2026-06-16",
+              payload: {
+                ...SYNC_RESULT.items[0].payload,
+                campaignId: "not-a-uuid",
+              },
+            },
+          ],
+        },
+      ],
+      syncedAt: new Date("2026-06-16T03:05:00.000Z"),
+    });
+
+    const rows = await sql<{ campaign_id: string | null; values: Record<string, number> }[]>`
+      SELECT campaign_id, values
+      FROM marketing_metric_snapshots
+      WHERE hive_id = ${hiveId}
+        AND connector_install_id = ${install.id}
+        AND external_id = 'google-ads:bad-campaign-id:2026-06-16'
+      LIMIT 1
+    `;
+
+    expect(rows[0]).toEqual({
+      campaign_id: null,
+      values: expect.objectContaining({
+        ad_spend_cents: 42000,
+        leads: 12,
+      }),
+    });
+  });
 });
