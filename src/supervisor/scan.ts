@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { getHiveCreationPause } from "@/operations/creation-pause";
-import { hasReferenceOnlyTerminalDisposition } from "./reference-terminal-disposition";
+import { hasSupervisorManagedTerminalDisposition } from "./reference-terminal-disposition";
 import type {
   FindingKind,
   FindingSeverity,
@@ -897,7 +897,7 @@ async function detectUnsatisfiedCompletions(
       (row) =>
         (
           row.failure_reason !== null
-          || !hasReferenceOnlyTerminalDisposition(row.terminal_disposition)
+          || !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)
         )
         &&
         !isTerminalVerificationTask({
@@ -1241,7 +1241,7 @@ async function detectOrphanOutputs(
           AND r.actions->'findings_addressed' @> to_jsonb('orphan_output:' || t.id::text)
       )
   `;
-  return rows.filter((row) => !hasReferenceOnlyTerminalDisposition(row.terminal_disposition)).map((row) => ({
+  return rows.filter((row) => !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)).map((row) => ({
     id: findingId("orphan_output", row.id),
     kind: "orphan_output",
     severity: "info" as FindingSeverity,

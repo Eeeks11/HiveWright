@@ -11,6 +11,7 @@ import { resolveTerminalDispositionCompatibility } from "@/closeout/registry";
 
 export const REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND = "reference_only_output";
 export const REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND = "reference_only_wrapper_superseded";
+export const IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND = "improvement_scan_backlog_disposition";
 
 const REFERENCE_ONLY_INTENT_RE =
   /\b(reference[-\s]?only|proof[-\s]?only|report[-\s]?only|inventory|audit|review|scan|reconciliation|triage|findings? addressed|file[-\s]?referenced list|implementation[-\s]?ready matrix|implementation checklist|evidence|provenance)\b/i;
@@ -20,9 +21,16 @@ const IMPLEMENTATION_CUE_RE =
 
 const OWNER_ACTION_RE =
   /\b(owner|human|ea)\b.{0,60}\b(action|required|decision|approval|choose|choice|input|judg(?:e)?ment)\b|\b(action|required|decision|approval|choose|choice|input|judg(?:e)?ment)\b.{0,60}\b(owner|human|ea)\b/i;
+const NO_OWNER_ACTION_REQUIRED_RE =
+  /\bno\s+(?:new\s+)?(?:owner|human|ea)\s+(?:action|decision|approval|input)\s+(?:is\s+)?required\b|\bowner_action_required\s*:\s*no_new_decision\b/i;
 
 const WRAPPER_CLEANUP_RE =
   /\b(orphan_output|unsatisfied_completion|reference[-\s]?only|cleanup|clean up|reconcile|wrapper|terminal(?:ize|ise)|already[-\s]?terminal|already attributable)\b/i;
+
+const IMPROVEMENT_SCAN_RE =
+  /\b(?:hivewright\s+)?improvement[-\s]?scan\b|\bproposal[-\s]?routing\b|\bquality[-\s]?feedback[-\s]?sample[-\s]?review\b/i;
+const GOVERNED_SCAN_DISPOSITION_RE =
+  /\bno[-\s]?action\b|\bno\s+new\s+decision\b|\bterminal\s+closeout\b|\balready[-\s]?(?:routed|governed|covered|tracked)\b|\bexisting\s+(?:github\s+)?(?:issue|pr|pull request)\b|\bgithub\s+(?:issue|pr)\s*#?\d+\b|\b(?:issue|pr)\s*#\d+\b|https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+/i;
 
 export type ReferenceOnlyTerminalDisposition = {
   schemaVersion: 1;
@@ -71,6 +79,7 @@ type ReferenceOnlyCandidateRow = {
   title: string;
   brief: string | null;
   result_summary: string | null;
+  work_product_text: string | null;
   work_product_ids: string[];
 };
 
@@ -98,6 +107,15 @@ export function hasReferenceOnlyTerminalDisposition(value: unknown): boolean {
   return record.kind === REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND && record.terminal === true;
 }
 
+export function hasSupervisorManagedTerminalDisposition(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return record.terminal === true && (
+    record.kind === REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND ||
+    record.kind === IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND
+  );
+}
+
 export function isReferenceOnlyTerminalCandidateText(input: {
   title: string | null;
   brief: string | null;
@@ -109,7 +127,26 @@ export function isReferenceOnlyTerminalCandidateText(input: {
   if (!text) return false;
   if (!REFERENCE_ONLY_INTENT_RE.test(text)) return false;
   if (IMPLEMENTATION_CUE_RE.test(text)) return false;
-  if (OWNER_ACTION_RE.test(text)) return false;
+  if (OWNER_ACTION_RE.test(text) && !NO_OWNER_ACTION_REQUIRED_RE.test(text)) return false;
+  return true;
+}
+
+export function isGovernedImprovementScanTerminalCandidateText(input: {
+  title: string | null;
+  brief: string | null;
+  resultSummary: string | null;
+  workProductText: string | null;
+}): boolean {
+  const text = [
+    input.title ?? "",
+    input.brief ?? "",
+    input.resultSummary ?? "",
+    input.workProductText ?? "",
+  ].join("\n").trim();
+  if (!text) return false;
+  if (!IMPROVEMENT_SCAN_RE.test(text)) return false;
+  if (!GOVERNED_SCAN_DISPOSITION_RE.test(text)) return false;
+  if (OWNER_ACTION_RE.test(text) && !NO_OWNER_ACTION_REQUIRED_RE.test(text)) return false;
   return true;
 }
 
@@ -128,6 +165,18 @@ export async function reconcileReferenceOnlyTerminalDispositions(
   };
 
   for (const task of candidates) {
+    if (isGovernedImprovementScanTerminalCandidateText({
+      title: task.title,
+      brief: task.brief,
+      resultSummary: task.result_summary,
+      workProductText: task.work_product_text,
+    })) {
+      const disposition = buildImprovementScanBacklogDisposition(task, now);
+      await persistReferenceOnlyDisposition(sql, task.id, disposition);
+      result.disposed += 1;
+      continue;
+    }
+
     if (!isReferenceOnlyTerminalCandidateText({
       title: task.title,
       brief: task.brief,
@@ -163,6 +212,10 @@ async function loadReferenceOnlyCandidates(
       t.title,
       t.brief,
       t.result_summary,
+      string_agg(
+        concat_ws(E'\n', wp.title, wp.summary, left(wp.content, 2000), wp.public_url, wp.source_url),
+        E'\n---\n' ORDER BY wp.created_at, wp.id
+      ) AS work_product_text,
       array_agg(wp.id::text ORDER BY wp.created_at, wp.id) AS work_product_ids
     FROM tasks t
     JOIN work_products wp
@@ -196,6 +249,66 @@ async function loadReferenceOnlyCandidates(
     ORDER BY t.completed_at ASC, t.created_at ASC
     LIMIT ${limit}
   `;
+}
+
+function buildImprovementScanBacklogDisposition(
+  task: ReferenceOnlyCandidateRow,
+  now: Date,
+) {
+  const compatibility = resolveTerminalDispositionCompatibility(IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND);
+  const text = [task.title, task.brief, task.result_summary, task.work_product_text]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+  const githubRefs = Array.from(new Set([
+    ...Array.from(text.matchAll(/https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+/gi)),
+    ...Array.from(text.matchAll(/\b(?:github\s+)?(?:issue|pr)\s*#?\d+\b/gi)),
+    ...Array.from(text.matchAll(/\b#\d+\b/g)),
+  ].map((match) => match[0]))).slice(0, 10);
+
+  return {
+    schemaVersion: 1,
+    kind: IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+    terminal: true,
+    recordedAt: now.toISOString(),
+    source: "supervisor.referenceOnlyTerminalDisposition.improvementScan",
+    reason: githubRefs.length > 0
+      ? "Improvement scan is already attached to a downstream GitHub issue/PR/backlog route and has durable work product evidence."
+      : "Improvement scan records an explicit bounded no-action/terminal closeout disposition with durable work product evidence.",
+    terminal_status: githubRefs.length > 0 ? compatibility.terminalStatus : "closed",
+    final_disposition_label: githubRefs.length > 0
+      ? compatibility.finalDispositionLabel ?? "github_issue_backlog_open"
+      : "reference_only_output",
+    closure_scope: githubRefs.length > 0 ? compatibility.closureScope : "task",
+    decision_boundary: compatibility.decisionBoundary,
+    storage_root_family: compatibility.storageRootFamily,
+    source_finding: {
+      kind: "unsatisfied_completion" as const,
+      key: `improvement_scan_backlog_disposition:${task.id}`,
+      evidence_ref: task.work_product_ids[0] ?? task.id,
+    },
+    source_record_ref: {
+      table: "tasks",
+      id: task.id,
+      field: "terminal_disposition",
+    },
+    task: {
+      id: task.id,
+      hiveId: task.hive_id,
+      roleSlug: task.assigned_to,
+    },
+    evidence: {
+      workProductIds: task.work_product_ids,
+      workProductCount: task.work_product_ids.length,
+      githubRefs,
+      disposition: githubRefs.length > 0 ? "already_routed" : "explicit_no_action",
+    },
+    safeguards: {
+      noOpenOwnerAction: true,
+      noActiveFollowUp: true,
+      noFailureReason: true,
+      durableEvidencePresent: true,
+    },
+  };
 }
 
 function buildReferenceOnlyTerminalDisposition(
@@ -248,7 +361,7 @@ function buildReferenceOnlyTerminalDisposition(
 async function persistReferenceOnlyDisposition(
   sql: Sql,
   taskId: string,
-  disposition: ReferenceOnlyTerminalDisposition,
+  disposition: Parameters<typeof sql.json>[0],
 ): Promise<void> {
   await sql`
     UPDATE tasks
