@@ -178,8 +178,14 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
 }
 
 export function isHiveWrightProductCodeTask(task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">): boolean {
-  const text = taskText(task);
+  const text = stripPriorWorkspacePolicyFeedback(taskText(task));
   return isCodeChangingTask(task) && HIVEWRIGHT_PRODUCT_PATTERN.test(text);
+}
+
+function stripPriorWorkspacePolicyFeedback(text: string): string {
+  return text
+    .replace(/###\s*QA Feedback\s*\nworkspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n")
+    .replace(/workspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n");
 }
 
 /** Backward-compatible alias for earlier callers/tests. */

@@ -246,6 +246,34 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not let stale HiveWright workspace-policy feedback reclassify business app code as HiveWright product code", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      gitBackedProject: true,
+      task: {
+        ...baseTask,
+        assignedTo: "dev-agent",
+        projectId: "short-stay-sales-app",
+        title: "Sprint 6: Project-scoped technical map and gate test targets",
+        brief: "Inspect and map the approved Short Stay Sales app repository. Add failing tests or test stubs if the repo test framework is clear.\n### QA Feedback\nworkspace_policy_blocked: HiveWright code-changing task resolved to an unapproved workspace (/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales). Approved roots: /home/twhis/dev/hivewright, /home/trent/dev/hivewright.",
+        acceptanceCriteria: "Map routes, schema, and tests for the Short Stay Sales app.",
+      },
+      workspaceIsolation: {
+        status: "active",
+        baseWorkspacePath: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+        worktreePath: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales/.claude/worktrees/task-1",
+        branchName: "hw/task/task-1-dev-agent",
+        isolationActive: true,
+        reused: false,
+        reason: null,
+      },
+    }));
+
+    expect(decision).toMatchObject({ allowed: true });
+    expect(decision.signals).not.toContain("hivewright_product_code_task");
+  });
+
   it("lets non-code business tasks run in clean task workspaces", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
