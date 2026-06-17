@@ -116,6 +116,28 @@ describe("GET /api/analyst-telemetry", () => {
     });
   });
 
+  it("allows internal task-scoped analyst calls for the matching hive without owner intervention", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "internal-service-account", email: "service@hivewright.local", isSystemOwner: true },
+    });
+    mocks.getInternalTaskScope.mockResolvedValueOnce({
+      ok: true,
+      scope: { taskId: "task-1", hiveId: HIVE_ID, assignedTo: "performance-analyst", parentTaskId: null },
+    });
+
+    const res = await GET(request());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual(summary);
+    expect(mocks.getInternalTaskScope).toHaveBeenCalledWith();
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
+    expect(mocks.buildAnalystTelemetrySummary).toHaveBeenCalledWith({
+      sql: mocks.sql,
+      hiveId: HIVE_ID,
+    });
+  });
+
   it("enforces internal task hive scope before system-owner bypass", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "internal-service-account", email: "service@hivewright.local", isSystemOwner: true },
