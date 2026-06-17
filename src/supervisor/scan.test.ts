@@ -4,6 +4,7 @@ import { testSql as sql, truncateAll } from "../../tests/_lib/test-db";
 import { syncRoleLibrary } from "../roles/sync";
 import { scanHive } from "./scan";
 import {
+  IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
   REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND,
   reconcileReferenceOnlyTerminalDispositions,
 } from "./reference-terminal-disposition";
@@ -2131,6 +2132,108 @@ describe.sequential("reference-only terminal dispositions", () => {
     const report = await scanHive(sql, HIVE_ID);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(false);
     expect(report.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(false);
+  });
+
+  it("terminalizes governed no-action/already-routed improvement scans and suppresses orphan/unsatisfied findings", async () => {
+    const routedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3510";
+    const noActionTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3511";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES
+        (
+          ${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: performance analyst refresh',
+          'Scheduled improvement scan. Already-routed to existing backlog item #107; no owner action required.',
+          'Proposal routing found the downstream backlog route #107. No new decision needed.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: bounded no-action closeout',
+          'Scheduled improvement scan with explicit no-action terminal closeout. No new decision is needed.',
+          'The scan found no actionable product change and records a bounded no-action disposition.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES
+        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to backlog item #107.', 'Improvement scan route', 'reference_report'),
+        (${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'No-action terminal closeout.', 'Improvement scan no-action closeout', 'reference_report')
+    `;
+
+    const before = await scanHive(sql, HIVE_ID);
+    expect(before.findings.some((f) => f.id === `unsatisfied_completion:${routedTaskId}`)).toBe(true);
+    expect(before.findings.some((f) => f.id === `orphan_output:${routedTaskId}`)).toBe(true);
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
+      now: new Date("2026-06-17T00:00:00.000Z"),
+    });
+    expect(reconciled.disposed).toBe(2);
+
+    const rows = await sql<Array<{ id: string; terminal_disposition: Record<string, unknown> }>>`
+      SELECT id, terminal_disposition
+      FROM tasks
+      WHERE id IN (${routedTaskId}, ${noActionTaskId})
+      ORDER BY id
+    `;
+    expect(rows.map((row) => row.terminal_disposition.kind)).toEqual([
+      IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+      IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+    ]);
+    expect(rows[0].terminal_disposition).toMatchObject({
+      terminal_status: "closed_with_follow_up",
+      final_disposition_label: "github_issue_backlog_open",
+      closure_scope: "github_issue",
+      decision_boundary: "external_state_only",
+      evidence: { disposition: "already_routed", githubRefs: expect.arrayContaining(["#107"]) },
+    });
+    expect(rows[1].terminal_disposition).toMatchObject({
+      terminal_status: "closed",
+      final_disposition_label: "reference_only_output",
+      evidence: { disposition: "explicit_no_action" },
+    });
+
+    const after = await scanHive(sql, HIVE_ID);
+    for (const taskId of [routedTaskId, noActionTaskId]) {
+      expect(after.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(false);
+      expect(after.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(false);
+    }
+  });
+
+  it("does not terminalize improvement scans when evidence is missing or no route/disposition exists", async () => {
+    const missingEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3512";
+    const unresolvedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3513";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES
+        (
+          ${missingEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: missing evidence route',
+          'Scheduled improvement scan says already-routed to issue #107 but has no work product evidence.',
+          ${"Already-routed to issue #107. ".repeat(10)},
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: unresolved recommendation',
+          'Scheduled improvement scan found a possible implementation follow-up but no downstream tracker or accepted closure.',
+          ${"Implement a follow-up later, but no GitHub tracker or accepted closure is named. ".repeat(4)},
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Needs routing before closeout.', 'Unresolved scan output', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${missingEvidenceTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${unresolvedTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `orphan_output:${unresolvedTaskId}`)).toBe(true);
   });
 
   it("does not suppress owner-action-required reference outputs", async () => {

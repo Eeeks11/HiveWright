@@ -83,7 +83,8 @@ export type StorageRootFamily = (typeof STORAGE_ROOT_FAMILIES)[number];
 
 export type KnownLegacyTerminalDispositionKind =
   | "reference_only_output"
-  | "reference_only_wrapper_superseded";
+  | "reference_only_wrapper_superseded"
+  | "improvement_scan_backlog_disposition";
 
 export interface TerminalDispositionCompatibility {
   terminalStatus: TerminalStatus;
@@ -114,6 +115,14 @@ export const TERMINAL_DISPOSITION_COMPATIBILITY: Record<
     storageRootFamily: "db_task_terminal_disposition",
     canAutoClose: true,
   },
+  improvement_scan_backlog_disposition: {
+    terminalStatus: "closed_with_follow_up",
+    finalDispositionLabel: "github_issue_backlog_open",
+    closureScope: "github_issue",
+    decisionBoundary: "external_state_only",
+    storageRootFamily: "db_task_terminal_disposition",
+    canAutoClose: true,
+  },
 } as const;
 
 export const UNKNOWN_LEGACY_TERMINAL_DISPOSITION: TerminalDispositionCompatibility = {
@@ -127,7 +136,9 @@ export const UNKNOWN_LEGACY_TERMINAL_DISPOSITION: TerminalDispositionCompatibili
 export function isKnownLegacyTerminalDispositionKind(
   kind: string | null | undefined,
 ): kind is KnownLegacyTerminalDispositionKind {
-  return kind === "reference_only_output" || kind === "reference_only_wrapper_superseded";
+  return kind === "reference_only_output"
+    || kind === "reference_only_wrapper_superseded"
+    || kind === "improvement_scan_backlog_disposition";
 }
 
 export function resolveTerminalDispositionCompatibility(

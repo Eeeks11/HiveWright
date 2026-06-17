@@ -154,6 +154,7 @@ export async function findOwnerFeedbackSampleCandidates(
       AND t.completed_at >= ${now}::timestamp - (${config.eligibilityWindowDays}::int * interval '1 day')
       AND t.completed_at <= ${now}::timestamp
       AND COALESCE(t.retry_count, 0) <= 1
+      AND COALESCE(t.terminal_disposition ->> 'terminal', 'false') <> 'true'
       AND (
         wp.id IS NOT NULL
         OR length(COALESCE(t.result_summary, '')) >= 80
