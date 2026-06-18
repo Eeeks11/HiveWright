@@ -54,10 +54,12 @@ describe("AdapterSettingsPage", () => {
     expect(optionValues).toContain("openai/gpt-5.5");
     expect(optionValues).toContain("mistral/mistral-large-latest");
     expect(optionValues).toContain("mistral/mistral-ocr-latest");
-    expect(optionValues).toContain("google/gemini-3.1-pro-preview");
-    expect(optionValues).toContain("google/gemini-3.1-pro-preview-customtools");
-    expect(optionValues).toContain("google/gemini-3.1-flash-lite-preview");
-    expect(optionValues).toContain("google/gemini-3-flash-preview");
+    expect(optionValues).toContain("google/gemini-2.5-pro");
+    expect(optionValues).toContain("google/gemini-2.5-flash");
+    expect(optionValues).not.toContain("google/gemini-3.1-pro-preview");
+    expect(optionValues).not.toContain("google/gemini-3.1-pro-preview-customtools");
+    expect(optionValues).not.toContain("google/gemini-3.1-flash-lite-preview");
+    expect(optionValues).not.toContain("google/gemini-3-flash-preview");
     expect(optionValues).not.toContain("google/gemini-3.1-flash-live-preview");
   });
 

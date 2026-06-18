@@ -27,11 +27,8 @@ const FALLBACK_MODELS = [
   "openai/gpt-5.5",
   "openai/gpt-4o",
   "openai/gpt-4o-mini",
+  "google/gemini-2.5-pro",
   "google/gemini-2.5-flash",
-  "google/gemini-3.1-pro-preview",
-  "google/gemini-3.1-pro-preview-customtools",
-  "google/gemini-3.1-flash-lite-preview",
-  "google/gemini-3-flash-preview",
 ];
 
 const ADAPTER_FIELDS: Record<string, { description: string; fields: FieldDef[] }> = {
@@ -53,7 +50,7 @@ const ADAPTER_FIELDS: Record<string, { description: string; fields: FieldDef[] }
   gemini: {
     description: "Uses Google's Gemini CLI. Configure GEMINI_API_KEY for unattended production, or pass through Vertex/ADC, GCA, or a stable GEMINI_CLI_HOME for OAuth.",
     fields: [
-      { label: "Default Model", key: "defaultModel", placeholder: "google/gemini-3.1-flash-lite-preview", type: "select", options: FALLBACK_MODELS },
+      { label: "Default Model", key: "defaultModel", placeholder: "google/gemini-2.5-flash", type: "select", options: FALLBACK_MODELS },
       { label: "Gemini CLI Home", key: "geminiCliHome", placeholder: "/home/hivewright/.gemini-cli", type: "text", description: "Optional stable home for OAuth/GCA state. Leave blank for API-key or Vertex env modes." },
     ],
   },

@@ -293,16 +293,9 @@ describe("syncConfiguredHiveModels", () => {
 
     expect(result).toMatchObject({
       considered: 3,
-      upserted: 1,
-      skipped: 2,
+      upserted: 0,
+      skipped: 3,
     });
-    expect(rows).toEqual([
-      {
-        provider: "google",
-        model_id: "google/gemini-3.1-flash-lite-preview",
-        adapter_type: "gemini",
-        enabled: true,
-      },
-    ]);
+    expect(rows).toEqual([]);
   });
 });

@@ -139,11 +139,8 @@ const CODEX_MODELS = [
   "openai-codex/gpt-5.3-codex",
 ];
 const GEMINI_MODELS = [
+  "google/gemini-2.5-pro",
   "google/gemini-2.5-flash",
-  "google/gemini-3.1-pro-preview",
-  "google/gemini-3.1-pro-preview-customtools",
-  "google/gemini-3.1-flash-lite-preview",
-  "google/gemini-3-flash-preview",
 ];
 const GENERAL_MODELS = [
   ...ANTHROPIC_MODELS,

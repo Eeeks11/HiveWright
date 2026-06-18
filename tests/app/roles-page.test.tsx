@@ -607,12 +607,14 @@ describe("RolesPage", () => {
     const modelSelect = modelSelects[1] as HTMLSelectElement;
     const optionValues = Array.from(modelSelect.options).map((option) => option.value);
 
-    expect(optionValues).toContain("google/gemini-3.1-pro-preview");
-    expect(optionValues).toContain("google/gemini-3.1-pro-preview-customtools");
-    expect(optionValues).toContain("google/gemini-3.1-flash-lite-preview");
-    expect(optionValues).toContain("google/gemini-3-flash-preview");
+    expect(optionValues).toContain("google/gemini-2.5-pro");
+    expect(optionValues).toContain("google/gemini-2.5-flash");
+    expect(optionValues).not.toContain("google/gemini-3.1-pro-preview");
+    expect(optionValues).not.toContain("google/gemini-3.1-pro-preview-customtools");
+    expect(optionValues).not.toContain("google/gemini-3.1-flash-lite-preview");
+    expect(optionValues).not.toContain("google/gemini-3-flash-preview");
     expect(optionValues).not.toContain("google/gemini-3.1-flash-live-preview");
-    fireEvent.change(modelSelect, { target: { value: "google/gemini-3-flash-preview" } });
+    fireEvent.change(modelSelect, { target: { value: "google/gemini-2.5-flash" } });
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 
     await waitFor(() =>
@@ -621,7 +623,7 @@ describe("RolesPage", () => {
         expect.objectContaining({
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: expect.stringContaining("\"recommendedModel\":\"google/gemini-3-flash-preview\""),
+          body: expect.stringContaining("\"recommendedModel\":\"google/gemini-2.5-flash\""),
         }),
       ),
     );

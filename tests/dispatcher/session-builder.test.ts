@@ -424,7 +424,7 @@ describe("buildSessionContext", () => {
       )
       VALUES
         (${bizId}, 'openai', 'openai-codex/gpt-5.5', 'codex', 96, 80, true),
-        (${bizId}, 'google', 'google/gemini-3.1-flash-lite-preview', 'gemini', 88, 0, true)
+        (${bizId}, 'google', 'google/gemini-2.5-flash', 'gemini', 88, 0, true)
       ON CONFLICT (hive_id, provider, model_id) DO UPDATE
       SET adapter_type = EXCLUDED.adapter_type,
           benchmark_quality_score = EXCLUDED.benchmark_quality_score,
@@ -449,7 +449,7 @@ describe("buildSessionContext", () => {
             adapterType: "gemini",
             baseUrl: null,
           })},
-          'google/gemini-3.1-flash-lite-preview',
+          'google/gemini-2.5-flash',
           'healthy'
         )
       ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
@@ -475,12 +475,12 @@ describe("buildSessionContext", () => {
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'coding', 80, '80', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'writing', 45, '45', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'tool_use', 100, '100', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'overall_quality', 50, '50', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'reasoning', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'coding', 45, '45', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'writing', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'tool_use', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'speed', 100, '100', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high')
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'overall_quality', 50, '50', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'reasoning', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'coding', 45, '45', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'writing', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'tool_use', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'speed', 100, '100', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high')
     `;
     await sql`
       UPDATE adapter_config
@@ -490,7 +490,7 @@ describe("buildSessionContext", () => {
             "openai:codex:openai-codex/gpt-5.5": {
               roleSlugs: ["content-writer"],
             },
-            "google:gemini:google/gemini-3.1-flash-lite-preview": {
+            "google:gemini:google/gemini-2.5-flash": {
               roleSlugs: ["content-writer"],
             },
           },
@@ -575,7 +575,7 @@ describe("buildSessionContext", () => {
     const goalContextCtx = await buildSessionContext(sql, goalContextTask);
 
     expect(writingCtx.primaryAdapterType).toBe("gemini");
-    expect(writingCtx.model).toBe("google/gemini-3.1-flash-lite-preview");
+    expect(writingCtx.model).toBe("google/gemini-2.5-flash");
     expect(ctx.primaryAdapterType).toBe("codex");
     expect(ctx.model).toBe("openai-codex/gpt-5.5");
     expect(goalContextCtx.primaryAdapterType).toBe("codex");
