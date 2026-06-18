@@ -368,6 +368,25 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision).toMatchObject({ allowed: true });
   });
 
+  it("does not treat bounded WordPress publishing handoff tasks as code-changing", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "social-media-manager",
+      title: "Pipeline: Publish or handoff with evidence",
+      brief: "Stage or publish to the Lakes WordPress/news channel only when valid WordPress application-password credentials are available and owner approval is explicit. Publication still fails because the live page exposes Mike AI Assistant in public byline/schema/social metadata, and WordPress REST reports featured_media: 0. Body copy is publishable after implementation defects are fixed. Systems-health retry bounds: This is a content publishing or handoff task, not a software implementation task. Do not inspect, modify, or create software source, repositories, branches, worktrees, implementation files, WordPress theme/plugin code, schemas, or configuration files. Do not attempt code changes to fix author/byline/schema/social-image defects. If defects require site/admin/code/config changes, return a blocked handoff naming the missing credential/approval/config action.",
+      acceptanceCriteria: "Either a verified live/staged WordPress URL is returned, or a clear blocked handoff names the missing credential/approval without exposing secrets.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      hiveSlug: "lakes-bushland-caravan-park",
+      projectWorkspace: "/home/trent/.hivewright/task-workspaces/lakes-publish",
+      baseProjectWorkspace: "/home/trent/.hivewright/task-workspaces/lakes-publish",
+      gitBackedProject: false,
+    }))).toMatchObject({ allowed: true });
+  });
+
   it("does not treat source-evidence research in the HiveWright hive as product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
