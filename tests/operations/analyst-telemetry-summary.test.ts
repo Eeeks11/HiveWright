@@ -184,6 +184,36 @@ describe("analyst telemetry summary", () => {
     expect(serialized).not.toContain("stack trace");
   });
 
+  it("excludes quarantined automatic unknown-health routes from recovery eligibility", () => {
+    const view = routingView();
+    view.models.push({
+      ...view.models[2],
+      id: "route-4",
+      routeKey: "google:gemini:quarantined-unknown-model",
+      provider: "google",
+      adapterType: "gemini",
+      model: "quarantined-unknown-model",
+      status: "unknown",
+      failureClass: "quarantined",
+      lastFailureReason: JSON.stringify({ failureClass: "quarantined", message: "owner secret" }),
+      failureMessage: "owner secret",
+      probeFreshness: "unknown",
+      probeMode: "automatic",
+      hiveModelEnabled: true,
+      routingEnabled: true,
+    });
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.unknownHealthRecovery).toMatchObject({
+      unknownHealthRoutes: 2,
+      automaticProbeRoutes: 3,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 1,
+    });
+    expect(summary.quarantinedRoutes).toBe(2);
+  });
+
   it("combines runtime drift and model routing counts for one hive", async () => {
     const sql = vi.fn();
     const summary = await buildAnalystTelemetrySummary({

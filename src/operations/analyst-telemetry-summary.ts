@@ -117,15 +117,16 @@ export function buildAnalystModelRoutingSummary(
     if (model.status === "unknown" && model.probeMode === "automatic") unknownHealthRoutes += 1;
     if (model.status === "unknown" && model.probeMode === "on_demand") onDemandUnknownHealthRoutes += 1;
     if (model.failureClass === "quarantined") quarantinedRoutes += 1;
+    const quarantined = isQuarantinedRoute(model);
     if (model.probeFreshness === "due" && model.probeMode === "automatic") staleRoutes += 1;
     if (model.probeFreshness === "fresh") freshRoutes += 1;
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
     if (model.probeMode === "on_demand") onDemandProbeRoutes += 1;
-    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled) {
+    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled && !quarantined) {
       recoveryEligibleRoutes += 1;
     }
-    if (model.status === "unknown" && model.probeMode === "automatic" && enabled) {
+    if (model.status === "unknown" && model.probeMode === "automatic" && enabled && !quarantined) {
       unknownRecoveryEligibleRoutes += 1;
     }
   }
@@ -204,6 +205,10 @@ function hasFreshHealthyRouteEvidence(model: {
   probeFreshness: string;
 }): boolean {
   return model.status === "healthy" && model.probeFreshness === "fresh";
+}
+
+function isQuarantinedRoute(model: { failureClass: string | null }): boolean {
+  return model.failureClass === "quarantined";
 }
 
 async function defaultLoadHeartbeat(sql: Sql, input: { now: Date }): Promise<DispatcherHeartbeatRecord> {
