@@ -88,7 +88,7 @@ export function evaluateTaskWorkspacePolicy(
     }
   }
 
-  const codeChangingTask = isCodeChangingTask(ctx.task);
+  const codeChangingTask = isCodeChangingTaskForHive(ctx.task, ctx.hiveSlug);
   if (!codeChangingTask) {
     signals.push("non_code_changing_task");
     return { allowed: true, reason: null, signals };
@@ -145,7 +145,16 @@ export function evaluateTaskWorkspacePolicy(
 }
 
 export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">): boolean {
+  return isCodeChangingTaskForHive(task, null);
+}
+
+function isCodeChangingTaskForHive(
+  task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">,
+  hiveSlug: string | null | undefined,
+): boolean {
   const text = taskText(task);
+  const normalizedHiveSlug = hiveSlug?.trim().toLowerCase() ?? null;
+  const inHiveWrightHive = normalizedHiveSlug === null || normalizedHiveSlug === "hivewright";
   const codeRole = CODE_ROLE_SLUGS.has(task.assignedTo.trim().toLowerCase());
   const doctorRole = task.assignedTo.trim().toLowerCase() === "doctor";
   const codeSignals = CODE_CHANGE_PATTERN.test(text);
@@ -178,7 +187,7 @@ export function isCodeChangingTask(task: Pick<ClaimedTask, "assignedTo" | "title
   if (explicitReadOnlyNoFileMutation) return false;
   if ((readOnlyNonCodeIntent || readOnlyOperationalVerificationIntent || recoveryNonCodeIntent || complianceReadOnlyArtifactIntent) && !explicitSourceEditIntent && !positiveSourceEditIntent) return false;
 
-  return (codeRole && codeSignals) || (hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
+  return (codeRole && codeSignals) || (inHiveWrightHive && hivewrightSignals && PRODUCT_CODE_CHANGE_PATTERN.test(text));
 }
 
 export function isHiveWrightProductCodeTask(task: Pick<ClaimedTask, "assignedTo" | "title" | "brief" | "acceptanceCriteria">): boolean {
