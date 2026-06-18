@@ -1,5 +1,6 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type { DiscoveredModel } from "./types";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -308,6 +309,7 @@ function extractGeminiModelIds(text: string): string[] {
     .filter((id) => /^gemini-\d/.test(id))
     .filter((id) => !id.includes("deprecated"))
     .filter((id) => !/^gemini-\d-\d/.test(id))
+    .filter((id) => !isUnsupportedModelDiscoveryCandidate("gemini", id))
     .filter((id) => inferGeminiCapabilities(id).length > 0);
 }
 

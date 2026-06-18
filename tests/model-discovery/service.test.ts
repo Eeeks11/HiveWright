@@ -47,6 +47,65 @@ describe("runModelDiscoveryImport", () => {
     expect(row.owner_disabled_at).toBeNull();
   });
 
+  it("skips unsupported Gemini preview and 2.0 models before catalog and hive import", async () => {
+    await seedHive();
+
+    const result = await runModelDiscoveryImport(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "gemini",
+      provider: "google",
+      source: "gemini_models_api",
+      models: [
+        {
+          provider: "google",
+          adapterType: "gemini",
+          modelId: "google/gemini-2.5-pro",
+          displayName: "Gemini 2.5 Pro",
+          family: "gemini",
+          capabilities: ["text", "code", "reasoning"],
+          local: false,
+        },
+        {
+          provider: "google",
+          adapterType: "gemini",
+          modelId: "google/gemini-3-flash-preview",
+          displayName: "Gemini 3 Flash Preview",
+          family: "gemini",
+          capabilities: ["text", "code"],
+          local: false,
+        },
+        {
+          provider: "google",
+          adapterType: "gemini",
+          modelId: "google/gemini-2.0-flash",
+          displayName: "Gemini 2.0 Flash",
+          family: "gemini",
+          capabilities: ["text", "code"],
+          local: false,
+        },
+      ],
+    });
+
+    const catalogRows = await sql<{ model_id: string }[]>`
+      SELECT model_id
+      FROM model_catalog
+      WHERE provider = 'google'
+      ORDER BY model_id
+    `;
+    const hiveRows = await sql<{ model_id: string; enabled: boolean }[]>`
+      SELECT model_id, enabled
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+      ORDER BY model_id
+    `;
+
+    expect(result.modelsSeen).toBe(3);
+    expect(result.modelsImported).toBe(1);
+    expect(result.modelsAutoEnabled).toBe(1);
+    expect(catalogRows.map((row) => row.model_id)).toEqual(["google/gemini-2.5-pro"]);
+    expect(hiveRows).toEqual([{ model_id: "google/gemini-2.5-pro", enabled: true }]);
+  });
+
   it("auto-enables newly discovered code-only models", async () => {
     await seedHive();
 
