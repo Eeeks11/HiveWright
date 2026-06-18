@@ -669,6 +669,33 @@ describe("evaluateTaskWorkspacePolicy", () => {
     }))).toMatchObject({ allowed: true });
   });
 
+  it("does not block content pipeline package and WordPress handoff tasks as code changes", () => {
+    const draftTask = {
+      ...baseTask,
+      assignedTo: "content-writer",
+      title: "Pipeline: Draft publish-ready package",
+      brief: "Pipeline step: Draft publish-ready package. Write or update the blog/news article package in Lakes voice: practical, Australian, SEO-aware, not generic. Include title, slug, meta description, excerpt, body, internal links, image suggestions, and social teaser copy.",
+      acceptanceCriteria: "Publish-ready article package only; no repository, branch, worktree, source-code, or implementation changes.",
+    };
+    const handoffTask = {
+      ...baseTask,
+      assignedTo: "social-media-manager",
+      title: "Pipeline: Publish or handoff with evidence",
+      brief: "Pipeline step: Publish or handoff with evidence. Stage or publish to the Lakes WordPress/news channel only when valid Lakes WordPress application-password credentials are available and owner approval is explicit. Otherwise produce a handoff package, credential gap, and exact next action. Verify live URL/status if published. Previous result: the live article exposes an author in page UI and Yoast schema; artifact path /home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing/package.md.",
+      acceptanceCriteria: "Either a verified live/staged WordPress URL is returned, or a clear blocked handoff names the missing credential/approval without exposing secrets.",
+    };
+
+    for (const task of [draftTask, handoffTask]) {
+      expect(evaluateTaskWorkspacePolicy(ctx({
+        task,
+        hiveSlug: "lakes-bushland-caravan-park",
+        projectWorkspace: "/home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
+        baseProjectWorkspace: "/home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
+        gitBackedProject: false,
+      }))).toMatchObject({ allowed: true });
+    }
+  });
+
   it("does not let repository-neutral wording override explicit implementation requests", () => {
     for (const phrase of [
       "patch the HiveWright dashboard/API source code",
