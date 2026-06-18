@@ -165,6 +165,15 @@ describe("analyst telemetry summary", () => {
         recoveryEligibleRoutes: 0,
         recoveryBlockedRoutes: 0,
       },
+      unknownHealthRecovery: {
+        unknownHealthRoutes: 1,
+        automaticProbeRoutes: 2,
+        recoveryEligibleRoutes: 1,
+        recoveryBlockedRoutes: 0,
+      },
+      readinessPolicy: {
+        criticalCapacityBasis: "no_routable_or_recoverable_route",
+      },
       providerCounts: { openai: 1, local: 1, anthropic: 1 },
       adapterCounts: { codex: 1, ollama: 1, claude: 1 },
     });
@@ -218,6 +227,15 @@ describe("analyst telemetry summary", () => {
         totalRoutes: 3,
         routableRoutes: 1,
         blockedRoutes: 2,
+        unknownHealthRecovery: {
+          unknownHealthRoutes: 1,
+          automaticProbeRoutes: 2,
+          recoveryEligibleRoutes: 1,
+          recoveryBlockedRoutes: 0,
+        },
+        readinessPolicy: {
+          criticalCapacityBasis: "no_routable_or_recoverable_route",
+        },
       },
     });
     expect(summary.notices.join("\n")).toContain("Runtime drift status is drift");

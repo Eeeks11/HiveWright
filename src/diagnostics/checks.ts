@@ -366,6 +366,7 @@ export type ModelRoutePoolCapacityCounts = {
   staleRoutes: number;
   freshRoutes: number;
   recoveryEligibleStaleRoutes: number;
+  recoveryEligibleUnknownRoutes: number;
 };
 
 export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
@@ -411,6 +412,7 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       staleRoutes: 0,
       freshRoutes: 0,
       recoveryEligibleStaleRoutes: 0,
+      recoveryEligibleUnknownRoutes: 0,
     };
 
     for (const model of modelRows) {
@@ -437,7 +439,10 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       if (stale && probeMode === "automatic") counts.staleRoutes += 1;
       else counts.freshRoutes += 1;
       if (model.enabled && status === "healthy" && !stale) counts.routableRoutes += 1;
-      if (model.enabled && stale && probeMode === "automatic" && status !== "quarantined") counts.recoveryEligibleStaleRoutes += 1;
+      if (model.enabled && probeMode === "automatic" && status !== "quarantined") {
+        if (stale) counts.recoveryEligibleStaleRoutes += 1;
+        if (status === "unknown") counts.recoveryEligibleUnknownRoutes += 1;
+      }
     }
 
     return buildModelRoutePoolCapacityDiagnostic(counts, now);
@@ -472,7 +477,9 @@ export function buildModelRoutePoolCapacityDiagnostic(
   const constrainedRatio = counts.routableRoutes / counts.totalRoutes;
   const staleOrUnknownRoutes = counts.staleRoutes + counts.unknownHealthRoutes;
   const staleOrUnknownRatio = staleOrUnknownRoutes / counts.totalRoutes;
-  const severity = counts.routableRoutes === 0 || constrainedRatio < 0.25
+  const recoveryEligibleRoutes = counts.recoveryEligibleStaleRoutes + counts.recoveryEligibleUnknownRoutes;
+  const hasRecoverableRoutePool = counts.routableRoutes > 0 || recoveryEligibleRoutes > 0;
+  const severity = !hasRecoverableRoutePool
     ? "critical"
     : constrainedRatio < 0.5 || staleOrUnknownRatio >= 0.25
       ? "warning"
@@ -484,11 +491,11 @@ export function buildModelRoutePoolCapacityDiagnostic(
     label: "Model route pool capacity",
     severity,
     summary: `${counts.routableRoutes}/${counts.totalRoutes} model route(s) are currently routable; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
-    details: `fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes}`,
+    details: `readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes}`,
     recommendedAction: severity === "critical"
-      ? "Treat route-pool capacity as degraded: run model health probe recovery and restore routable routes before presenting runtime readiness as normal."
-      : counts.staleRoutes > 0
-        ? "Run or wait for model health probe recovery; compare staleRecoveryEligible against stale route count to spot standing drift."
+      ? "Treat route-pool capacity as degraded: run model health probe recovery and restore at least one routable or recoverable route before presenting runtime readiness as normal."
+      : counts.staleRoutes > 0 || counts.unknownHealthRoutes > 0
+        ? "Run or wait for model health probe recovery; compare stale/unknown recovery eligibility against total route debt to spot standing drift."
         : undefined,
     checkedAt: now,
   });
