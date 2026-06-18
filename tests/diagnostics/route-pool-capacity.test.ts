@@ -42,11 +42,11 @@ describe("model route-pool capacity diagnostic", () => {
       id: "providers.route_pool_capacity",
       severity: "ok",
       summary: "1/1 model route(s) are currently routable; 0 blocked, 0 stale, 0 unknown.",
-      details: "fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0",
+      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0",
     });
   });
 
-  it("marks severe route drift critical instead of allowing readiness to look normal", () => {
+  it("keeps broad route drift warning-level when some route capacity is still usable", () => {
     const diagnostic = buildModelRoutePoolCapacityDiagnostic({
       totalRoutes: 85,
       routableRoutes: 5,
@@ -56,15 +56,16 @@ describe("model route-pool capacity diagnostic", () => {
       staleRoutes: 23,
       freshRoutes: 62,
       recoveryEligibleStaleRoutes: 19,
+      recoveryEligibleUnknownRoutes: 43,
     }, NOW);
 
     expect(diagnostic).toMatchObject({
       id: "providers.route_pool_capacity",
-      severity: "critical",
+      severity: "warning",
       summary: "5/85 model route(s) are currently routable; 80 blocked, 23 stale, 43 unknown.",
-      details: "fresh=62 disabled=0 unhealthy=14 staleRecoveryEligible=19",
+      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=62 disabled=0 unhealthy=14 staleRecoveryEligible=19 unknownRecoveryEligible=43",
     });
-    expect(diagnostic.recommendedAction).toContain("route-pool capacity as degraded");
+    expect(diagnostic.recommendedAction).toContain("stale/unknown recovery eligibility");
   });
 
   it("does not count on-demand unprobed routes as automatic unknown-health debt", async () => {
@@ -89,7 +90,7 @@ describe("model route-pool capacity diagnostic", () => {
     const diagnostic = await checkModelRoutePoolCapacity(fakeSql, NOW);
 
     expect(diagnostic.summary).toBe("0/1 model route(s) are currently routable; 1 blocked, 0 stale, 0 unknown.");
-    expect(diagnostic.details).toBe("fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0");
+    expect(diagnostic.details).toBe("readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0");
   });
 
   it("keeps normal capacity ok while still reporting stale-recovery measurement", () => {
@@ -102,12 +103,30 @@ describe("model route-pool capacity diagnostic", () => {
       staleRoutes: 1,
       freshRoutes: 11,
       recoveryEligibleStaleRoutes: 1,
+      recoveryEligibleUnknownRoutes: 0,
     }, NOW);
 
     expect(diagnostic).toMatchObject({
       severity: "ok",
       summary: "10/12 model route(s) are currently routable; 2 blocked, 1 stale, 0 unknown.",
-      details: "fresh=11 disabled=1 unhealthy=0 staleRecoveryEligible=1",
+      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=11 disabled=1 unhealthy=0 staleRecoveryEligible=1 unknownRecoveryEligible=0",
     });
+  });
+
+  it("keeps route capacity critical when no route can run or recover", () => {
+    const diagnostic = buildModelRoutePoolCapacityDiagnostic({
+      totalRoutes: 3,
+      routableRoutes: 0,
+      disabledRoutes: 0,
+      unhealthyRoutes: 3,
+      unknownHealthRoutes: 0,
+      staleRoutes: 0,
+      freshRoutes: 3,
+      recoveryEligibleStaleRoutes: 0,
+      recoveryEligibleUnknownRoutes: 0,
+    }, NOW);
+
+    expect(diagnostic.severity).toBe("critical");
+    expect(diagnostic.recommendedAction).toContain("restore at least one routable or recoverable route");
   });
 });

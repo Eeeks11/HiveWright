@@ -165,6 +165,15 @@ describe("analyst telemetry summary", () => {
         recoveryEligibleRoutes: 0,
         recoveryBlockedRoutes: 0,
       },
+      unknownHealthRecovery: {
+        unknownHealthRoutes: 1,
+        automaticProbeRoutes: 2,
+        recoveryEligibleRoutes: 1,
+        recoveryBlockedRoutes: 0,
+      },
+      readinessPolicy: {
+        criticalCapacityBasis: "no_routable_or_recoverable_route",
+      },
       providerCounts: { openai: 1, local: 1, anthropic: 1 },
       adapterCounts: { codex: 1, ollama: 1, claude: 1 },
     });
@@ -173,6 +182,36 @@ describe("analyst telemetry summary", () => {
     expect(serialized).not.toContain("credential");
     expect(serialized).not.toContain("raw-secret-row");
     expect(serialized).not.toContain("stack trace");
+  });
+
+  it("excludes quarantined automatic unknown-health routes from recovery eligibility", () => {
+    const view = routingView();
+    view.models.push({
+      ...view.models[2],
+      id: "route-4",
+      routeKey: "google:gemini:quarantined-unknown-model",
+      provider: "google",
+      adapterType: "gemini",
+      model: "quarantined-unknown-model",
+      status: "unknown",
+      failureClass: "quarantined",
+      lastFailureReason: JSON.stringify({ failureClass: "quarantined", message: "owner secret" }),
+      failureMessage: "owner secret",
+      probeFreshness: "unknown",
+      probeMode: "automatic",
+      hiveModelEnabled: true,
+      routingEnabled: true,
+    });
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.unknownHealthRecovery).toMatchObject({
+      unknownHealthRoutes: 2,
+      automaticProbeRoutes: 3,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 1,
+    });
+    expect(summary.quarantinedRoutes).toBe(2);
   });
 
   it("combines runtime drift and model routing counts for one hive", async () => {
@@ -218,6 +257,15 @@ describe("analyst telemetry summary", () => {
         totalRoutes: 3,
         routableRoutes: 1,
         blockedRoutes: 2,
+        unknownHealthRecovery: {
+          unknownHealthRoutes: 1,
+          automaticProbeRoutes: 2,
+          recoveryEligibleRoutes: 1,
+          recoveryBlockedRoutes: 0,
+        },
+        readinessPolicy: {
+          criticalCapacityBasis: "no_routable_or_recoverable_route",
+        },
       },
     });
     expect(summary.notices.join("\n")).toContain("Runtime drift status is drift");

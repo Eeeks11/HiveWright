@@ -24,6 +24,16 @@ export interface AnalystModelRoutingSummary {
     recoveryEligibleRoutes: number;
     recoveryBlockedRoutes: number;
   };
+  unknownHealthRecovery: {
+    unknownHealthRoutes: number;
+    automaticProbeRoutes: number;
+    recoveryEligibleRoutes: number;
+    recoveryBlockedRoutes: number;
+  };
+  readinessPolicy: {
+    criticalCapacityBasis: "no_routable_or_recoverable_route";
+    justification: string;
+  };
   providerCounts: Record<string, number>;
   adapterCounts: Record<string, number>;
 }
@@ -92,6 +102,7 @@ export function buildAnalystModelRoutingSummary(
   let automaticProbeRoutes = 0;
   let onDemandProbeRoutes = 0;
   let recoveryEligibleRoutes = 0;
+  let unknownRecoveryEligibleRoutes = 0;
 
   for (const model of view.models) {
     increment(providerCounts, sanitizeBucket(model.provider));
@@ -106,13 +117,17 @@ export function buildAnalystModelRoutingSummary(
     if (model.status === "unknown" && model.probeMode === "automatic") unknownHealthRoutes += 1;
     if (model.status === "unknown" && model.probeMode === "on_demand") onDemandUnknownHealthRoutes += 1;
     if (model.failureClass === "quarantined") quarantinedRoutes += 1;
+    const quarantined = isQuarantinedRoute(model);
     if (model.probeFreshness === "due" && model.probeMode === "automatic") staleRoutes += 1;
     if (model.probeFreshness === "fresh") freshRoutes += 1;
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
     if (model.probeMode === "on_demand") onDemandProbeRoutes += 1;
-    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled) {
+    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled && !quarantined) {
       recoveryEligibleRoutes += 1;
+    }
+    if (model.status === "unknown" && model.probeMode === "automatic" && enabled && !quarantined) {
+      unknownRecoveryEligibleRoutes += 1;
     }
   }
 
@@ -136,6 +151,16 @@ export function buildAnalystModelRoutingSummary(
       automaticProbeRoutes,
       recoveryEligibleRoutes,
       recoveryBlockedRoutes: Math.max(0, staleRoutes - recoveryEligibleRoutes),
+    },
+    unknownHealthRecovery: {
+      unknownHealthRoutes,
+      automaticProbeRoutes,
+      recoveryEligibleRoutes: unknownRecoveryEligibleRoutes,
+      recoveryBlockedRoutes: Math.max(0, unknownHealthRoutes - unknownRecoveryEligibleRoutes),
+    },
+    readinessPolicy: {
+      criticalCapacityBasis: "no_routable_or_recoverable_route",
+      justification: "Readiness treats route-pool capacity as critical only when there is neither a currently routable model route nor an enabled automatic route that probe recovery can restore; broader stale or unknown inventory remains warning-level drift for analyst follow-up.",
     },
     providerCounts,
     adapterCounts,
@@ -180,6 +205,10 @@ function hasFreshHealthyRouteEvidence(model: {
   probeFreshness: string;
 }): boolean {
   return model.status === "healthy" && model.probeFreshness === "fresh";
+}
+
+function isQuarantinedRoute(model: { failureClass: string | null }): boolean {
+  return model.failureClass === "quarantined";
 }
 
 async function defaultLoadHeartbeat(sql: Sql, input: { now: Date }): Promise<DispatcherHeartbeatRecord> {
