@@ -10,7 +10,7 @@ describe("OpenRouterChatProvider", () => {
         JSON.stringify({
           choices: [{ message: { content: "world" } }],
           usage: { prompt_tokens: 5, completion_tokens: 2 },
-          model: "google/gemini-2.0-flash-exp:free",
+          model: "google/gemini-2.5-flash",
         }),
         { status: 200 },
       );
@@ -20,7 +20,7 @@ describe("OpenRouterChatProvider", () => {
     const res = await provider.chat({
       system: "sys",
       user: "hi",
-      model: "google/gemini-2.0-flash-exp:free",
+      model: "google/gemini-2.5-flash",
     });
     expect(res.text).toBe("world");
     expect(res.provider).toBe("openrouter");

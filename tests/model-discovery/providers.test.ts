@@ -125,6 +125,27 @@ describe("provider model discovery adapters", () => {
     ]));
   });
 
+  it("excludes Gemini preview and retired 2.0 IDs from public docs discovery", async () => {
+    const { fetchFn } = fakeFetch(`
+      gemini-2.5-pro
+      gemini-2.5-flash
+      gemini-2.5-flash-lite
+      gemini-3-flash-preview
+      gemini-3.1-pro-preview
+      gemini-2.0-flash
+      gemini-2.0-flash-lite
+      gemini-2.0-pro-exp-02-05
+    `);
+
+    const models = await discoverGeminiModels({ apiKey: "gemini-key", fetch: fetchFn });
+
+    expect(models.map((model) => model.modelId)).toEqual([
+      "google/gemini-2.5-flash",
+      "google/gemini-2.5-flash-lite",
+      "google/gemini-2.5-pro",
+    ]);
+  });
+
   it("discovers Anthropic models from the public docs catalog", async () => {
     const { calls, fetchFn } = fakeFetch(`
       <td>Claude Sonnet 4.7</td><td><code>claude-sonnet-4-7</code></td>

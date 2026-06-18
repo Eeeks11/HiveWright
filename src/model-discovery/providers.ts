@@ -1,5 +1,6 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type { DiscoveredModel } from "./types";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -56,15 +57,9 @@ const STATIC_OPENAI_MODELS = [
   "o3",
 ];
 const STATIC_GEMINI_MODELS = [
-  "gemini-3.1-pro",
-  "gemini-3.1-flash-lite-preview",
-  "gemini-3-pro-preview",
-  "gemini-3-flash-preview",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
 ];
 const STATIC_ANTHROPIC_MODELS = [
   "claude-opus-4-7",
@@ -314,6 +309,7 @@ function extractGeminiModelIds(text: string): string[] {
     .filter((id) => /^gemini-\d/.test(id))
     .filter((id) => !id.includes("deprecated"))
     .filter((id) => !/^gemini-\d-\d/.test(id))
+    .filter((id) => !isUnsupportedModelDiscoveryCandidate("gemini", id))
     .filter((id) => inferGeminiCapabilities(id).length > 0);
 }
 

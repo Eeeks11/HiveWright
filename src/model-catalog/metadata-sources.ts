@@ -30,7 +30,7 @@ const ARTIFICIAL_ANALYSIS_QUALITY_URLS: Record<string, string> = {
   "anthropic/claude-sonnet-4-6": "https://artificialanalysis.ai/models/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7": "https://artificialanalysis.ai/models/claude-opus-4-7",
   "google/gemini-2.5-flash": "https://artificialanalysis.ai/models/gemini-2-5-flash",
-  "google/gemini-3.1-pro-preview": "https://artificialanalysis.ai/models/gemini-3-1-pro-preview",
+  "google/gemini-2.5-pro": "https://artificialanalysis.ai/models/gemini-2-5-pro",
 };
 
 type BenchmarkQualitySource = "LLM Stats" | "Artificial Analysis" | "BenchLM leaderboard";
@@ -63,8 +63,7 @@ const OFFICIAL_COST_FALLBACKS = new Map<string, {
   ["anthropic/claude-opus-4-7", { input: 5, output: 25, sourceName: "Anthropic Opus pricing", sourceUrl: ANTHROPIC_OPUS_URL }],
   ["anthropic/claude-sonnet-4-6", { input: 3, output: 15, sourceName: "Anthropic Sonnet pricing", sourceUrl: ANTHROPIC_SONNET_URL }],
   ["google/gemini-2.5-flash", { input: 0.3, output: 2.5, sourceName: "Google Gemini API pricing", sourceUrl: GEMINI_PRICING_URL }],
-  ["google/gemini-3.1-pro-preview", { input: 1.25, output: 10, sourceName: "Google Gemini API pricing", sourceUrl: GEMINI_PRICING_URL }],
-  ["google/gemini-3.1-flash-lite-preview", { input: 0.25, output: 1.5, sourceName: "Google Gemini API pricing", sourceUrl: GEMINI_PRICING_URL }],
+  ["google/gemini-2.5-pro", { input: 1.25, output: 10, sourceName: "Google Gemini API pricing", sourceUrl: GEMINI_PRICING_URL }],
   ["qwen3:32b", { input: 0, output: 0, sourceName: "Local Ollama runtime", sourceUrl: "https://ollama.com/" }],
 ]);
 
@@ -117,19 +116,10 @@ const KNOWN_LIVE_MODELS: KnownLiveModel[] = [
   {
     provider: "google",
     adapterType: "gemini",
-    modelId: "google/gemini-3.1-pro-preview",
-    displayName: "Gemini 3.1 Pro Preview",
+    modelId: "google/gemini-2.5-pro",
+    displayName: "Gemini 2.5 Pro",
     family: "gemini-pro",
     capabilities: ["text", "code", "reasoning"],
-    local: false,
-  },
-  {
-    provider: "google",
-    adapterType: "gemini",
-    modelId: "google/gemini-3.1-flash-lite-preview",
-    displayName: "Gemini 3.1 Flash Lite Preview",
-    family: "gemini-flash",
-    capabilities: ["text", "code"],
     local: false,
   },
   {
@@ -186,8 +176,7 @@ export async function buildLiveModelCatalogEntries(
   setCost(costs, "anthropic/claude-opus-4-7", parseAnthropicOpusPricing(anthropicPricing), "Anthropic Opus pricing", ANTHROPIC_OPUS_URL);
   setCost(costs, "anthropic/claude-sonnet-4-6", parseAnthropicOpusPricing(anthropicSonnetPricing), "Anthropic Sonnet pricing", ANTHROPIC_SONNET_URL);
   setCost(costs, "google/gemini-2.5-flash", parseSectionTokenPrices(geminiPricing, "Gemini 2.5 Flash", ["Gemini 2.5 Flash-Lite", "Gemini 2.5 Pro", "Gemini 3"]), "Google Gemini API pricing", GEMINI_PRICING_URL);
-  setCost(costs, "google/gemini-3.1-pro-preview", parseSectionTokenPrices(geminiPricing, "Gemini 3.1 Pro", ["Gemini 3.1 Flash", "Gemini 3.1 Flash Lite", "Gemini 3 Pro"]), "Google Gemini API pricing", GEMINI_PRICING_URL);
-  setCost(costs, "google/gemini-3.1-flash-lite-preview", parseSectionTokenPrices(geminiPricing, "Gemini 3.1 Flash Lite", ["Gemini 3.1 Flash", "Gemini 3 Pro", "Gemini 2.5"]), "Google Gemini API pricing", GEMINI_PRICING_URL);
+  setCost(costs, "google/gemini-2.5-pro", parseSectionTokenPrices(geminiPricing, "Gemini 2.5 Pro", ["Gemini 2.5 Flash", "Gemini 3"]), "Google Gemini API pricing", GEMINI_PRICING_URL);
   for (const target of uniqueLiveMetadataTargets([...targets, ...KNOWN_LIVE_MODELS])) {
     const parsed = parseOfficialCostForTarget(target, {
       openAiPricing,
@@ -361,8 +350,7 @@ function parseArtificialAnalysisScores(text: string): Map<string, number> {
   setQuality(scores, "anthropic/claude-opus-4-7", normalized, ["Claude Opus 4.7", "Opus 4.7"]);
   setQuality(scores, "anthropic/claude-sonnet-4-6", normalized, ["Claude Sonnet 4.6", "Sonnet 4.6"]);
   setQuality(scores, "google/gemini-2.5-flash", normalized, ["Gemini 2.5 Flash"]);
-  setQuality(scores, "google/gemini-3.1-pro-preview", normalized, ["Gemini 3.1 Pro Preview", "Gemini 3.1 Pro"]);
-  setQuality(scores, "google/gemini-3.1-flash-lite-preview", normalized, ["Gemini 3.1 Flash Lite Preview", "Gemini 3.1 Flash Lite"]);
+  setQuality(scores, "google/gemini-2.5-pro", normalized, ["Gemini 2.5 Pro"]);
   setQuality(scores, "qwen3:32b", normalized, ["Qwen3 32B", "Qwen 3 32B"]);
   return scores;
 }
@@ -548,8 +536,7 @@ function parseLlmStatsScores(text: string): Map<string, number> {
   setLlmStatsScore(scores, "anthropic/claude-opus-4-7", normalized, ["Claude Opus 4.7"]);
   setLlmStatsScore(scores, "anthropic/claude-sonnet-4-6", normalized, ["Claude Sonnet 4.6"]);
   setLlmStatsScore(scores, "google/gemini-2.5-flash", normalized, ["Gemini 2.5 Flash"]);
-  setLlmStatsScore(scores, "google/gemini-3.1-pro-preview", normalized, ["Gemini 3.1 Pro Preview", "Gemini 3.1 Pro"]);
-  setLlmStatsScore(scores, "google/gemini-3.1-flash-lite-preview", normalized, ["Gemini 3.1 Flash Lite Preview", "Gemini 3.1 Flash Lite"]);
+  setLlmStatsScore(scores, "google/gemini-2.5-pro", normalized, ["Gemini 2.5 Pro"]);
   setLlmStatsScore(scores, "qwen3:32b", normalized, ["Qwen3 32B", "Qwen 3 32B"]);
   return scores;
 }

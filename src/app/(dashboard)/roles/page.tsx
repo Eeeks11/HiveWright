@@ -60,7 +60,7 @@ const ALL_CLOUD_MODELS = [
   ...CODEX_MODELS,
   "mistral/mistral-large-latest",
   "mistral/mistral-ocr-latest",
-  "openai/gpt-4o", "openai/gpt-4o-mini", "google/gemini-2.5-flash", "google/gemini-3.1-pro-preview", "google/gemini-3.1-pro-preview-customtools", "google/gemini-3.1-flash-lite-preview", "google/gemini-3-flash-preview",
+  "openai/gpt-4o", "openai/gpt-4o-mini", "google/gemini-2.5-pro", "google/gemini-2.5-flash",
 ];
 
 const OLLAMA_MODELS_ENDPOINT = "/api/ollama/models";
