@@ -16,12 +16,85 @@ const SUDO = process.env.HIVEWRIGHT_SUDO ?? "/usr/bin/sudo";
 const UPDATE_SERVICE = process.env.HIVEWRIGHT_UPDATE_SERVICE ?? "hivewright-update.service";
 const INSTALL_DIR = process.env.HIVEWRIGHT_INSTALL_DIR ?? process.cwd();
 const DASHBOARD_URL = process.env.HIVEWRIGHT_DASHBOARD_HEALTH_URL ?? "http://127.0.0.1:3002";
+const LOCKED_INSTALL_FETCH_HEAD_MESSAGE =
+  "Locked operational install suppressed an unprivileged Git fetch status check. Use the privileged HiveWright updater status/apply path; this is not a deployment failure.";
 
 function updateLogPath() {
   const dir = resolveUpdateLogDirectory();
   fs.mkdirSync(dir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(dir, `update-${stamp}.log`);
+}
+
+type OperationalUpdaterPayload = {
+  status: Awaited<ReturnType<typeof getUpdateStatus>>;
+  plan: ReturnType<typeof getUpdatePlan>;
+};
+
+type ExecFailure = Error & { stderr?: string; stdout?: string; code?: number | string };
+
+function formatExecFailure(error: unknown) {
+  if (!(error instanceof Error)) return String(error);
+  const failure = error as ExecFailure;
+  const parts = [failure.message, failure.stderr, failure.stdout]
+    .map((part) => part?.trim())
+    .filter(Boolean);
+  return Array.from(new Set(parts)).join("\n");
+}
+
+function isLockedInstallFetchHeadPermissionNoise(error: unknown) {
+  const message = formatExecFailure(error);
+  return /\.git\/FETCH_HEAD['\"]?: Permission denied/i.test(message)
+    || /cannot open ['\"]?\.git\/FETCH_HEAD['\"]?: Permission denied/i.test(message);
+}
+
+async function buildSuppressedLockedInstallPayload(): Promise<OperationalUpdaterPayload> {
+  const status = await getUpdateStatus({ fetch: false }).catch(async () => {
+    const packageJson = JSON.parse(
+      await fs.promises.readFile(path.join(process.cwd(), "package.json"), "utf8"),
+    ) as { version?: string };
+    return {
+      currentVersion: packageJson.version ?? "0.0.0",
+      currentCommit: null,
+      upstreamCommit: null,
+      remoteUrl: null,
+      branch: null,
+      dirty: false,
+      updateAvailable: false,
+      state: "locked-install-status-suppressed" as const,
+      message: LOCKED_INSTALL_FETCH_HEAD_MESSAGE,
+    };
+  });
+
+  return {
+    status: {
+      ...status,
+      updateAvailable: false,
+      state: "locked-install-status-suppressed",
+      message: LOCKED_INSTALL_FETCH_HEAD_MESSAGE,
+    },
+    plan: {
+      allowed: false,
+      commands: [],
+      message: LOCKED_INSTALL_FETCH_HEAD_MESSAGE,
+    },
+  };
+}
+
+async function readOperationalUpdaterStatus(): Promise<OperationalUpdaterPayload> {
+  try {
+    const { stdout } = await execFileAsync(SUDO, ["-n", OPERATIONAL_UPDATER, "status-json"], {
+      timeout: 60_000,
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+    });
+    return JSON.parse(stdout) as OperationalUpdaterPayload;
+  } catch (error) {
+    if (isLockedInstallFetchHeadPermissionNoise(error)) {
+      return buildSuppressedLockedInstallPayload();
+    }
+    throw error;
+  }
 }
 
 async function loadCutoverStatus(status: { currentCommit: string | null }) {
@@ -57,22 +130,13 @@ export async function GET() {
 
   if (fs.existsSync(OPERATIONAL_UPDATER)) {
     try {
-      const { stdout } = await execFileAsync(SUDO, ["-n", OPERATIONAL_UPDATER, "status-json"], {
-        timeout: 60_000,
-        maxBuffer: 1024 * 1024,
-        env: process.env,
-      });
-      const payload = JSON.parse(stdout) as {
-        status: Awaited<ReturnType<typeof getUpdateStatus>>;
-        plan: ReturnType<typeof getUpdatePlan>;
-      };
+      const payload = await readOperationalUpdaterStatus();
       return jsonOk({
         ...payload,
         cutover: await loadCutoverStatus(payload.status),
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return jsonError(`Operational updater status check failed: ${message}`, 503);
+      return jsonError(`Operational updater status check failed: ${formatExecFailure(error)}`, 503);
     }
   }
 
@@ -89,17 +153,11 @@ export async function POST(request: Request) {
   const restart = body.restart !== false;
 
   if (fs.existsSync(OPERATIONAL_UPDATER)) {
-    let payload: { status: Awaited<ReturnType<typeof getUpdateStatus>>; plan: ReturnType<typeof getUpdatePlan> };
+    let payload: OperationalUpdaterPayload;
     try {
-      const { stdout } = await execFileAsync(SUDO, ["-n", OPERATIONAL_UPDATER, "status-json"], {
-        timeout: 60_000,
-        maxBuffer: 1024 * 1024,
-        env: process.env,
-      });
-      payload = JSON.parse(stdout) as typeof payload;
+      payload = await readOperationalUpdaterStatus();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return jsonError(`Operational updater status check failed: ${message}`, 503);
+      return jsonError(`Operational updater status check failed: ${formatExecFailure(error)}`, 503);
     }
 
     if (!payload.plan.allowed) {

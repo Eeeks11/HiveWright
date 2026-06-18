@@ -167,6 +167,20 @@ describe("HiveWright update system", () => {
     expect(script).toContain('lock) ensure_root; ensure_paths; configure_root_git; ensure_canonical_remote; lock_repo ;;');
   });
 
+  it("suppresses locked-install FETCH_HEAD permission noise in the dashboard updater status", () => {
+    const route = readFileSync(
+      path.resolve(__dirname, "../../src/app/api/system/update/route.ts"),
+      "utf8",
+    );
+
+    expect(route).toContain("locked-install-status-suppressed");
+    expect(route).toContain("isLockedInstallFetchHeadPermissionNoise");
+    expect(route).toContain("getUpdateStatus({ fetch: false })");
+    expect(route).toContain("Locked operational install suppressed an unprivileged Git fetch status check");
+    expect(route).toContain("readOperationalUpdaterStatus()");
+    expect(route).not.toContain("Operational updater status check failed: ${message}");
+  });
+
   it("installs the privileged updater as a wrapper around the locked operational checkout", () => {
     const script = readFileSync(
       path.resolve(__dirname, "../../scripts/install-operational-repo-lock.sh"),
