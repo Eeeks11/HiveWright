@@ -367,6 +367,9 @@ export type ModelRoutePoolCapacityCounts = {
   freshRoutes: number;
   recoveryEligibleStaleRoutes: number;
   recoveryEligibleUnknownRoutes: number;
+  configuredRoutes?: number;
+  excludedInventoryRoutes?: number;
+  intentionallyDisabledRoutes?: number;
 };
 
 export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
@@ -394,8 +397,9 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       model_id: string;
       status: string | null;
       next_probe_at: Date | null;
+      last_failure_reason: string | null;
     }[]>`
-      SELECT fingerprint, model_id, status, next_probe_at
+      SELECT fingerprint, model_id, status, next_probe_at, last_failure_reason
       FROM model_health
     `;
     const healthByRoute = new Map(healthRows.map((row) => [
@@ -404,7 +408,7 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
     ]));
 
     const counts: ModelRoutePoolCapacityCounts = {
-      totalRoutes: modelRows.length,
+      totalRoutes: 0,
       routableRoutes: 0,
       disabledRoutes: 0,
       unhealthyRoutes: 0,
@@ -413,6 +417,9 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       freshRoutes: 0,
       recoveryEligibleStaleRoutes: 0,
       recoveryEligibleUnknownRoutes: 0,
+      configuredRoutes: modelRows.length,
+      excludedInventoryRoutes: 0,
+      intentionallyDisabledRoutes: 0,
     };
 
     for (const model of modelRows) {
@@ -433,13 +440,31 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
       }).mode;
       const status = health?.status ?? "unknown";
       const stale = health?.next_probe_at ? health.next_probe_at <= now : false;
-      if (!model.enabled) counts.disabledRoutes += 1;
+      const excludedInventory = isExcludedRouteInventory({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        failureReason: health?.last_failure_reason ?? null,
+        probeMode,
+      });
+
+      if (!model.enabled) {
+        counts.disabledRoutes += 1;
+        counts.intentionallyDisabledRoutes = (counts.intentionallyDisabledRoutes ?? 0) + 1;
+        continue;
+      }
+
+      if (excludedInventory) {
+        counts.excludedInventoryRoutes = (counts.excludedInventoryRoutes ?? 0) + 1;
+        continue;
+      }
+
+      counts.totalRoutes += 1;
       if (status === "unhealthy" || status === "quarantined") counts.unhealthyRoutes += 1;
       if (status === "unknown" && probeMode === "automatic") counts.unknownHealthRoutes += 1;
       if (stale && probeMode === "automatic") counts.staleRoutes += 1;
       else counts.freshRoutes += 1;
-      if (model.enabled && status === "healthy" && !stale) counts.routableRoutes += 1;
-      if (model.enabled && probeMode === "automatic" && status !== "quarantined") {
+      if (status === "healthy" && !stale) counts.routableRoutes += 1;
+      if (probeMode === "automatic" && status !== "quarantined") {
         if (stale) counts.recoveryEligibleStaleRoutes += 1;
         if (status === "unknown") counts.recoveryEligibleUnknownRoutes += 1;
       }
@@ -468,8 +493,9 @@ export function buildModelRoutePoolCapacityDiagnostic(
       id: "providers.route_pool_capacity",
       label: "Model route pool capacity",
       severity: "info",
-      summary: "No model routes are configured for capacity scoring.",
-      recommendedAction: "Configure at least one model route before expecting autonomous runtime work.",
+      summary: "No automatic model routes are configured for capacity scoring.",
+      details: formatRoutePoolInventoryDetails(counts),
+      recommendedAction: "Configure at least one automatic model route before expecting autonomous runtime work.",
       checkedAt: now,
     });
   }
@@ -490,8 +516,8 @@ export function buildModelRoutePoolCapacityDiagnostic(
     id: "providers.route_pool_capacity",
     label: "Model route pool capacity",
     severity,
-    summary: `${counts.routableRoutes}/${counts.totalRoutes} model route(s) are currently routable; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
-    details: `readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes}`,
+    summary: `${counts.routableRoutes}/${counts.totalRoutes} automatic model route(s) are currently routable; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
+    details: formatRoutePoolInventoryDetails(counts),
     recommendedAction: severity === "critical"
       ? "Treat route-pool capacity as degraded: run model health probe recovery and restore at least one routable or recoverable route before presenting runtime readiness as normal."
       : counts.staleRoutes > 0 || counts.unknownHealthRoutes > 0
@@ -499,6 +525,35 @@ export function buildModelRoutePoolCapacityDiagnostic(
         : undefined,
     checkedAt: now,
   });
+}
+
+function formatRoutePoolInventoryDetails(counts: ModelRoutePoolCapacityCounts): string {
+  const configuredRoutes = counts.configuredRoutes ?? counts.totalRoutes;
+  const excludedInventoryRoutes = counts.excludedInventoryRoutes ?? 0;
+  const intentionallyDisabledRoutes = counts.intentionallyDisabledRoutes ?? counts.disabledRoutes;
+  return `readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes} configuredRoutes=${configuredRoutes} automaticCandidateRoutes=${counts.totalRoutes} excludedInventoryRoutes=${excludedInventoryRoutes} intentionallyDisabledRoutes=${intentionallyDisabledRoutes}`;
+}
+
+function isExcludedRouteInventory(input: {
+  provider: string;
+  adapterType: string;
+  failureReason: string | null;
+  probeMode: "automatic" | "on_demand";
+}): boolean {
+  if (input.probeMode === "on_demand") return true;
+  return input.provider.trim().toLowerCase() === "openai" &&
+    input.adapterType.trim().toLowerCase() === "codex" &&
+    parseFailureClass(input.failureReason) === "scope";
+}
+
+function parseFailureClass(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { failureClass?: unknown };
+    return typeof parsed.failureClass === "string" ? parsed.failureClass : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function collectRecentFailureGroups(sql: Sql = apiSql): Promise<FailureFingerprintGroup[]> {
