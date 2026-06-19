@@ -1,5 +1,6 @@
 import type { Sql, TransactionSql } from "postgres";
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
+import { retiredGeminiG1ModelIds } from "@/model-routing/gemini-route-family";
 import { MODEL_ROUTING_ADAPTER_CONFIG_TYPE } from "@/model-routing/policy";
 import { routeKeyForModel } from "@/model-routing/registry";
 import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
@@ -144,6 +145,12 @@ async function runModelDiscoveryImportInTransaction(
     runId: run.id,
     modelIds,
   });
+  await retireRetiredGeminiDiscoveryRows(sql, {
+    hiveId: input.hiveId,
+    provider,
+    adapterType,
+    source: input.source,
+  });
 
   await sql`
     UPDATE model_discovery_runs
@@ -163,6 +170,33 @@ async function runModelDiscoveryImportInTransaction(
     modelsAutoEnabled,
     modelsMarkedStale,
   };
+}
+
+async function retireRetiredGeminiDiscoveryRows(
+  sql: SqlExecutor,
+  input: {
+    hiveId: string;
+    provider: string;
+    adapterType: string;
+    source: string;
+  },
+): Promise<void> {
+  if (
+    input.provider !== "google" ||
+    input.adapterType !== "gemini" ||
+    input.source !== "gemini_public_model_docs"
+  ) {
+    return;
+  }
+
+  await sql`
+    DELETE FROM hive_models
+    WHERE hive_id = ${input.hiveId}
+      AND provider = 'google'
+      AND adapter_type = 'gemini'
+      AND auto_discovered = true
+      AND model_id = ANY(${retiredGeminiG1ModelIds()}::text[])
+  `;
 }
 
 export function shouldAutoEnable(model: DiscoveredModel): boolean {

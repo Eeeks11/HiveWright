@@ -298,4 +298,62 @@ describe("syncConfiguredHiveModels", () => {
     });
     expect(rows).toEqual([]);
   });
+
+  it("skips the retired G1 Gemini route family while keeping current non-G1 Gemini models", async () => {
+    await sql`
+      INSERT INTO role_templates (
+        slug,
+        name,
+        department,
+        type,
+        adapter_type,
+        recommended_model,
+        active
+      )
+      VALUES
+        (
+          'retired-gemini-agent',
+          'Retired Gemini Agent',
+          'ops',
+          'executor',
+          'gemini',
+          'google/gemini-2.5-flash',
+          true
+        ),
+        (
+          'current-gemini-agent',
+          'Current Gemini Agent',
+          'ops',
+          'executor',
+          'gemini',
+          'google/gemini-3.1-flash-lite',
+          true
+        )
+      ON CONFLICT (slug) DO UPDATE
+        SET active = EXCLUDED.active,
+            adapter_type = EXCLUDED.adapter_type,
+            recommended_model = EXCLUDED.recommended_model
+    `;
+
+    const result = await syncConfiguredHiveModels(sql, { hiveId: HIVE_ID });
+    const rows = await sql<{ provider: string; model_id: string; adapter_type: string }[]>`
+      SELECT provider, model_id, adapter_type
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+      ORDER BY model_id ASC
+    `;
+
+    expect(result).toMatchObject({
+      considered: 2,
+      upserted: 1,
+      skipped: 1,
+    });
+    expect(rows).toEqual([
+      {
+        provider: "google",
+        model_id: "google/gemini-3.1-flash-lite",
+        adapter_type: "gemini",
+      },
+    ]);
+  });
 });

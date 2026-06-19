@@ -11,6 +11,7 @@ import {
 import { classifyProbeFreshness, getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
+import { isRetiredGeminiG1Model } from "./gemini-route-family";
 import {
   loadModelRoutingPolicyState,
   saveModelRoutingPolicy,
@@ -151,11 +152,12 @@ export async function loadModelRoutingView(
   `;
 
   const collapsedRows = collapseConfiguredModelAliasRows(modelRows);
-  const capabilityScoresByModel = await loadCapabilityScoresByModel(sql, collapsedRows);
-  const outcomeScoresByModel = await loadOutcomeScoresByModel(sql, hiveId, collapsedRows);
+  const eligibleRows = collapsedRows.filter((row) => !isRetiredGeminiRoutingRow(row));
+  const capabilityScoresByModel = await loadCapabilityScoresByModel(sql, eligibleRows);
+  const outcomeScoresByModel = await loadOutcomeScoresByModel(sql, hiveId, eligibleRows);
 
   const models: ModelRoutingRegistryRow[] = [];
-  for (const row of collapsedRows) {
+  for (const row of eligibleRows) {
     const healthFingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
@@ -268,6 +270,11 @@ export async function loadModelRoutingView(
     basePolicyState,
     profiles: MODEL_ROUTING_PROFILES,
   };
+}
+
+function isRetiredGeminiRoutingRow(row: Pick<HiveModelRegistryRow, "adapter_type" | "model_id">): boolean {
+  return row.adapter_type.trim().toLowerCase() === "gemini" &&
+    isRetiredGeminiG1Model(row.model_id);
 }
 
 function buildCanonicalRouteCandidates(models: ModelRoutingRegistryRow[]): ModelRoutingPolicy["candidates"] {

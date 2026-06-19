@@ -78,8 +78,8 @@ describe("provider model discovery adapters", () => {
 
   it("discovers Gemini models from the public docs catalog", async () => {
     const { calls, fetchFn } = fakeFetch(`
-      <td><code>gemini-2.5-flash</code></td>
-      <td>Gemini 2.5 Flash</td>
+      <td><code>gemini-3.1-flash-lite</code></td>
+      <td>Gemini 3.1 Flash Lite</td>
       <td><code>imagen-4.0-generate-preview</code></td>
     `);
 
@@ -93,8 +93,8 @@ describe("provider model discovery adapters", () => {
       {
         provider: "google",
         adapterType: "gemini",
-        modelId: "google/gemini-2.5-flash",
-        displayName: "Gemini 2.5 Flash",
+        modelId: "google/gemini-3.1-flash-lite",
+        displayName: "Gemini 3.1 Flash Lite",
         family: "gemini",
         capabilities: ["text", "code"],
         local: false,
@@ -106,43 +106,40 @@ describe("provider model discovery adapters", () => {
 
   it("infers Gemini reasoning models from public docs names", async () => {
     const { fetchFn } = fakeFetch(`
-      gemini-2.5-pro
+      gemini-4-reasoning
       gemini-tokenizer
-      gemini-2.5-flash-lite
+      gemini-3.1-flash-lite
     `);
 
     const models = await discoverGeminiModels({ apiKey: "gemini-key", fetch: fetchFn });
 
     expect(models).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        modelId: "google/gemini-2.5-pro",
+        modelId: "google/gemini-4-reasoning",
         capabilities: ["text", "code", "reasoning"],
       }),
       expect.objectContaining({
-        modelId: "google/gemini-2.5-flash-lite",
+        modelId: "google/gemini-3.1-flash-lite",
         capabilities: ["text", "code"],
       }),
     ]));
   });
 
-  it("excludes Gemini preview and retired 2.0 IDs from public docs discovery", async () => {
+  it("retires the G1 Gemini route family while keeping current non-G1 Gemini models discoverable", async () => {
     const { fetchFn } = fakeFetch(`
-      gemini-2.5-pro
       gemini-2.5-flash
-      gemini-2.5-flash-lite
-      gemini-3-flash-preview
-      gemini-3.1-pro-preview
-      gemini-2.0-flash
-      gemini-2.0-flash-lite
-      gemini-2.0-pro-exp-02-05
+      gemini-3.1-pro
+      gemini-3.1-flash-lite
+      gemini-3.5
+      gemini-3.5-flash
     `);
 
     const models = await discoverGeminiModels({ apiKey: "gemini-key", fetch: fetchFn });
 
     expect(models.map((model) => model.modelId)).toEqual([
-      "google/gemini-2.5-flash",
-      "google/gemini-2.5-flash-lite",
-      "google/gemini-2.5-pro",
+      "google/gemini-3.1-flash-lite",
+      "google/gemini-3.5",
+      "google/gemini-3.5-flash",
     ]);
   });
 
@@ -310,7 +307,11 @@ describe("provider model discovery adapters", () => {
 
     const models = await discoverGeminiModels({ fetch: fetchFn });
 
-    expect(models.map((model) => model.modelId)).toContain("google/gemini-2.5-flash");
+    expect(models.map((model) => model.modelId)).toEqual([
+      "google/gemini-3.1-flash-lite",
+      "google/gemini-3.5",
+      "google/gemini-3.5-flash",
+    ]);
     expect(models[0]?.metadataSourceName).toBe("Gemini static model fallback");
   });
 

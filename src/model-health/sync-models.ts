@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { upsertModelCatalogEntry } from "@/model-catalog/catalog";
+import { isRetiredGeminiG1Model } from "@/model-routing/gemini-route-family";
 import { AUTO_MODEL_ROUTE } from "@/model-routing/selector";
 import { canonicalModelIdForAdapter } from "./model-identity";
 
@@ -196,6 +197,7 @@ function isUnsupportedModelHealthCandidate(adapterType: string, modelId: string)
 
   if (adapter === "openai-image") return true;
   if (model === "gpt-image-2" || model === "gpt-image-2-2026-04-21") return true;
+  if (adapter === "gemini" && isRetiredGeminiG1Model(model)) return true;
   if (model === "google/gemini-3.1-flash-live-preview" || model === "gemini-3.1-flash-live-preview") {
     return true;
   }

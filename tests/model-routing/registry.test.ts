@@ -368,6 +368,54 @@ describe("model routing registry view", () => {
     });
   });
 
+  it("does not project retired G1 Gemini routes into runtime candidates", async () => {
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        capabilities,
+        fallback_priority,
+        enabled
+      )
+      VALUES
+        (
+          ${HIVE_ID},
+          'google',
+          'google/gemini-2.5-flash',
+          'gemini',
+          '["text","code"]'::jsonb,
+          100,
+          false
+        ),
+        (
+          ${HIVE_ID},
+          'google',
+          'google/gemini-3.1-flash-lite',
+          'gemini',
+          '["text","code"]'::jsonb,
+          101,
+          true
+        )
+    `;
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+
+    expect(view.models).toHaveLength(1);
+    expect(view.models[0]).toMatchObject({
+      provider: "google",
+      adapterType: "gemini",
+      model: "google/gemini-3.1-flash-lite",
+    });
+    expect(view.policy.candidates).toEqual([
+      expect.objectContaining({
+        adapterType: "gemini",
+        model: "google/gemini-3.1-flash-lite",
+      }),
+    ]);
+  });
+
   it("adds recent internal outcome scores to routing candidates by classified task profile", async () => {
     await sql`
       INSERT INTO role_templates (slug, name, type, adapter_type)

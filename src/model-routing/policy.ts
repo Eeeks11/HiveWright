@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { isRetiredGeminiG1Model } from "./gemini-route-family";
 import type { ModelRoutingPolicy } from "./selector";
 
 export const MODEL_ROUTING_ADAPTER_CONFIG_TYPE = "model-routing";
@@ -89,6 +90,7 @@ export function normalizeModelRoutingPolicy(value: unknown): ModelRoutingPolicy 
         const adapterType = typeof item.adapterType === "string" ? item.adapterType.trim() : "";
         const model = typeof item.model === "string" ? item.model.trim() : "";
         if (!adapterType || !model) return [];
+        if (adapterType === "gemini" && isRetiredGeminiG1Model(model)) return [];
         return [{
           adapterType,
           model,
@@ -148,7 +150,8 @@ function normalizeRoleRoutes(value: unknown): ModelRoutingPolicy["roleRoutes"] {
   const out: NonNullable<ModelRoutingPolicy["roleRoutes"]> = {};
   for (const [roleSlug, raw] of Object.entries(value as Record<string, unknown>)) {
     if (!raw || typeof raw !== "object") continue;
-    const candidateModels = asStringArray((raw as Record<string, unknown>).candidateModels);
+    const candidateModels = asStringArray((raw as Record<string, unknown>).candidateModels)
+      ?.filter((model) => !isRetiredGeminiRoleCandidate(model));
     if (candidateModels) out[roleSlug] = { candidateModels };
   }
   return Object.keys(out).length > 0 ? out : undefined;
@@ -218,4 +221,8 @@ function asStringArray(value: unknown): string[] | undefined {
     .map((item) => item.trim())
     .filter(Boolean);
   return strings.length > 0 ? strings : undefined;
+}
+
+function isRetiredGeminiRoleCandidate(model: string): boolean {
+  return model.includes("gemini") && isRetiredGeminiG1Model(model);
 }

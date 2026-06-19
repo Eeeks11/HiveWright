@@ -1,5 +1,6 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { supportedAutomaticGeminiFallbackModelNames } from "@/model-routing/gemini-route-family";
 import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type { DiscoveredModel } from "./types";
 
@@ -56,11 +57,7 @@ const STATIC_OPENAI_MODELS = [
   "o4-mini",
   "o3",
 ];
-const STATIC_GEMINI_MODELS = [
-  "gemini-2.5-pro",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-];
+const STATIC_GEMINI_MODELS = supportedAutomaticGeminiFallbackModelNames();
 const STATIC_ANTHROPIC_MODELS = [
   "claude-opus-4-7",
   "claude-opus-4-6",

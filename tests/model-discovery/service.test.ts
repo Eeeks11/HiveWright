@@ -59,10 +59,10 @@ describe("runModelDiscoveryImport", () => {
         {
           provider: "google",
           adapterType: "gemini",
-          modelId: "google/gemini-2.5-pro",
-          displayName: "Gemini 2.5 Pro",
+          modelId: "google/gemini-3.1-flash-lite",
+          displayName: "Gemini 3.1 Flash Lite",
           family: "gemini",
-          capabilities: ["text", "code", "reasoning"],
+          capabilities: ["text", "code"],
           local: false,
         },
         {
@@ -102,8 +102,8 @@ describe("runModelDiscoveryImport", () => {
     expect(result.modelsSeen).toBe(3);
     expect(result.modelsImported).toBe(1);
     expect(result.modelsAutoEnabled).toBe(1);
-    expect(catalogRows.map((row) => row.model_id)).toEqual(["google/gemini-2.5-pro"]);
-    expect(hiveRows).toEqual([{ model_id: "google/gemini-2.5-pro", enabled: true }]);
+    expect(catalogRows.map((row) => row.model_id)).toEqual(["google/gemini-3.1-flash-lite"]);
+    expect(hiveRows).toEqual([{ model_id: "google/gemini-3.1-flash-lite", enabled: true }]);
   });
 
   it("auto-enables newly discovered code-only models", async () => {
@@ -446,6 +446,108 @@ describe("runModelDiscoveryImport", () => {
 
     expect(result.modelsMarkedStale).toBe(1);
     expect(row.stale_since).toBeInstanceOf(Date);
+  });
+
+  it("does not re-import or retain the retired G1 Gemini route family", async () => {
+    await seedHive();
+    await sql`
+      INSERT INTO model_catalog (
+        provider,
+        adapter_type,
+        model_id,
+        display_name,
+        family,
+        capabilities,
+        local,
+        discovery_source,
+        first_seen_at,
+        last_seen_at,
+        updated_at
+      )
+      VALUES (
+        'google',
+        'gemini',
+        'google/gemini-2.5-flash',
+        'Gemini 2.5 Flash',
+        'gemini',
+        '["text","code"]'::jsonb,
+        false,
+        'gemini_public_model_docs',
+        NOW(),
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (provider, adapter_type, model_id) DO UPDATE
+        SET updated_at = NOW()
+    `;
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        adapter_type,
+        model_id,
+        enabled,
+        auto_discovered,
+        last_seen_at,
+        updated_at
+      )
+      VALUES (
+        ${HIVE_ID},
+        'google',
+        'gemini',
+        'google/gemini-2.5-flash',
+        false,
+        true,
+        NOW(),
+        NOW()
+      )
+    `;
+
+    const result = await runModelDiscoveryImport(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "gemini",
+      provider: "google",
+      source: "gemini_public_model_docs",
+      models: [
+        {
+          provider: "google",
+          adapterType: "gemini",
+          modelId: "google/gemini-2.5-flash",
+          displayName: "Gemini 2.5 Flash",
+          family: "gemini",
+          capabilities: ["text", "code"],
+          local: false,
+        },
+        {
+          provider: "google",
+          adapterType: "gemini",
+          modelId: "google/gemini-3.1-flash-lite",
+          displayName: "Gemini 3.1 Flash Lite",
+          family: "gemini",
+          capabilities: ["text", "code"],
+          local: false,
+        },
+      ],
+    });
+
+    const rows = await sql<{ model_id: string; auto_discovered: boolean }[]>`
+      SELECT model_id, auto_discovered
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+      ORDER BY model_id ASC
+    `;
+
+    expect(result).toMatchObject({
+      modelsSeen: 2,
+      modelsImported: 1,
+      modelsAutoEnabled: 1,
+    });
+    expect(rows).toEqual([
+      {
+        model_id: "google/gemini-3.1-flash-lite",
+        auto_discovered: true,
+      },
+    ]);
   });
 });
 

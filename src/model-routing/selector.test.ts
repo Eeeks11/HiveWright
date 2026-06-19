@@ -106,6 +106,44 @@ describe("normalizeModelRoutingPolicy", () => {
     expect(policy?.candidates[0]?.qualityScore).toBeUndefined();
     expect(policy?.candidates[0]?.costScore).toBeUndefined();
   });
+
+  it("strips the retired G1 Gemini route family from legacy candidate arrays and role allowlists", () => {
+    const policy = normalizeModelRoutingPolicy({
+      candidates: [
+        {
+          adapterType: "gemini",
+          model: "google/gemini-2.5-flash",
+          enabled: false,
+        },
+        {
+          adapterType: "gemini",
+          model: "google/gemini-3.1-flash-lite",
+          enabled: true,
+        },
+      ],
+      roleRoutes: {
+        "writer-agent": {
+          candidateModels: [
+            "google/gemini-2.5-flash",
+            "google/gemini-3.1-flash-lite",
+          ],
+        },
+      },
+    });
+
+    expect(policy?.candidates).toEqual([
+      expect.objectContaining({
+        adapterType: "gemini",
+        model: "google/gemini-3.1-flash-lite",
+        enabled: true,
+      }),
+    ]);
+    expect(policy?.roleRoutes).toEqual({
+      "writer-agent": {
+        candidateModels: ["google/gemini-3.1-flash-lite"],
+      },
+    });
+  });
 });
 
 describe("resolveConfiguredModelRoute", () => {
