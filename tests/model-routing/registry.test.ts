@@ -285,6 +285,89 @@ describe("model routing registry view", () => {
       .toBe("openai:codex:openai-codex/gpt-5.5");
   });
 
+  it("excludes OpenAI Codex routes with non-retryable scope failures from the canonical automatic pool", async () => {
+    const fingerprint = createRuntimeCredentialFingerprint({
+      provider: "openai",
+      adapterType: "codex",
+      baseUrl: null,
+    });
+    const scopeBlockedModels = Array.from({ length: 43 }, (_, index) => (
+      `openai-codex/of-scope-blocked-${String(index + 1).padStart(2, "0")}`
+    ));
+    const retainedModel = "openai-codex/gpt-5.5";
+
+    for (const [index, modelId] of [...scopeBlockedModels, retainedModel].entries()) {
+      await sql`
+        INSERT INTO hive_models (
+          hive_id,
+          provider,
+          model_id,
+          adapter_type,
+          capabilities,
+          fallback_priority,
+          enabled
+        )
+        VALUES (
+          ${HIVE_ID},
+          'openai',
+          ${modelId},
+          'codex',
+          '["text","code"]'::jsonb,
+          ${100 + index},
+          true
+        )
+      `;
+    }
+
+    for (const modelId of scopeBlockedModels) {
+      await sql`
+        INSERT INTO model_health (
+          fingerprint,
+          model_id,
+          status,
+          last_failure_reason
+        )
+        VALUES (
+          ${fingerprint},
+          ${modelId},
+          'unhealthy',
+          ${JSON.stringify({ failureClass: "scope", message: "model entitlement denied" })}
+        )
+      `;
+    }
+    await sql`
+      INSERT INTO model_health (fingerprint, model_id, status, latency_ms)
+      VALUES (${fingerprint}, ${retainedModel}, 'healthy', 1400)
+    `;
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+    const scopeBlockedCandidates = view.basePolicyState.policy?.candidates.filter((candidate) => (
+      scopeBlockedModels.includes(candidate.model)
+    ));
+    const retainedCandidate = view.basePolicyState.policy?.candidates.find((candidate) => (
+      candidate.model === retainedModel
+    ));
+
+    expect(scopeBlockedCandidates).toHaveLength(43);
+    expect(scopeBlockedCandidates).toEqual(scopeBlockedModels.map((modelId) => expect.objectContaining({
+      adapterType: "codex",
+      model: modelId,
+      enabled: false,
+      status: "disabled",
+      canonicalRouteSet: expect.objectContaining({
+        membership: "excluded",
+        routeKey: `openai:codex:${modelId}`,
+        reason: expect.stringContaining("scope/model-entitlement failure"),
+      }),
+    })));
+    expect(retainedCandidate).toMatchObject({
+      adapterType: "codex",
+      model: retainedModel,
+      enabled: true,
+      canonicalRouteSet: expect.objectContaining({ membership: "included" }),
+    });
+  });
+
   it("adds recent internal outcome scores to routing candidates by classified task profile", async () => {
     await sql`
       INSERT INTO role_templates (slug, name, type, adapter_type)
