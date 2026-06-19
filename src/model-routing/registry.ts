@@ -292,6 +292,7 @@ function buildCanonicalRouteCandidates(models: ModelRoutingRegistryRow[]): Model
 }
 
 function canonicalMembershipForModel(model: ModelRoutingRegistryRow): NonNullable<ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"]>["membership"] {
+  if (isRetiredAnthropicClaudeCodeRoute(model)) return "excluded";
   if (!model.hiveModelEnabled || !model.routingEnabled) return "intentionally_disabled";
   if (isCodexScopeBlockedRoute(model)) return "excluded";
   if (model.probeMode === "on_demand") return "excluded";
@@ -309,6 +310,9 @@ function canonicalMembershipReason(
         ? "Hive model route is disabled in the configured inventory."
         : "Route override intentionally disables this configured route.";
     case "excluded":
+      if (isRetiredAnthropicClaudeCodeRoute(model)) {
+        return "Disabled Anthropic claude-code routes are retired from the canonical automatic route pool unless an owner explicitly re-enables one with a support/recovery path.";
+      }
       if (isCodexScopeBlockedRoute(model)) {
         return "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.";
       }
@@ -318,6 +322,12 @@ function canonicalMembershipReason(
     case "included":
       return "Route is included in the canonical automatic route pool.";
   }
+}
+
+function isRetiredAnthropicClaudeCodeRoute(model: ModelRoutingRegistryRow): boolean {
+  return model.provider.trim().toLowerCase() === "anthropic" &&
+    model.adapterType.trim().toLowerCase() === "claude-code" &&
+    (!model.hiveModelEnabled || !model.routingEnabled);
 }
 
 function isCodexScopeBlockedRoute(model: ModelRoutingRegistryRow): boolean {

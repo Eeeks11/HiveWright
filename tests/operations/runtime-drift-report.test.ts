@@ -244,6 +244,45 @@ describe("runtime drift report builder", () => {
     expect(drift.driftReasons.join("\n")).toContain("configured hive model inventory");
   });
 
+  it("excludes retired Anthropic claude-code routes from blocked automatic-route debt", () => {
+    const view = routingView({ declared: 0, runtime: 2 });
+    view.models[0].provider = "anthropic";
+    view.models[0].adapterType = "claude-code";
+    view.models[0].model = "anthropic/claude-disabled-01";
+    view.models[0].routeKey = "anthropic:claude-code:anthropic/claude-disabled-01";
+    view.models[0].hiveModelEnabled = false;
+    view.models[0].routingEnabled = false;
+    view.models[0].status = "unhealthy";
+    view.models[0].probeFreshness = "due";
+    view.policy.candidates[0] = {
+      adapterType: "claude-code",
+      model: "anthropic/claude-disabled-01",
+      enabled: false,
+      status: "disabled",
+      probeFreshness: "due",
+      canonicalRouteSet: {
+        source: "configured_route_inventory",
+        membership: "excluded",
+        routeKey: "anthropic:claude-code:anthropic/claude-disabled-01",
+        reason: "retired from the canonical automatic route pool",
+      },
+    };
+
+    const drift = buildRuntimeRouteDriftReport(view, heartbeat("fresh"));
+
+    expect(drift).toMatchObject({
+      blockedRoutes: 0,
+      staleRoutes: 0,
+      freshRoutes: 1,
+      staleRecovery: {
+        staleRoutes: 0,
+        automaticProbeRoutes: 1,
+        recoveryEligibleRoutes: 0,
+      },
+    });
+    expect(drift.driftReasons.join("\n")).not.toContain("blocked or disabled");
+  });
+
   it("excludes on-demand unprobed routes from unknown-health and stale debt", () => {
     const view = routingView({ declared: 0, runtime: 2 });
     view.models[0].status = "unknown";

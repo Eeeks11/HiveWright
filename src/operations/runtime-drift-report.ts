@@ -155,16 +155,26 @@ export function buildRuntimeRouteDriftReport(
     : configuredRouteInventory > 0
       ? "No explicit model-routing policy candidates exist, so telemetry declares the configured hive model inventory as the route pool expected to regain broader usable capacity."
       : "No explicit policy candidates or configured hive model routes exist; the route pool is intentionally empty until models are configured.";
-  const blockedRoutes = view.models.filter((model) => (
+  const policyCandidatesByRoute = new Map(view.policy.candidates.map((candidate) => [
+    `${candidate.adapterType}:${candidate.model}`,
+    candidate,
+  ]));
+  const isExpectedAutomaticRoute = (model: ModelRoutingView["models"][number]): boolean => {
+    const candidate = policyCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
+    const membership = candidate?.canonicalRouteSet?.membership;
+    return membership !== "excluded" && membership !== "intentionally_disabled";
+  };
+  const expectedAutomaticModels = view.models.filter(isExpectedAutomaticRoute);
+  const blockedRoutes = expectedAutomaticModels.filter((model) => (
     !model.hiveModelEnabled || !model.routingEnabled || !hasFreshHealthyRouteEvidence(model)
   )).length;
-  const quarantinedRoutes = view.models.filter((model) => model.failureClass === "quarantined").length;
-  const staleRoutes = view.models.filter((model) => model.probeFreshness === "due" && model.probeMode === "automatic").length;
-  const freshRoutes = view.models.filter((model) => model.probeFreshness === "fresh").length;
-  const unknownHealthRoutes = view.models.filter((model) => model.status === "unknown" && model.probeMode === "automatic").length;
-  const onDemandUnknownHealthRoutes = view.models.filter((model) => model.status === "unknown" && model.probeMode === "on_demand").length;
-  const automaticProbeRoutes = view.models.filter((model) => model.probeMode === "automatic").length;
-  const recoveryEligibleRoutes = view.models.filter((model) => (
+  const quarantinedRoutes = expectedAutomaticModels.filter((model) => model.failureClass === "quarantined").length;
+  const staleRoutes = expectedAutomaticModels.filter((model) => model.probeFreshness === "due" && model.probeMode === "automatic").length;
+  const freshRoutes = expectedAutomaticModels.filter((model) => model.probeFreshness === "fresh").length;
+  const unknownHealthRoutes = expectedAutomaticModels.filter((model) => model.status === "unknown" && model.probeMode === "automatic").length;
+  const onDemandUnknownHealthRoutes = expectedAutomaticModels.filter((model) => model.status === "unknown" && model.probeMode === "on_demand").length;
+  const automaticProbeRoutes = expectedAutomaticModels.filter((model) => model.probeMode === "automatic").length;
+  const recoveryEligibleRoutes = expectedAutomaticModels.filter((model) => (
     model.probeFreshness === "due" && model.probeMode === "automatic" && model.hiveModelEnabled && model.routingEnabled
   )).length;
   const driftReasons: string[] = [];
