@@ -368,6 +368,63 @@ describe("model routing registry view", () => {
     });
   });
 
+  it("retires disabled Anthropic claude-code routes from the canonical automatic pool", async () => {
+    const disabledAnthropicModels = Array.from({ length: 17 }, (_, index) => (
+      `anthropic/claude-disabled-${String(index + 1).padStart(2, "0")}`
+    ));
+    const retainedModel = "anthropic/claude-sonnet-4-6";
+
+    for (const [index, modelId] of [...disabledAnthropicModels, retainedModel].entries()) {
+      await sql`
+        INSERT INTO hive_models (
+          hive_id,
+          provider,
+          model_id,
+          adapter_type,
+          capabilities,
+          fallback_priority,
+          enabled
+        )
+        VALUES (
+          ${HIVE_ID},
+          'anthropic',
+          ${modelId},
+          'claude-code',
+          '["text","code","reasoning"]'::jsonb,
+          ${100 + index},
+          ${modelId === retainedModel}
+        )
+      `;
+    }
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+    const disabledCandidates = view.basePolicyState.policy?.candidates.filter((candidate) => (
+      disabledAnthropicModels.includes(candidate.model)
+    ));
+    const retainedCandidate = view.basePolicyState.policy?.candidates.find((candidate) => (
+      candidate.model === retainedModel
+    ));
+
+    expect(disabledCandidates).toHaveLength(17);
+    expect(disabledCandidates).toEqual(disabledAnthropicModels.map((modelId) => expect.objectContaining({
+      adapterType: "claude-code",
+      model: modelId,
+      enabled: false,
+      status: "disabled",
+      canonicalRouteSet: expect.objectContaining({
+        membership: "excluded",
+        routeKey: `anthropic:claude-code:${modelId}`,
+        reason: expect.stringContaining("retired from the canonical automatic route pool"),
+      }),
+    })));
+    expect(retainedCandidate).toMatchObject({
+      adapterType: "claude-code",
+      model: retainedModel,
+      enabled: true,
+      canonicalRouteSet: expect.objectContaining({ membership: "included" }),
+    });
+  });
+
   it("adds recent internal outcome scores to routing candidates by classified task profile", async () => {
     await sql`
       INSERT INTO role_templates (slug, name, type, adapter_type)
