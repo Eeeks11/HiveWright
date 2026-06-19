@@ -7,6 +7,10 @@ import type {
   ModelDiscoveryImportInput,
   ModelDiscoveryImportResult,
 } from "./types";
+import {
+  isSupportedAutomaticCodexModel,
+  supportedAutomaticCodexModelIds,
+} from "./codex-candidate-policy";
 
 interface DiscoveryRunRow {
   id: string;
@@ -140,6 +144,13 @@ async function runModelDiscoveryImportInTransaction(
     runId: run.id,
     modelIds,
   });
+  await retireUnsupportedOpenAiCodexDiscoveryRows(sql, {
+    hiveId: input.hiveId,
+    provider,
+    adapterType,
+    source: input.source,
+    modelIds,
+  });
 
   await sql`
     UPDATE model_discovery_runs
@@ -162,7 +173,15 @@ async function runModelDiscoveryImportInTransaction(
 }
 
 export function shouldAutoEnable(model: DiscoveredModel): boolean {
-  return model.capabilities.some((capability) => {
+  if (model.provider.trim().toLowerCase() === "openai" && model.adapterType.trim().toLowerCase() === "codex") {
+    return isSupportedAutomaticCodexModel(model.modelId) && hasAutoEnableCapabilities(model.capabilities);
+  }
+
+  return hasAutoEnableCapabilities(model.capabilities);
+}
+
+function hasAutoEnableCapabilities(capabilities: string[]): boolean {
+  return capabilities.some((capability) => {
     const normalized = capability.trim().toLowerCase();
     return normalized === "text" || normalized === "code";
   });
@@ -355,6 +374,43 @@ function normalizeModel(model: DiscoveredModel): NormalizedDiscoveredModel {
     metadataSourceName: model.metadataSourceName ?? null,
     metadataSourceUrl: model.metadataSourceUrl ?? null,
   };
+}
+
+async function retireUnsupportedOpenAiCodexDiscoveryRows(
+  sql: SqlExecutor,
+  input: {
+    hiveId: string;
+    provider: string;
+    adapterType: string;
+    source: string;
+    modelIds: string[];
+  },
+): Promise<void> {
+  if (
+    input.provider !== "openai" ||
+    input.adapterType !== "codex" ||
+    input.source !== "openai_public_model_docs"
+  ) {
+    return;
+  }
+
+  const retainedModelIds = input.modelIds.length > 0
+    ? input.modelIds
+    : supportedAutomaticCodexModelIds();
+
+  await sql`
+    DELETE FROM hive_models hm
+    USING model_catalog mc
+    WHERE hm.hive_id = ${input.hiveId}
+      AND hm.provider = 'openai'
+      AND hm.adapter_type = 'codex'
+      AND hm.auto_discovered = true
+      AND hm.model_catalog_id = mc.id
+      AND mc.provider = 'openai'
+      AND mc.adapter_type = 'codex'
+      AND mc.discovery_source = 'openai_public_model_docs'
+      AND hm.model_id <> ALL(${retainedModelIds}::text[])
+  `;
 }
 
 async function upsertModelCatalog(

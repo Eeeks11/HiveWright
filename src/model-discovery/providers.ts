@@ -1,5 +1,6 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { isSupportedAutomaticCodexModel } from "./codex-candidate-policy";
 import type { DiscoveredModel } from "./types";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -40,19 +41,9 @@ const GEMINI_PUBLIC_MODELS_URL = "https://ai.google.dev/gemini-api/docs/models";
 const ANTHROPIC_PUBLIC_MODELS_URL = "https://docs.anthropic.com/en/docs/models-overview";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 const STATIC_OPENAI_MODELS = [
-  "gpt-5",
-  "gpt-5-mini",
-  "gpt-5-codex",
-  "gpt-5.1",
-  "gpt-5.1-codex",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
   "gpt-5.4",
-  "gpt-4.1",
-  "gpt-4.1-mini",
-  "o4-mini",
-  "o3",
+  "gpt-5.4-mini",
+  "gpt-5.5",
 ];
 const STATIC_GEMINI_MODELS = [
   "gemini-3.1-pro",
@@ -305,6 +296,7 @@ function extractOpenAiModelIds(text: string): string[] {
     .filter((id) => !/^gpt-4(?:-turbo(?:-preview)?|\.5(?:-preview)?)?$/.test(id))
     .filter((id) => !/(?:image|ui)/.test(id))
     .filter((id) => !/^gpt-\d-\d$/.test(id))
+    .filter((id) => isSupportedAutomaticCodexModel(id))
     .filter((id) => inferOpenAiCapabilities(id).length > 0);
 }
 

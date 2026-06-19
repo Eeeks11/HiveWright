@@ -47,7 +47,7 @@ describe("runModelDiscoveryImport", () => {
     expect(row.owner_disabled_at).toBeNull();
   });
 
-  it("auto-enables newly discovered code-only models", async () => {
+  it("auto-enables newly discovered supported code-only codex models", async () => {
     await seedHive();
 
     const result = await runModelDiscoveryImport(sql, {
@@ -58,9 +58,9 @@ describe("runModelDiscoveryImport", () => {
       models: [{
         provider: "openai",
         adapterType: "codex",
-        modelId: "openai-codex/gpt-code",
-        displayName: "GPT Code",
-        family: "gpt",
+        modelId: "openai-codex/gpt-5.5",
+        displayName: "GPT-5.5",
+        family: "gpt-5",
         capabilities: [" CODE "],
         local: false,
       }],
@@ -70,12 +70,44 @@ describe("runModelDiscoveryImport", () => {
       SELECT enabled, owner_disabled_at
       FROM hive_models
       WHERE hive_id = ${HIVE_ID}
-        AND model_id = 'openai-codex/gpt-code'
+        AND model_id = 'openai-codex/gpt-5.5'
     `;
 
     expect(result.modelsImported).toBe(1);
     expect(result.modelsAutoEnabled).toBe(1);
     expect(row.enabled).toBe(true);
+    expect(row.owner_disabled_at).toBeNull();
+  });
+
+  it("does not auto-enable newly discovered unsupported codex models", async () => {
+    await seedHive();
+
+    const result = await runModelDiscoveryImport(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "codex",
+      provider: "openai",
+      source: "openai_models_api",
+      models: [{
+        provider: "openai",
+        adapterType: "codex",
+        modelId: "openai-codex/gpt-5.1-codex",
+        displayName: "GPT-5.1 Codex",
+        family: "gpt-5",
+        capabilities: ["code"],
+        local: false,
+      }],
+    });
+
+    const [row] = await sql<{ enabled: boolean; owner_disabled_at: Date | null }[]>`
+      SELECT enabled, owner_disabled_at
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+        AND model_id = 'openai-codex/gpt-5.1-codex'
+    `;
+
+    expect(result.modelsImported).toBe(1);
+    expect(result.modelsAutoEnabled).toBe(0);
+    expect(row.enabled).toBe(false);
     expect(row.owner_disabled_at).toBeNull();
   });
 
@@ -387,6 +419,79 @@ describe("runModelDiscoveryImport", () => {
 
     expect(result.modelsMarkedStale).toBe(1);
     expect(row.stale_since).toBeInstanceOf(Date);
+  });
+
+  it("removes stale auto-discovered codex routes that disappear from the supported discovery set", async () => {
+    await seedHive();
+    await runModelDiscoveryImport(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "codex",
+      provider: "openai",
+      source: "openai_public_model_docs",
+      models: [
+        {
+          provider: "openai",
+          adapterType: "codex",
+          modelId: "openai-codex/gpt-5.5",
+          displayName: "GPT-5.5",
+          family: "gpt-5",
+          capabilities: ["text", "code", "reasoning"],
+          local: false,
+        },
+        {
+          provider: "openai",
+          adapterType: "codex",
+          modelId: "openai-codex/gpt-5.1-codex",
+          displayName: "GPT-5.1 Codex",
+          family: "gpt-5",
+          capabilities: ["text", "code", "reasoning"],
+          local: false,
+        },
+      ],
+    });
+
+    const result = await runModelDiscoveryImport(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "codex",
+      provider: "openai",
+      source: "openai_public_model_docs",
+      models: [
+        {
+          provider: "openai",
+          adapterType: "codex",
+          modelId: "openai-codex/gpt-5.5",
+          displayName: "GPT-5.5",
+          family: "gpt-5",
+          capabilities: ["text", "code", "reasoning"],
+          local: false,
+        },
+      ],
+    });
+
+    const [removedHiveModel] = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+        AND model_id = 'openai-codex/gpt-5.1-codex'
+    `;
+    const [retiredCatalogRow] = await sql<{ stale_since: Date | null }[]>`
+      SELECT stale_since
+      FROM model_catalog
+      WHERE provider = 'openai'
+        AND adapter_type = 'codex'
+        AND model_id = 'openai-codex/gpt-5.1-codex'
+    `;
+    const [remainingSupportedHiveModel] = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM hive_models
+      WHERE hive_id = ${HIVE_ID}
+        AND model_id = 'openai-codex/gpt-5.5'
+    `;
+
+    expect(result.modelsMarkedStale).toBe(1);
+    expect(removedHiveModel.count).toBe("0");
+    expect(retiredCatalogRow.stale_since).toBeInstanceOf(Date);
+    expect(remainingSupportedHiveModel.count).toBe("1");
   });
 });
 

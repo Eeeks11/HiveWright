@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { isSupportedAutomaticCodexModel } from "@/model-discovery/codex-candidate-policy";
 import { upsertModelCatalogEntry } from "@/model-catalog/catalog";
 import { AUTO_MODEL_ROUTE } from "@/model-routing/selector";
 import { canonicalModelIdForAdapter } from "./model-identity";
@@ -194,6 +195,7 @@ function isUnsupportedModelHealthCandidate(adapterType: string, modelId: string)
   const adapter = adapterType.toLowerCase();
   const model = modelId.toLowerCase();
 
+  if (adapter === "codex" && !isSupportedAutomaticCodexModel(modelId)) return true;
   if (adapter === "openai-image") return true;
   if (model === "gpt-image-2" || model === "gpt-image-2-2026-04-21") return true;
   if (model === "google/gemini-3.1-flash-live-preview" || model === "gemini-3.1-flash-live-preview") {

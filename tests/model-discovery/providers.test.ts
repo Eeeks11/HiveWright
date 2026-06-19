@@ -50,29 +50,54 @@ describe("provider model discovery adapters", () => {
       {
         provider: "openai",
         adapterType: "codex",
-        modelId: "openai-codex/gpt-5.6",
-        displayName: "gpt-5.6",
+        modelId: "openai-codex/gpt-5.4",
+        displayName: "gpt-5.4",
         family: "gpt",
         capabilities: ["text", "code", "reasoning"],
         local: false,
-        metadataSourceName: "OpenAI public model docs",
-        metadataSourceUrl: "https://developers.openai.com/api/docs/models/all/",
+        metadataSourceName: "OpenAI static model fallback",
+        metadataSourceUrl: null,
+      },
+      {
+        provider: "openai",
+        adapterType: "codex",
+        modelId: "openai-codex/gpt-5.4-mini",
+        displayName: "gpt-5.4-mini",
+        family: "gpt",
+        capabilities: ["text", "code", "reasoning"],
+        local: false,
+        metadataSourceName: "OpenAI static model fallback",
+        metadataSourceUrl: null,
+      },
+      {
+        provider: "openai",
+        adapterType: "codex",
+        modelId: "openai-codex/gpt-5.5",
+        displayName: "gpt-5.5",
+        family: "gpt",
+        capabilities: ["text", "code", "reasoning"],
+        local: false,
+        metadataSourceName: "OpenAI static model fallback",
+        metadataSourceUrl: null,
       },
     ]);
   });
 
   it("skips OpenAI models that are not usable by the Codex adapter", async () => {
     const { fetchFn } = fakeFetch(`
-      gpt-5.6 tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
-      gpt-realtime computer-use-preview gpt-5.6.png chatgpt chatgpt-ui chatgpt-image-latest gpt-5-4
+      gpt-5.5 gpt-5.4 gpt-5.4-mini gpt-5.6 gpt-5.5-pro gpt-5-mini
+      gpt-5-codex gpt-5.1-codex gpt-5.1-codex-max gpt-5.2-codex gpt-5.3-codex
+      gpt-5.3-codex-spark tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
+      gpt-realtime computer-use-preview gpt-5.6.png chatgpt chatgpt-ui chatgpt-image-latest
       gpt gpt-3 gpt-3.5-turbo gpt-4 gpt-4-turbo gpt-4.5 chatgpt-4o chatgpt-4o-latest
     `);
 
     const models = await discoverOpenAiModels({ apiKey: "openai-key", fetch: fetchFn });
 
     expect(models.map((model) => model.modelId)).toEqual([
-      "chatgpt-4o-latest",
-      "openai-codex/gpt-5.6",
+      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.4-mini",
+      "openai-codex/gpt-5.5",
     ]);
   });
 
@@ -273,7 +298,11 @@ describe("provider model discovery adapters", () => {
           method: "GET",
         }),
       });
-      expect(models.map((model) => model.modelId)).toEqual(["openai-codex/gpt-5.6"]);
+      expect(models.map((model) => model.modelId)).toEqual([
+        "openai-codex/gpt-5.4",
+        "openai-codex/gpt-5.4-mini",
+        "openai-codex/gpt-5.5",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       if (originalKey === undefined) {
@@ -298,7 +327,11 @@ describe("provider model discovery adapters", () => {
 
     const models = await discoverOpenAiModels({ fetch: fetchFn });
 
-    expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5");
+    expect(models.map((model) => model.modelId)).toEqual([
+      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.4-mini",
+      "openai-codex/gpt-5.5",
+    ]);
     expect(models[0]?.metadataSourceName).toBe("OpenAI static model fallback");
   });
 });

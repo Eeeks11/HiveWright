@@ -67,6 +67,7 @@ export const OUT_OF_JOURNAL_MIGRATIONS = [
   "0082_hive_runnable_pause.sql",
   "0126_creation_pause_resume_approval_guard.sql",
   "0127_fix_creation_pause_trigger_scope.sql",
+  "0133_sanitize_openai_codex_route_candidates.sql",
   "0096_voice_sessions_transport.sql",
   "0097_voice_ea_connector_rename.sql",
 ] as const;
