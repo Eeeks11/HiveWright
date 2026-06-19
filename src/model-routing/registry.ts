@@ -13,6 +13,7 @@ import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner"
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
 import {
   loadModelRoutingPolicyState,
+  saveModelRoutingPolicy,
   type ModelRoutingPolicyState,
 } from "./policy";
 import { MODEL_ROUTING_PROFILES } from "./profiles";
@@ -125,7 +126,7 @@ export async function loadModelRoutingView(
   sql: Sql,
   hiveId: string,
 ): Promise<ModelRoutingView> {
-  const basePolicyState = await loadModelRoutingPolicyState(sql, hiveId);
+  let basePolicyState = await loadModelRoutingPolicyState(sql, hiveId);
   const basePolicy = basePolicyState.policy;
   const modelRows = await sql<HiveModelRegistryRow[]>`
     SELECT
@@ -216,28 +217,122 @@ export async function loadModelRoutingView(
     });
   }
 
+  const canonicalCandidates = buildCanonicalRouteCandidates(models);
+  if (canonicalCandidates.length > 0 && !sameCanonicalRouteCandidates(basePolicyState.policy?.candidates ?? [], canonicalCandidates)) {
+    const persistedPolicy: ModelRoutingPolicy = {
+      preferences: basePolicyState.policy?.preferences,
+      routeOverrides: basePolicyState.policy?.routeOverrides,
+      roleRoutes: basePolicyState.policy?.roleRoutes,
+      candidates: canonicalCandidates,
+    };
+    await saveModelRoutingPolicy(sql, hiveId, persistedPolicy);
+    basePolicyState = {
+      ...basePolicyState,
+      source: "hive",
+      policy: persistedPolicy,
+    };
+  }
+
+  const effectiveBasePolicy = basePolicyState.policy;
+  const canonicalCandidatesByRoute = new Map(
+    (effectiveBasePolicy?.candidates ?? []).map((candidate) => [
+      `${candidate.adapterType}:${candidate.model}`,
+      candidate,
+    ]),
+  );
+
   return {
     models,
     policy: {
-      preferences: basePolicy?.preferences,
-      routeOverrides: basePolicy?.routeOverrides,
-      roleRoutes: basePolicy?.roleRoutes,
-      candidates: models.map((model) => ({
-        adapterType: model.adapterType,
-        model: model.model,
-        enabled: model.hiveModelEnabled && model.routingEnabled,
-        status: model.status,
-        probeFreshness: model.probeFreshness === "unknown" ? undefined : model.probeFreshness,
-        qualityScore: model.qualityScore ?? undefined,
-        costScore: model.costScore ?? undefined,
-        capabilityScores: model.capabilityScores,
-        outcomeScores: model.outcomeScores,
-        local: model.local,
-        roleSlugs: model.roleSlugs.length > 0 ? model.roleSlugs : undefined,
-      })),
+      preferences: effectiveBasePolicy?.preferences,
+      routeOverrides: effectiveBasePolicy?.routeOverrides,
+      roleRoutes: effectiveBasePolicy?.roleRoutes,
+      candidates: models.map((model) => {
+        const canonicalCandidate = canonicalCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
+        return {
+          adapterType: model.adapterType,
+          model: model.model,
+          enabled: canonicalCandidate?.enabled ?? (model.hiveModelEnabled && model.routingEnabled),
+          status: canonicalCandidate?.status ?? model.status,
+          probeFreshness: model.probeFreshness === "unknown" ? undefined : model.probeFreshness,
+          qualityScore: model.qualityScore ?? undefined,
+          costScore: model.costScore ?? undefined,
+          capabilityScores: model.capabilityScores,
+          outcomeScores: model.outcomeScores,
+          local: model.local,
+          roleSlugs: model.roleSlugs.length > 0 ? model.roleSlugs : undefined,
+          canonicalRouteSet: canonicalCandidate?.canonicalRouteSet,
+        };
+      }),
     },
     basePolicyState,
     profiles: MODEL_ROUTING_PROFILES,
+  };
+}
+
+function buildCanonicalRouteCandidates(models: ModelRoutingRegistryRow[]): ModelRoutingPolicy["candidates"] {
+  return models.map((model) => {
+    const membership = canonicalMembershipForModel(model);
+    const enabled = membership === "included" || membership === "role_scoped";
+    return {
+      adapterType: model.adapterType,
+      model: model.model,
+      enabled,
+      status: enabled ? undefined : "disabled" as const,
+      roleSlugs: model.roleSlugs.length > 0 ? model.roleSlugs : undefined,
+      local: model.local,
+      canonicalRouteSet: {
+        source: "configured_route_inventory" as const,
+        membership,
+        routeKey: model.routeKey,
+        reason: canonicalMembershipReason(model, membership),
+      },
+    };
+  });
+}
+
+function canonicalMembershipForModel(model: ModelRoutingRegistryRow): NonNullable<ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"]>["membership"] {
+  if (!model.hiveModelEnabled || !model.routingEnabled) return "intentionally_disabled";
+  if (model.probeMode === "on_demand") return "excluded";
+  if (model.roleSlugs.length > 0) return "role_scoped";
+  return "included";
+}
+
+function canonicalMembershipReason(
+  model: ModelRoutingRegistryRow,
+  membership: NonNullable<ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"]>["membership"],
+): string {
+  switch (membership) {
+    case "intentionally_disabled":
+      return !model.hiveModelEnabled
+        ? "Hive model route is disabled in the configured inventory."
+        : "Route override intentionally disables this configured route.";
+    case "excluded":
+      return "Route uses on-demand probe policy, so it is excluded from the canonical automatic route pool.";
+    case "role_scoped":
+      return "Route is included only for the declared role scope.";
+    case "included":
+      return "Route is included in the canonical automatic route pool.";
+  }
+}
+
+function sameCanonicalRouteCandidates(
+  current: ModelRoutingPolicy["candidates"],
+  next: ModelRoutingPolicy["candidates"],
+): boolean {
+  return JSON.stringify(current.map(canonicalCandidateComparable)) ===
+    JSON.stringify(next.map(canonicalCandidateComparable));
+}
+
+function canonicalCandidateComparable(candidate: ModelRoutingPolicy["candidates"][number]) {
+  return {
+    adapterType: candidate.adapterType,
+    model: candidate.model,
+    enabled: candidate.enabled,
+    status: candidate.status,
+    roleSlugs: candidate.roleSlugs ?? [],
+    local: candidate.local,
+    canonicalRouteSet: candidate.canonicalRouteSet ?? null,
   };
 }
 

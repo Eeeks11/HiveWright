@@ -22,6 +22,12 @@ export interface ModelRoutingCandidate {
   roleSlugs?: string[];
   roleTypes?: string[];
   outcomeScores?: Partial<Record<ModelRoutingProfile, ModelRoutingOutcomeScore>>;
+  canonicalRouteSet?: {
+    source: "configured_route_inventory";
+    membership: "included" | "excluded" | "role_scoped" | "intentionally_disabled";
+    routeKey?: string;
+    reason?: string;
+  };
 }
 
 export interface ModelRoutingOutcomeScore {
