@@ -293,6 +293,7 @@ function buildCanonicalRouteCandidates(models: ModelRoutingRegistryRow[]): Model
 
 function canonicalMembershipForModel(model: ModelRoutingRegistryRow): NonNullable<ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"]>["membership"] {
   if (!model.hiveModelEnabled || !model.routingEnabled) return "intentionally_disabled";
+  if (isCodexScopeBlockedRoute(model)) return "excluded";
   if (model.probeMode === "on_demand") return "excluded";
   if (model.roleSlugs.length > 0) return "role_scoped";
   return "included";
@@ -308,12 +309,21 @@ function canonicalMembershipReason(
         ? "Hive model route is disabled in the configured inventory."
         : "Route override intentionally disables this configured route.";
     case "excluded":
+      if (isCodexScopeBlockedRoute(model)) {
+        return "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.";
+      }
       return "Route uses on-demand probe policy, so it is excluded from the canonical automatic route pool.";
     case "role_scoped":
       return "Route is included only for the declared role scope.";
     case "included":
       return "Route is included in the canonical automatic route pool.";
   }
+}
+
+function isCodexScopeBlockedRoute(model: ModelRoutingRegistryRow): boolean {
+  return model.provider.trim().toLowerCase() === "openai" &&
+    model.adapterType.trim().toLowerCase() === "codex" &&
+    model.failureClass === "scope";
 }
 
 function sameCanonicalRouteCandidates(
