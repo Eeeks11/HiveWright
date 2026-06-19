@@ -216,6 +216,75 @@ describe("model routing registry view", () => {
     expect(view.policy.candidates[0].roleSlugs).toBeUndefined();
   });
 
+  it("persists canonical route candidate metadata for configured automatic inventory", async () => {
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        capabilities,
+        enabled
+      )
+      VALUES
+        (${HIVE_ID}, 'openai', 'openai-codex/gpt-5.5', 'codex', '[]'::jsonb, true),
+        (${HIVE_ID}, 'openai', 'openai-image/gpt-image-1', 'openai-image', '["image"]'::jsonb, true),
+        (${HIVE_ID}, 'local', 'ollama/qwen3:32b', 'ollama', '[]'::jsonb, true),
+        (${HIVE_ID}, 'anthropic', 'claude-opus', 'anthropic', '[]'::jsonb, false)
+    `;
+
+    await saveModelRoutingPolicy(sql, HIVE_ID, {
+      routeOverrides: {
+        "local:ollama:ollama/qwen3:32b": {
+          roleSlugs: ["dev-agent"],
+        },
+      },
+      candidates: [],
+    });
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+
+    expect(view.basePolicyState.policy?.candidates).toHaveLength(4);
+    expect(view.basePolicyState.policy?.candidates).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        adapterType: "codex",
+        model: "openai-codex/gpt-5.5",
+        enabled: true,
+        canonicalRouteSet: expect.objectContaining({ membership: "included" }),
+      }),
+      expect.objectContaining({
+        adapterType: "openai-image",
+        model: "openai-image/gpt-image-1",
+        enabled: false,
+        canonicalRouteSet: expect.objectContaining({ membership: "excluded" }),
+      }),
+      expect.objectContaining({
+        adapterType: "ollama",
+        model: "ollama/qwen3:32b",
+        enabled: true,
+        roleSlugs: ["dev-agent"],
+        canonicalRouteSet: expect.objectContaining({ membership: "role_scoped" }),
+      }),
+      expect.objectContaining({
+        adapterType: "anthropic",
+        model: "claude-opus",
+        enabled: false,
+        canonicalRouteSet: expect.objectContaining({ membership: "intentionally_disabled" }),
+      }),
+    ]));
+
+    const persisted = await sql<{ config: { candidates?: unknown[] } }[]>`
+      SELECT config
+      FROM adapter_config
+      WHERE hive_id = ${HIVE_ID}
+        AND adapter_type = 'model-routing'
+      LIMIT 1
+    `;
+    expect(persisted[0].config.candidates).toHaveLength(4);
+    expect(view.policy.candidates.find((candidate) => candidate.model === "openai-codex/gpt-5.5")?.canonicalRouteSet?.routeKey)
+      .toBe("openai:codex:openai-codex/gpt-5.5");
+  });
+
   it("adds recent internal outcome scores to routing candidates by classified task profile", async () => {
     await sql`
       INSERT INTO role_templates (slug, name, type, adapter_type)

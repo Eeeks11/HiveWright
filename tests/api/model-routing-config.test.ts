@@ -131,7 +131,16 @@ describe("/api/model-routing", () => {
 
     const loaded = await loadModelRoutingPolicy(sql, HIVE_ID);
     expect(loaded?.preferences).toEqual({ costQualityBalance: 68 });
-    expect(loaded?.candidates).toEqual([]);
+    expect(loaded?.candidates[0]).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.5",
+      enabled: false,
+      canonicalRouteSet: {
+        source: "configured_route_inventory",
+        membership: "intentionally_disabled",
+        routeKey: "openai:codex:openai-codex/gpt-5.5",
+      },
+    });
     expect(loaded?.routeOverrides?.["openai:codex:openai-codex/gpt-5.5"]?.enabled).toBe(false);
 
     const getRes = await GET(new Request(`http://localhost/api/model-routing?hiveId=${HIVE_ID}`));
@@ -243,7 +252,14 @@ describe("/api/model-routing", () => {
     });
 
     const loaded = await loadModelRoutingPolicy(sql, HIVE_ID);
-    expect(loaded?.candidates).toEqual([]);
+    expect(loaded?.candidates[0]).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.5",
+      enabled: false,
+      canonicalRouteSet: {
+        membership: "intentionally_disabled",
+      },
+    });
   });
 
   it("returns all capability score sources per axis in routing models and candidates", async () => {

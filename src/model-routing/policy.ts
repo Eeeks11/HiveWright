@@ -99,6 +99,7 @@ export function normalizeModelRoutingPolicy(value: unknown): ModelRoutingPolicy 
           local: typeof item.local === "boolean" ? item.local : undefined,
           roleSlugs: asStringArray(item.roleSlugs),
           roleTypes: asStringArray(item.roleTypes),
+          canonicalRouteSet: normalizeCanonicalRouteSet(item.canonicalRouteSet),
         }];
       })
     : [];
@@ -179,6 +180,28 @@ function asCandidateStatus(value: unknown): "healthy" | "unknown" | "unhealthy" 
     value === "disabled"
     ? value
     : undefined;
+}
+
+function normalizeCanonicalRouteSet(value: unknown): ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"] {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  if (source.source !== "configured_route_inventory") return undefined;
+  const membership = source.membership;
+  if (
+    membership !== "included" &&
+    membership !== "excluded" &&
+    membership !== "role_scoped" &&
+    membership !== "intentionally_disabled"
+  ) return undefined;
+
+  const routeKey = typeof source.routeKey === "string" ? source.routeKey.trim() : "";
+  const reason = typeof source.reason === "string" ? source.reason.trim() : "";
+  return {
+    source: "configured_route_inventory",
+    membership,
+    routeKey: routeKey || undefined,
+    reason: reason || undefined,
+  };
 }
 
 function asNumber(value: unknown): number | undefined {
