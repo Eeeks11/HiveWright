@@ -325,6 +325,93 @@ describe("analyst telemetry summary", () => {
     });
   });
 
+  it("excludes stale excluded automatic routes from recoverable capacity", () => {
+    const view = routingView();
+    view.models = [
+      {
+        ...view.models[2],
+        id: "route-excluded-due",
+        routeKey: "openai:codex:excluded-due-model",
+        provider: "openai",
+        adapterType: "codex",
+        model: "excluded-due-model",
+        status: "unknown",
+        failureClass: "scope",
+        lastFailureReason: JSON.stringify({ failureClass: "scope", message: "fixture detail" }),
+        failureMessage: "fixture detail",
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-included-due",
+        routeKey: "anthropic:claude:included-due-model",
+        provider: "anthropic",
+        adapterType: "claude",
+        model: "included-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+    ];
+    view.policy.candidates = [
+      {
+        adapterType: "codex",
+        model: "excluded-due-model",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "excluded",
+          routeKey: "openai:codex:excluded-due-model",
+          reason: "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.",
+        },
+      },
+      {
+        adapterType: "claude",
+        model: "included-due-model",
+        enabled: true,
+        status: "unknown",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "included",
+          routeKey: "anthropic:claude:included-due-model",
+          reason: "Route is included in the canonical automatic route pool.",
+        },
+      },
+    ];
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.staleRouteRecovery).toMatchObject({
+      staleRoutes: 2,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 1,
+    });
+    expect(summary.unknownHealthRecovery).toMatchObject({
+      unknownHealthRoutes: 1,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 0,
+    });
+    expect(summary.excludedRouteInventory).toMatchObject({
+      excludedRoutes: 1,
+      unknownHealthRoutes: 1,
+      automaticProbeRoutes: 1,
+      reasonCounts: {
+        codex_scope_or_entitlement_failure: 1,
+      },
+    });
+  });
+
   it("combines runtime drift and model routing counts for one hive", async () => {
     const sql = vi.fn();
     const summary = await buildAnalystTelemetrySummary({
