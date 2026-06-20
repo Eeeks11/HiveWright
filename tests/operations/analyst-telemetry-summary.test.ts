@@ -195,8 +195,8 @@ describe("analyst telemetry summary", () => {
       model: "quarantined-unknown-model",
       status: "unknown",
       failureClass: "quarantined",
-      lastFailureReason: JSON.stringify({ failureClass: "quarantined", message: "owner secret" }),
-      failureMessage: "owner secret",
+      lastFailureReason: JSON.stringify({ failureClass: "quarantined", message: "fixture detail" }),
+      failureMessage: "fixture detail",
       probeFreshness: "unknown",
       probeMode: "automatic",
       hiveModelEnabled: true,
@@ -212,6 +212,204 @@ describe("analyst telemetry summary", () => {
       recoveryBlockedRoutes: 1,
     });
     expect(summary.quarantinedRoutes).toBe(2);
+  });
+
+  it("separates excluded automatic unknown-health inventory from active recovery backlog", () => {
+    const view = routingView();
+    view.models = [
+      {
+        ...view.models[2],
+        id: "route-excluded-1",
+        routeKey: "openai:codex:excluded-entitlement-model-a",
+        provider: "openai",
+        adapterType: "codex",
+        model: "excluded-entitlement-model-a",
+        status: "unknown",
+        failureClass: "scope",
+        lastFailureReason: JSON.stringify({ failureClass: "scope", message: "fixture detail" }),
+        failureMessage: "fixture detail",
+        probeFreshness: "unknown",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-excluded-2",
+        routeKey: "openai:codex:excluded-entitlement-model-b",
+        provider: "openai",
+        adapterType: "codex",
+        model: "excluded-entitlement-model-b",
+        status: "unknown",
+        failureClass: "scope",
+        lastFailureReason: JSON.stringify({ failureClass: "scope", message: "fixture detail" }),
+        failureMessage: "fixture detail",
+        probeFreshness: "unknown",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-included-unknown",
+        routeKey: "anthropic:claude:included-unknown-model",
+        provider: "anthropic",
+        adapterType: "claude",
+        model: "included-unknown-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "unknown",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+    ];
+    view.policy.candidates = [
+      {
+        adapterType: "codex",
+        model: "excluded-entitlement-model-a",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "excluded",
+          routeKey: "openai:codex:excluded-entitlement-model-a",
+          reason: "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.",
+        },
+      },
+      {
+        adapterType: "codex",
+        model: "excluded-entitlement-model-b",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "excluded",
+          routeKey: "openai:codex:excluded-entitlement-model-b",
+          reason: "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.",
+        },
+      },
+      {
+        adapterType: "claude",
+        model: "included-unknown-model",
+        enabled: true,
+        status: "unknown",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "included",
+          routeKey: "anthropic:claude:included-unknown-model",
+          reason: "Route is included in the canonical automatic route pool.",
+        },
+      },
+    ];
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.unknownHealthRoutes).toBe(1);
+    expect(summary.unknownHealthRecovery).toMatchObject({
+      unknownHealthRoutes: 1,
+      automaticProbeRoutes: 3,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 0,
+    });
+    expect(summary.excludedRouteInventory).toMatchObject({
+      excludedRoutes: 2,
+      unknownHealthRoutes: 2,
+      automaticProbeRoutes: 2,
+      onDemandProbeRoutes: 0,
+      reasonCounts: {
+        codex_scope_or_entitlement_failure: 2,
+      },
+    });
+  });
+
+  it("excludes stale excluded automatic routes from recoverable capacity", () => {
+    const view = routingView();
+    view.models = [
+      {
+        ...view.models[2],
+        id: "route-excluded-due",
+        routeKey: "openai:codex:excluded-due-model",
+        provider: "openai",
+        adapterType: "codex",
+        model: "excluded-due-model",
+        status: "unknown",
+        failureClass: "scope",
+        lastFailureReason: JSON.stringify({ failureClass: "scope", message: "fixture detail" }),
+        failureMessage: "fixture detail",
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-included-due",
+        routeKey: "anthropic:claude:included-due-model",
+        provider: "anthropic",
+        adapterType: "claude",
+        model: "included-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+    ];
+    view.policy.candidates = [
+      {
+        adapterType: "codex",
+        model: "excluded-due-model",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "excluded",
+          routeKey: "openai:codex:excluded-due-model",
+          reason: "OpenAI Codex health probes report a non-retryable scope/model-entitlement failure, so this route is retained only as excluded inventory rather than an automatic candidate.",
+        },
+      },
+      {
+        adapterType: "claude",
+        model: "included-due-model",
+        enabled: true,
+        status: "unknown",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "included",
+          routeKey: "anthropic:claude:included-due-model",
+          reason: "Route is included in the canonical automatic route pool.",
+        },
+      },
+    ];
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.staleRouteRecovery).toMatchObject({
+      staleRoutes: 2,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 1,
+    });
+    expect(summary.unknownHealthRecovery).toMatchObject({
+      unknownHealthRoutes: 1,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 1,
+      recoveryBlockedRoutes: 0,
+    });
+    expect(summary.excludedRouteInventory).toMatchObject({
+      excludedRoutes: 1,
+      unknownHealthRoutes: 1,
+      automaticProbeRoutes: 1,
+      reasonCounts: {
+        codex_scope_or_entitlement_failure: 1,
+      },
+    });
   });
 
   it("combines runtime drift and model routing counts for one hive", async () => {
