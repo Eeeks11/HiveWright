@@ -1,8 +1,10 @@
 import { collectHiveWrightDiagnostics } from "@/diagnostics/checks";
 import { jsonError, jsonOk } from "../_lib/responses";
 
-export async function GET() {
+// hive-access-not-required: readiness is controller-global; hiveId is read only to disclose that it is not applied.
+export async function GET(request?: Request) {
   try {
+    const requestedHiveId = request ? new URL(request.url).searchParams.get("hiveId") : null;
     const diagnostics = await collectHiveWrightDiagnostics();
     const body = {
       status: diagnostics.summary.ready ? "ready" : "not_ready",
@@ -11,6 +13,12 @@ export async function GET() {
       severity: diagnostics.summary.severity,
       counts: diagnostics.summary.counts,
       ownerActionRequired: diagnostics.summary.ownerActionRequired,
+      scope: diagnostics.scope,
+      requestedHiveId,
+      hiveScopedReadinessEndpoint: diagnostics.scope.hiveScopedReadinessEndpoint,
+      scopeNotice: requestedHiveId
+        ? `/api/readiness is ${diagnostics.scope.label}; hiveId=${requestedHiveId} was not used to calculate this response. Use ${diagnostics.scope.hiveScopedReadinessEndpoint} for hive-scoped readiness evidence.`
+        : diagnostics.scope.summary,
     };
     return jsonOk(body, diagnostics.summary.ready ? 200 : 503);
   } catch (err) {
