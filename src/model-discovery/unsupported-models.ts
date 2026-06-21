@@ -7,7 +7,7 @@ export function isUnsupportedModelDiscoveryCandidate(adapterType: string, modelI
 
   if (adapter === "codex") {
     const adapterLocalId = canonical.replace(/^openai-codex\//, "");
-    return adapterLocalId === "gpt-5.3-codex";
+    return ["gpt-5.2", "gpt-5.2-codex", "gpt-5.3-codex"].includes(adapterLocalId);
   }
 
   if (adapter !== "gemini") return false;

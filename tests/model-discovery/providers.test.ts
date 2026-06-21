@@ -63,7 +63,7 @@ describe("provider model discovery adapters", () => {
 
   it("skips OpenAI models that are not usable by the Codex adapter", async () => {
     const { fetchFn } = fakeFetch(`
-      gpt-5.6 gpt-5.4-mini gpt-5.3-codex tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
+      gpt-5.6 gpt-5.4-mini gpt-5.3-codex gpt-5.2 gpt-5.2-codex tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
       gpt-realtime computer-use-preview gpt-5.6.png chatgpt chatgpt-ui chatgpt-image-latest gpt-5-4
       gpt gpt-3 gpt-3.5-turbo gpt-4 gpt-4-turbo gpt-4.5 chatgpt-4o chatgpt-4o-latest
     `);
@@ -322,6 +322,8 @@ describe("provider model discovery adapters", () => {
 
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5");
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.5");
+    expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2");
+    expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2-codex");
     expect(models[0]?.metadataSourceName).toBe("OpenAI static model fallback");
   });
 });
