@@ -27,6 +27,12 @@ describe("GET /api/diagnostics", () => {
   it("returns grouped diagnostics without mutating runtime state", async () => {
     diagnosticsMock.collectHiveWrightDiagnostics.mockResolvedValue({
       checkedAt: "2026-05-24T08:15:00.000Z",
+      scope: {
+        kind: "controller_global",
+        label: "Controller-global runtime diagnostics",
+        summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+        hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+      },
       summary: {
         severity: "warning",
         ready: true,
@@ -50,6 +56,12 @@ describe("GET /api/diagnostics", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
+    expect(body.data.scope).toEqual({
+      kind: "controller_global",
+      label: "Controller-global runtime diagnostics",
+      summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+      hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+    });
     expect(body.data.summary.severity).toBe("warning");
     expect(body.data.diagnostics[0].id).toBe("dispatcher.heartbeat");
     expect(body.data.setupReadiness.warningSources).toEqual([]);
@@ -81,6 +93,12 @@ describe("GET /api/diagnostics", () => {
     ];
     diagnosticsMock.collectHiveWrightDiagnostics.mockResolvedValue({
       checkedAt: "2026-05-24T08:15:00.000Z",
+      scope: {
+        kind: "controller_global",
+        label: "Controller-global runtime diagnostics",
+        summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+        hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+      },
       summary: {
         severity: "warning",
         ready: true,

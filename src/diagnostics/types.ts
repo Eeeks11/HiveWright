@@ -22,6 +22,13 @@ export type DiagnosticSummary = {
   ownerActionRequired: boolean;
 };
 
+export type HiveWrightDiagnosticsScope = {
+  kind: "controller_global";
+  label: string;
+  summary: string;
+  hiveScopedReadinessEndpoint: string;
+};
+
 export type BuildDiagnosticStatusInput = Omit<DiagnosticStatus, "checkedAt"> & {
   checkedAt: Date | string;
 };

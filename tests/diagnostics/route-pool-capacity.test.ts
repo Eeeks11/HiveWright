@@ -41,9 +41,10 @@ describe("model route-pool capacity diagnostic", () => {
 
     expect(diagnostic).toMatchObject({
       id: "providers.route_pool_capacity",
+      label: "Controller-global model route pool capacity",
       severity: "ok",
-      summary: "1/1 automatic model route(s) are currently routable; 0 blocked, 0 stale, 0 unknown.",
-      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0 configuredRoutes=1 automaticCandidateRoutes=1 excludedInventoryRoutes=0 intentionallyDisabledRoutes=0",
+      summary: "Controller-wide route pool has 1/1 automatic model route(s) currently routable across all hives; 0 blocked, 0 stale, 0 unknown.",
+      details: "scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=1 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0 configuredRoutes=1 automaticCandidateRoutes=1 excludedInventoryRoutes=0 intentionallyDisabledRoutes=0",
     });
   });
 
@@ -63,8 +64,8 @@ describe("model route-pool capacity diagnostic", () => {
     expect(diagnostic).toMatchObject({
       id: "providers.route_pool_capacity",
       severity: "warning",
-      summary: "5/85 automatic model route(s) are currently routable; 80 blocked, 23 stale, 43 unknown.",
-      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=62 disabled=0 unhealthy=14 staleRecoveryEligible=19 unknownRecoveryEligible=43 configuredRoutes=85 automaticCandidateRoutes=85 excludedInventoryRoutes=0 intentionallyDisabledRoutes=0",
+      summary: "Controller-wide route pool has 5/85 automatic model route(s) currently routable across all hives; 80 blocked, 23 stale, 43 unknown.",
+      details: "scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=62 disabled=0 unhealthy=14 staleRecoveryEligible=19 unknownRecoveryEligible=43 configuredRoutes=85 automaticCandidateRoutes=85 excludedInventoryRoutes=0 intentionallyDisabledRoutes=0",
     });
     expect(diagnostic.recommendedAction).toContain("stale/unknown recovery eligibility");
   });
@@ -90,8 +91,8 @@ describe("model route-pool capacity diagnostic", () => {
 
     const diagnostic = await checkModelRoutePoolCapacity(fakeSql, NOW);
 
-    expect(diagnostic.summary).toBe("No automatic model routes are configured for capacity scoring.");
-    expect(diagnostic.details).toBe("readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=0 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0 configuredRoutes=1 automaticCandidateRoutes=0 excludedInventoryRoutes=1 intentionallyDisabledRoutes=0");
+    expect(diagnostic.summary).toBe("No controller-wide automatic model routes are configured for capacity scoring.");
+    expect(diagnostic.details).toBe("scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=0 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=0 configuredRoutes=1 automaticCandidateRoutes=0 excludedInventoryRoutes=1 intentionallyDisabledRoutes=0");
   });
 
 
@@ -150,8 +151,8 @@ describe("model route-pool capacity diagnostic", () => {
 
     const diagnostic = await checkModelRoutePoolCapacity(fakeSql, NOW);
 
-    expect(diagnostic.summary).toBe("1/2 automatic model route(s) are currently routable; 1 blocked, 0 stale, 1 unknown.");
-    expect(diagnostic.details).toBe("readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=2 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=1 configuredRoutes=45 automaticCandidateRoutes=2 excludedInventoryRoutes=43 intentionallyDisabledRoutes=0");
+    expect(diagnostic.summary).toBe("Controller-wide route pool has 1/2 automatic model route(s) currently routable across all hives; 1 blocked, 0 stale, 1 unknown.");
+    expect(diagnostic.details).toBe("scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=2 disabled=0 unhealthy=0 staleRecoveryEligible=0 unknownRecoveryEligible=1 configuredRoutes=45 automaticCandidateRoutes=2 excludedInventoryRoutes=43 intentionallyDisabledRoutes=0");
     expect(diagnostic.recommendedAction).toContain("stale/unknown recovery eligibility");
   });
 
@@ -170,8 +171,8 @@ describe("model route-pool capacity diagnostic", () => {
 
     expect(diagnostic).toMatchObject({
       severity: "ok",
-      summary: "10/12 automatic model route(s) are currently routable; 2 blocked, 1 stale, 0 unknown.",
-      details: "readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=11 disabled=1 unhealthy=0 staleRecoveryEligible=1 unknownRecoveryEligible=0 configuredRoutes=12 automaticCandidateRoutes=12 excludedInventoryRoutes=0 intentionallyDisabledRoutes=1",
+      summary: "Controller-wide route pool has 10/12 automatic model route(s) currently routable across all hives; 2 blocked, 1 stale, 0 unknown.",
+      details: "scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=11 disabled=1 unhealthy=0 staleRecoveryEligible=1 unknownRecoveryEligible=0 configuredRoutes=12 automaticCandidateRoutes=12 excludedInventoryRoutes=0 intentionallyDisabledRoutes=1",
     });
   });
 

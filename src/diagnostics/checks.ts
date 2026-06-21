@@ -17,11 +17,13 @@ import {
   summarizeDiagnostics,
   type DiagnosticStatus,
   type DiagnosticSummary,
+  type HiveWrightDiagnosticsScope,
 } from "./types";
 import { resolveHiveWrightBuildProvenance } from "./build-provenance";
 
 export type HiveWrightDiagnosticsSnapshot = {
   checkedAt: string;
+  scope: HiveWrightDiagnosticsScope;
   summary: DiagnosticSummary;
   diagnostics: DiagnosticStatus[];
   recentFailureGroups: FailureFingerprintGroup[];
@@ -45,6 +47,13 @@ export type HiveWrightDiagnosticsOptions = {
 const REQUIRED_ENV = ["DATABASE_URL", "ENCRYPTION_KEY", "INTERNAL_SERVICE_TOKEN"] as const;
 const DISPATCHER_STALE_AFTER_MS = 2 * 60 * 1000;
 const EXECUTION_RUN_STALE_AFTER_MS = 15 * 60 * 1000;
+export const HIVEWRIGHT_DIAGNOSTICS_SCOPE: HiveWrightDiagnosticsScope = {
+  kind: "controller_global",
+  label: "Controller-global runtime diagnostics",
+  summary:
+    "/api/diagnostics reports controller-wide app, queue, execution-run, provider, and route-pool state across all hives; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+  hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+};
 
 export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date; repoRoot?: string } = {}): HiveWrightHealthSnapshot {
   const provenance = resolveHiveWrightBuildProvenance({
@@ -103,6 +112,7 @@ export async function collectHiveWrightDiagnostics(
 
   return {
     checkedAt,
+    scope: HIVEWRIGHT_DIAGNOSTICS_SCOPE,
     summary: summarizeDiagnostics(diagnostics),
     diagnostics,
     recentFailureGroups,
@@ -265,9 +275,9 @@ async function checkQueueState(sql: Sql, now: Date): Promise<DiagnosticStatus> {
     const blocked = (counts.blocked ?? 0) + (counts.failed ?? 0) + (counts.unresolvable ?? 0);
     return buildDiagnosticStatus({
       id: "queue.state",
-      label: "Queue state",
+      label: "Controller-global queue state",
       severity: blocked > 0 ? "warning" : "ok",
-      summary: `Queue has ${pending} pending, ${active} active, and ${blocked} blocked/failed/unresolvable task(s).`,
+      summary: `Controller-wide queue has ${pending} pending, ${active} active, and ${blocked} blocked/failed/unresolvable task(s) across all hives.`,
       recommendedAction: blocked > 0 ? "Review blocked and failed tasks before increasing autonomous throughput." : undefined,
       checkedAt: now,
     });
@@ -474,11 +484,11 @@ export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<
   } catch (err) {
     return buildDiagnosticStatus({
       id: "providers.route_pool_capacity",
-      label: "Model route pool capacity",
+      label: "Controller-global model route pool capacity",
       severity: "warning",
-      summary: "Model route-pool capacity could not be verified.",
+      summary: "Controller-wide model route-pool capacity could not be verified.",
       details: err instanceof Error ? err.message : String(err),
-      recommendedAction: "Run analyst telemetry and model health probes to verify usable model-route capacity.",
+      recommendedAction: "Run hive-scoped analyst telemetry for readiness evidence and model health probes to verify controller-wide model-route capacity.",
       checkedAt: now,
     });
   }
@@ -491,9 +501,9 @@ export function buildModelRoutePoolCapacityDiagnostic(
   if (counts.totalRoutes === 0) {
     return buildDiagnosticStatus({
       id: "providers.route_pool_capacity",
-      label: "Model route pool capacity",
+      label: "Controller-global model route pool capacity",
       severity: "info",
-      summary: "No automatic model routes are configured for capacity scoring.",
+      summary: "No controller-wide automatic model routes are configured for capacity scoring.",
       details: formatRoutePoolInventoryDetails(counts),
       recommendedAction: "Configure at least one automatic model route before expecting autonomous runtime work.",
       checkedAt: now,
@@ -514,9 +524,9 @@ export function buildModelRoutePoolCapacityDiagnostic(
 
   return buildDiagnosticStatus({
     id: "providers.route_pool_capacity",
-    label: "Model route pool capacity",
+    label: "Controller-global model route pool capacity",
     severity,
-    summary: `${counts.routableRoutes}/${counts.totalRoutes} automatic model route(s) are currently routable; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
+    summary: `Controller-wide route pool has ${counts.routableRoutes}/${counts.totalRoutes} automatic model route(s) currently routable across all hives; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
     details: formatRoutePoolInventoryDetails(counts),
     recommendedAction: severity === "critical"
       ? "Treat route-pool capacity as degraded: run model health probe recovery and restore at least one routable or recoverable route before presenting runtime readiness as normal."
@@ -531,7 +541,7 @@ function formatRoutePoolInventoryDetails(counts: ModelRoutePoolCapacityCounts): 
   const configuredRoutes = counts.configuredRoutes ?? counts.totalRoutes;
   const excludedInventoryRoutes = counts.excludedInventoryRoutes ?? 0;
   const intentionallyDisabledRoutes = counts.intentionallyDisabledRoutes ?? counts.disabledRoutes;
-  return `readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes} configuredRoutes=${configuredRoutes} automaticCandidateRoutes=${counts.totalRoutes} excludedInventoryRoutes=${excludedInventoryRoutes} intentionallyDisabledRoutes=${intentionallyDisabledRoutes}`;
+  return `scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes} configuredRoutes=${configuredRoutes} automaticCandidateRoutes=${counts.totalRoutes} excludedInventoryRoutes=${excludedInventoryRoutes} intentionallyDisabledRoutes=${intentionallyDisabledRoutes}`;
 }
 
 function isExcludedRouteInventory(input: {
