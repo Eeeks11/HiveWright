@@ -6,6 +6,7 @@ import {
   runModelHealthProbes,
   selectDueModelHealthProbeRoutes,
 } from "@/model-health/probe-runner";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const ENCRYPTION_KEY = "model-health-probe-runner-test-key";
@@ -388,11 +389,11 @@ describe("runModelHealthProbes", () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "ollama",
       adapterType: "ollama",
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "ollama", adapterType: "ollama" }),
     });
     expect(probe).toHaveBeenCalledWith("qwen3:32b", {
       provider: "ollama",
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "ollama", adapterType: "ollama" }),
       fingerprint,
       secrets: {},
     });
@@ -458,7 +459,7 @@ describe("runModelHealthProbes", () => {
     const runtimeFingerprint = createRuntimeCredentialFingerprint({
       provider: "local",
       adapterType: "ollama",
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
     });
     await sql`
       INSERT INTO model_health (fingerprint, model_id, status, last_probed_at, next_probe_at)

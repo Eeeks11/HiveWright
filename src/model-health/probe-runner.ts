@@ -239,7 +239,7 @@ export async function selectDueModelHealthProbeRoutes(
     const fingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: row.provider, adapterType: row.adapter_type }),
     });
     const health = await loadModelHealthByIdentity(sql, {
       fingerprint,
@@ -607,7 +607,7 @@ function dedupeProbeRows(rows: RawHiveModelProbeRow[]): HiveModelProbeRow[] {
     const fingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: row.provider, adapterType: row.adapter_type }),
     });
     const key = `${configuredModelIdentityKey({
       provider: row.provider,
