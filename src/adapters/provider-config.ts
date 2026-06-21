@@ -22,6 +22,7 @@ const ACTIVE_PRICING: Record<string, ModelPricing> = {
   "openai/gpt-4o": { inputPer1k: 0.25, outputPer1k: 1.0 },
   "openai/gpt-4o-mini": { inputPer1k: 0.015, outputPer1k: 0.06 },
   "openai-codex/gpt-5.4": { inputPer1k: 0.25, outputPer1k: 1.0 },
+  "openai-codex/gpt-5.4-mini": { inputPer1k: 0.05, outputPer1k: 0.2 },
   "openai/gpt-5.4": { inputPer1k: 0.25, outputPer1k: 1.0 },
   "gpt-image-2": { inputPer1k: 0.8, outputPer1k: 3.0 },
   "gpt-image-2-2026-04-21": { inputPer1k: 0.8, outputPer1k: 3.0 },

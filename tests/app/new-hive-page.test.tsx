@@ -164,7 +164,8 @@ describe("NewHiveWizard", () => {
     expect(adapterSelect.value).toBe("codex");
     expect(optionValues).toContain("openai-codex/gpt-5.5");
     expect(optionValues).toContain("openai-codex/gpt-5.4");
-    expect(optionValues).toContain("openai-codex/gpt-5.3-codex");
+    expect(optionValues).toContain("openai-codex/gpt-5.4-mini");
+    expect(optionValues).not.toContain("openai-codex/gpt-5.3-codex");
   });
 
   it("offers Gemini 3.1 Flash Live Preview in the advanced hive creation model picker", async () => {

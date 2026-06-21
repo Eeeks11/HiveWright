@@ -11,6 +11,7 @@ import {
 import { classifyProbeFreshness, getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
+import { isUnsupportedModelDiscoveryCandidate } from "@/model-discovery/unsupported-models";
 import {
   loadModelRoutingPolicyState,
   saveModelRoutingPolicy,
@@ -156,6 +157,10 @@ export async function loadModelRoutingView(
 
   const models: ModelRoutingRegistryRow[] = [];
   for (const row of collapsedRows) {
+    if (isUnsupportedModelDiscoveryCandidate(row.adapter_type, row.model_id)) {
+      continue;
+    }
+
     const healthFingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
