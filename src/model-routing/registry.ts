@@ -223,13 +223,8 @@ export async function loadModelRoutingView(
   }
 
   const canonicalCandidates = buildCanonicalRouteCandidates(models);
-  if (!sameCanonicalRouteCandidates(basePolicyState.policy?.candidates ?? [], canonicalCandidates)) {
-    const persistedPolicy: ModelRoutingPolicy = {
-      preferences: basePolicyState.policy?.preferences,
-      routeOverrides: basePolicyState.policy?.routeOverrides,
-      roleRoutes: basePolicyState.policy?.roleRoutes,
-      candidates: canonicalCandidates,
-    };
+  const persistedPolicy = prunePolicyToCanonicalRoutes(basePolicyState.policy, models, canonicalCandidates);
+  if (!sameModelRoutingPolicy(basePolicyState.policy, persistedPolicy)) {
     await saveModelRoutingPolicy(sql, hiveId, persistedPolicy);
     basePolicyState = {
       ...basePolicyState,
@@ -294,6 +289,60 @@ function buildCanonicalRouteCandidates(models: ModelRoutingRegistryRow[]): Model
       },
     };
   });
+}
+
+function prunePolicyToCanonicalRoutes(
+  current: ModelRoutingPolicy | null,
+  models: ModelRoutingRegistryRow[],
+  canonicalCandidates: ModelRoutingPolicy["candidates"],
+): ModelRoutingPolicy {
+  const canonicalRouteKeys = new Set(models.map((model) => model.routeKey));
+  const canonicalModels = new Set(canonicalCandidates.map((candidate) => candidate.model));
+
+  const routeOverrides = pruneRouteOverrides(current?.routeOverrides, canonicalRouteKeys);
+  const roleRoutes = pruneRoleRoutes(current?.roleRoutes, canonicalModels);
+
+  return {
+    preferences: current?.preferences,
+    routeOverrides,
+    roleRoutes,
+    candidates: canonicalCandidates,
+  };
+}
+
+function pruneRouteOverrides(
+  routeOverrides: ModelRoutingPolicy["routeOverrides"],
+  canonicalRouteKeys: Set<string>,
+): ModelRoutingPolicy["routeOverrides"] {
+  if (!routeOverrides) return undefined;
+  const retained: NonNullable<ModelRoutingPolicy["routeOverrides"]> = {};
+  for (const [routeKey, override] of Object.entries(routeOverrides)) {
+    if (canonicalRouteKeys.has(routeKey)) retained[routeKey] = override;
+  }
+  return Object.keys(retained).length > 0 ? retained : undefined;
+}
+
+function pruneRoleRoutes(
+  roleRoutes: ModelRoutingPolicy["roleRoutes"],
+  canonicalModels: Set<string>,
+): ModelRoutingPolicy["roleRoutes"] {
+  if (!roleRoutes) return undefined;
+  const retained: NonNullable<ModelRoutingPolicy["roleRoutes"]> = {};
+  for (const [roleSlug, route] of Object.entries(roleRoutes)) {
+    const candidateModels = (route.candidateModels ?? []).filter((model) => canonicalModels.has(model));
+    if (candidateModels.length > 0) retained[roleSlug] = { candidateModels };
+  }
+  return Object.keys(retained).length > 0 ? retained : undefined;
+}
+
+function sameModelRoutingPolicy(
+  current: ModelRoutingPolicy | null,
+  next: ModelRoutingPolicy,
+): boolean {
+  if (!sameCanonicalRouteCandidates(current?.candidates ?? [], next.candidates)) return false;
+  return JSON.stringify(current?.preferences ?? null) === JSON.stringify(next.preferences ?? null) &&
+    JSON.stringify(current?.routeOverrides ?? null) === JSON.stringify(next.routeOverrides ?? null) &&
+    JSON.stringify(current?.roleRoutes ?? null) === JSON.stringify(next.roleRoutes ?? null);
 }
 
 function canonicalMembershipForModel(model: ModelRoutingRegistryRow): NonNullable<ModelRoutingPolicy["candidates"][number]["canonicalRouteSet"]>["membership"] {

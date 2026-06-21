@@ -459,24 +459,15 @@ describe("model routing registry view", () => {
 
     expect(view.models).toHaveLength(0);
     expect(view.basePolicyState.source).toBe("hive");
-    expect(view.basePolicyState.policy).toMatchObject({
+    expect(view.basePolicyState.policy).toEqual({
       preferences: { costQualityBalance: 42 },
-      routeOverrides: {
-        [`openai:codex:${legacyModel}`]: {
-          enabled: true,
-          roleSlugs: ["dev-agent"],
-        },
-      },
-      roleRoutes: {
-        "dev-agent": {
-          candidateModels: [legacyModel],
-        },
-      },
       candidates: [],
     });
     expect(view.policy.candidates).toHaveLength(0);
+    expect(view.policy.routeOverrides).toBeUndefined();
+    expect(view.policy.roleRoutes).toBeUndefined();
 
-    const persisted = await sql<{ config: { candidates?: unknown[] } }[]>`
+    const persisted = await sql<{ config: { candidates?: unknown[]; routeOverrides?: unknown; roleRoutes?: unknown } }[]>`
       SELECT config
       FROM adapter_config
       WHERE hive_id = ${HIVE_ID}
@@ -484,6 +475,8 @@ describe("model routing registry view", () => {
       LIMIT 1
     `;
     expect(persisted[0].config.candidates).toEqual([]);
+    expect(persisted[0].config.routeOverrides).toBeUndefined();
+    expect(persisted[0].config.roleRoutes).toBeUndefined();
   });
 
   it("retires disabled Anthropic claude-code routes from the canonical automatic pool", async () => {
