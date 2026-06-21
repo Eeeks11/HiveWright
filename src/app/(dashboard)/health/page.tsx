@@ -101,6 +101,9 @@ export default function DashboardHealthPage() {
                         <span className="rounded-full border border-amber-300/40 px-2 py-0.5 text-xs text-amber-100">
                           {warning.source}: {warning.status}
                         </span>
+                        <span className="rounded-full border border-white/10 px-2 py-0.5 text-xs text-muted-foreground">
+                          {warning.policy === "active_provider" ? "active provider" : "optional runtime"}
+                        </span>
                       </div>
                       <p className="mt-2 text-muted-foreground">{warning.detail}</p>
                       <p className="mt-1 text-xs text-amber-100">{warning.nextStep}</p>

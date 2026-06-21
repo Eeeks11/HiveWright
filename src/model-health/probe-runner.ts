@@ -16,6 +16,7 @@ import {
   getModelHealthProbePolicy,
 } from "@/model-health/probe-policy";
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 
 const DEFAULT_HEALTHY_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_UNHEALTHY_RETRY_MS = 15 * 60 * 1000;
@@ -348,16 +349,17 @@ function buildProbeCredential(
   input: { encryptionKey: string },
 ): { ok: true; value: AdapterProbeCredential } | { ok: false; fingerprint: string; reason: string } {
   if (!row.credential_id) {
+    const baseUrl = getCanonicalOllamaHealthBaseUrl({ provider: row.provider, adapterType: row.adapter_type });
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
-      baseUrl: null,
+      baseUrl,
     });
     return {
       ok: true,
       value: {
         provider: row.provider,
-        baseUrl: null,
+        baseUrl,
         fingerprint,
         secrets: {},
       },
@@ -367,7 +369,7 @@ function buildProbeCredential(
   const fallbackFingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
     provider: row.provider,
     adapterType: row.adapter_type,
-    baseUrl: null,
+    baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: row.provider, adapterType: row.adapter_type }),
   });
   if (!row.credential_key || !row.credential_value) {
     return {

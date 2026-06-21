@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { sanitizeError } from "@/memory/local-embedding-setup";
+import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
 
 const execFileAsync = promisify(execFile);
 const CLI_TIMEOUT_MS = 5_000;
 const OLLAMA_TIMEOUT_MS = 5_000;
-const OLLAMA_ENDPOINT = process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434";
+
+export type SetupReadinessWarningPolicy = "active_provider" | "optional_runtime";
 
 export type RuntimeStatus = "ready" | "check_required" | "missing";
 
@@ -26,6 +28,7 @@ export type SetupRuntimeReadinessWarning = {
   source: string;
   label: string;
   status: Exclude<RuntimeStatus, "ready">;
+  policy: SetupReadinessWarningPolicy;
   detail: string;
   nextStep: string;
 };
@@ -51,16 +54,27 @@ export async function collectSetupRuntimeReadiness(): Promise<SetupRuntimeReadin
 
 export function listSetupRuntimeReadinessWarnings(
   snapshot: SetupRuntimeReadinessSnapshot,
+  options: { activeSources?: Iterable<string> } = {},
 ): SetupRuntimeReadinessWarning[] {
+  const activeSources = new Set([...options.activeSources ?? []].map(normalizeRuntimeSource));
   return Object.entries(snapshot.runtimes)
     .filter((entry): entry is [string, RuntimeReadiness & { status: Exclude<RuntimeStatus, "ready"> }] => entry[1].status !== "ready")
     .map(([source, runtime]) => ({
       source,
       label: runtime.label,
       status: runtime.status,
+      policy: activeSources.has(normalizeRuntimeSource(source)) ? "active_provider" : "optional_runtime",
       detail: runtime.detail,
       nextStep: runtime.nextStep,
     }));
+}
+
+export function listActiveProviderReadinessWarnings(
+  snapshot: SetupRuntimeReadinessSnapshot,
+  activeSources: Iterable<string>,
+): SetupRuntimeReadinessWarning[] {
+  return listSetupRuntimeReadinessWarnings(snapshot, { activeSources })
+    .filter((warning) => warning.policy === "active_provider");
 }
 
 async function checkCliRuntime(command: string, label: string, args: string[], nextStep: string, authArgs?: string[]): Promise<RuntimeReadiness> {
@@ -107,8 +121,9 @@ async function checkCliRuntime(command: string, label: string, args: string[], n
 }
 
 async function checkOllamaRuntime(): Promise<RuntimeReadiness> {
+  const ollamaEndpoint = getCanonicalOllamaEndpoint();
   try {
-    const res = await fetch(`${OLLAMA_ENDPOINT}/api/tags`, {
+    const res = await fetch(`${ollamaEndpoint}/api/tags`, {
       method: "GET",
       signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
     });
@@ -135,8 +150,12 @@ async function checkOllamaRuntime(): Promise<RuntimeReadiness> {
       label: "Ollama",
       installed: false,
       status: "missing",
-      detail: `Ollama is not reachable at ${OLLAMA_ENDPOINT}. ${sanitizeError(err)}`,
+      detail: `Ollama is not reachable at ${ollamaEndpoint}. ${sanitizeError(err)}`,
       nextStep: "Install/start Ollama on the HiveWright server, then run setup health again.",
     };
   }
+}
+
+function normalizeRuntimeSource(value: string): string {
+  return value.trim().toLowerCase();
 }
