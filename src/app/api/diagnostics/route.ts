@@ -1,9 +1,11 @@
 import { collectHiveWrightDiagnostics } from "@/diagnostics/checks";
 import {
   collectSetupRuntimeReadiness,
+  listActiveSetupRuntimeSources,
   listSetupRuntimeReadinessWarnings,
 } from "@/setup-readiness/runtime";
 import { requireApiAuth } from "../_lib/auth";
+import { sql } from "../_lib/db";
 import { jsonError, jsonOk } from "../_lib/responses";
 
 export async function GET() {
@@ -11,15 +13,18 @@ export async function GET() {
   if (unauth) return unauth;
 
   try {
-    const [diagnostics, setupRuntimeReadiness] = await Promise.all([
+    const [diagnostics, setupRuntimeReadiness, activeSetupRuntimeSources] = await Promise.all([
       collectHiveWrightDiagnostics(),
       collectSetupRuntimeReadiness(),
+      listActiveSetupRuntimeSources(sql),
     ]);
     return jsonOk({
       ...diagnostics,
       setupReadiness: {
         checkedAt: setupRuntimeReadiness.checkedAt,
-        warningSources: listSetupRuntimeReadinessWarnings(setupRuntimeReadiness),
+        warningSources: listSetupRuntimeReadinessWarnings(setupRuntimeReadiness, {
+          activeSources: activeSetupRuntimeSources,
+        }),
       },
     });
   } catch (err) {

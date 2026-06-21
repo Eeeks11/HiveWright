@@ -6,6 +6,7 @@ const diagnosticsMock = vi.hoisted(() => ({
 
 const setupReadinessMock = vi.hoisted(() => ({
   collectSetupRuntimeReadiness: vi.fn(),
+  listActiveSetupRuntimeSources: vi.fn(),
   listSetupRuntimeReadinessWarnings: vi.fn(),
 }));
 
@@ -16,11 +17,13 @@ describe("GET /api/diagnostics", () => {
   beforeEach(() => {
     diagnosticsMock.collectHiveWrightDiagnostics.mockReset();
     setupReadinessMock.collectSetupRuntimeReadiness.mockReset();
+    setupReadinessMock.listActiveSetupRuntimeSources.mockReset();
     setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReset();
     setupReadinessMock.collectSetupRuntimeReadiness.mockResolvedValue({
       checkedAt: "2026-05-24T08:15:01.000Z",
       runtimes: {},
     });
+    setupReadinessMock.listActiveSetupRuntimeSources.mockResolvedValue([]);
     setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReturnValue([]);
   });
 
@@ -121,6 +124,63 @@ describe("GET /api/diagnostics", () => {
       checkedAt: "2026-05-24T08:15:01.000Z",
       warningSources,
     });
-    expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot);
+    expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot, {
+      activeSources: [],
+    });
+  });
+
+  it("passes active configured local runtime sources into setup-readiness warnings", async () => {
+    const setupSnapshot = {
+      checkedAt: "2026-05-24T08:15:01.000Z",
+      runtimes: {
+        ollama: {
+          label: "Ollama",
+          installed: false,
+          status: "missing",
+          detail: "Ollama is not reachable.",
+          nextStep: "Start Ollama.",
+        },
+      },
+    };
+    const warningSources = [
+      {
+        source: "ollama",
+        label: "Ollama",
+        status: "missing",
+        policy: "active_provider",
+        detail: "Ollama is not reachable.",
+        nextStep: "Start Ollama.",
+      },
+    ];
+    diagnosticsMock.collectHiveWrightDiagnostics.mockResolvedValue({
+      checkedAt: "2026-05-24T08:15:00.000Z",
+      scope: {
+        kind: "controller_global",
+        label: "Controller-global runtime diagnostics",
+        summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+        hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+      },
+      summary: {
+        severity: "warning",
+        ready: true,
+        counts: { ok: 8, info: 0, warning: 1, critical: 0 },
+        ownerActionRequired: false,
+      },
+      diagnostics: [],
+    });
+    setupReadinessMock.collectSetupRuntimeReadiness.mockResolvedValue(setupSnapshot);
+    setupReadinessMock.listActiveSetupRuntimeSources.mockResolvedValue(["ollama"]);
+    setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReturnValue(warningSources);
+    const { GET } = await import("../../src/app/api/diagnostics/route");
+
+    const response = await GET();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.setupReadiness.warningSources).toEqual(warningSources);
+    expect(setupReadinessMock.listActiveSetupRuntimeSources).toHaveBeenCalledTimes(1);
+    expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot, {
+      activeSources: ["ollama"],
+    });
   });
 });

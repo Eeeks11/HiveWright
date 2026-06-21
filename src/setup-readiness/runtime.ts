@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { Sql } from "postgres";
 import { sanitizeError } from "@/memory/local-embedding-setup";
 import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
 
@@ -33,6 +34,11 @@ export type SetupRuntimeReadinessWarning = {
   nextStep: string;
 };
 
+type ActiveRuntimeSourceRow = {
+  provider: string | null;
+  adapter_type: string | null;
+};
+
 export async function collectSetupRuntimeReadiness(): Promise<SetupRuntimeReadinessSnapshot> {
   const [codex, claudeCode, gemini, ollama] = await Promise.all([
     checkCliRuntime("codex", "Codex", ["--version"], "Open a terminal on this server and run `codex login`, then refresh this check.", ["login", "status"]),
@@ -56,7 +62,7 @@ export function listSetupRuntimeReadinessWarnings(
   snapshot: SetupRuntimeReadinessSnapshot,
   options: { activeSources?: Iterable<string> } = {},
 ): SetupRuntimeReadinessWarning[] {
-  const activeSources = new Set([...options.activeSources ?? []].map(normalizeRuntimeSource));
+  const activeSources = new Set(Array.from(options.activeSources ?? []).map(normalizeRuntimeSource));
   return Object.entries(snapshot.runtimes)
     .filter((entry): entry is [string, RuntimeReadiness & { status: Exclude<RuntimeStatus, "ready"> }] => entry[1].status !== "ready")
     .map(([source, runtime]) => ({
@@ -75,6 +81,31 @@ export function listActiveProviderReadinessWarnings(
 ): SetupRuntimeReadinessWarning[] {
   return listSetupRuntimeReadinessWarnings(snapshot, { activeSources })
     .filter((warning) => warning.policy === "active_provider");
+}
+
+export async function listActiveSetupRuntimeSources(sql: Sql): Promise<string[]> {
+  const rows = await sql<ActiveRuntimeSourceRow[]>`
+    SELECT DISTINCT provider, adapter_type
+    FROM hive_models
+    WHERE enabled = true
+  `;
+
+  return Array.from(new Set(rows.flatMap((row) => runtimeSourcesForConfiguredRoute(row))))
+    .sort();
+}
+
+export function runtimeSourcesForConfiguredRoute(input: { provider: string | null; adapter_type: string | null }): string[] {
+  const provider = normalizeRuntimeSource(input.provider ?? "");
+  const adapterType = normalizeRuntimeSource(input.adapter_type ?? "");
+  const tokens = new Set([provider, adapterType]);
+  const sources: string[] = [];
+
+  if (tokens.has("ollama") || tokens.has("local") || adapterType.includes("ollama")) sources.push("ollama");
+  if (tokens.has("codex") || tokens.has("openai-codex")) sources.push("codex");
+  if (tokens.has("claude") || tokens.has("claude-code")) sources.push("claude-code");
+  if (tokens.has("gemini") || tokens.has("google-gemini")) sources.push("gemini");
+
+  return sources;
 }
 
 async function checkCliRuntime(command: string, label: string, args: string[], nextStep: string, authArgs?: string[]): Promise<RuntimeReadiness> {

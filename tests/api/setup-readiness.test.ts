@@ -105,6 +105,18 @@ describe("setup runtime readiness warning policy", () => {
     ]);
     expect(listActiveProviderReadinessWarnings(snapshot, ["ollama"]).map((warning) => warning.source)).toEqual(["ollama"]);
   });
+
+  it("derives active setup runtime sources from enabled model inventory", async () => {
+    const { listActiveSetupRuntimeSources } = await import("../../src/setup-readiness/runtime");
+    const sql = (async () => [
+      { provider: "ollama", adapter_type: "local" },
+      { provider: "openai", adapter_type: "codex" },
+      { provider: "anthropic", adapter_type: "http" },
+      { provider: "ollama", adapter_type: "local" },
+    ]) as never;
+
+    await expect(listActiveSetupRuntimeSources(sql)).resolves.toEqual(["codex", "ollama"]);
+  });
 });
 
 function writeStub(name: string, content: string) {
