@@ -17,6 +17,12 @@ describe("DashboardHealthPage", () => {
             JSON.stringify({
               data: {
                 checkedAt: "2026-05-24T08:15:00.000Z",
+                scope: {
+                  kind: "controller_global",
+                  label: "Controller-global runtime diagnostics",
+                  summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+                  hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+                },
                 summary: {
                   severity: "warning",
                   ready: true,
@@ -26,9 +32,9 @@ describe("DashboardHealthPage", () => {
                 diagnostics: [
                   {
                     id: "providers.route_pool_capacity",
-                    label: "Model route pool capacity",
+                    label: "Controller-global model route pool capacity",
                     severity: "warning",
-                    summary: "1/2 automatic model route(s) are currently routable.",
+                    summary: "Controller-wide route pool has 1/2 automatic model route(s) currently routable across all hives.",
                     checkedAt: "2026-05-24T08:15:00.000Z",
                   },
                 ],
@@ -61,6 +67,7 @@ describe("DashboardHealthPage", () => {
     expect(screen.getByRole("heading", { name: "Ollama" })).toBeTruthy();
     expect(screen.getByText("ollama: missing")).toBeTruthy();
     expect(screen.getByText(/operational debt, not owner-action escalations/i)).toBeTruthy();
-    expect(screen.getByText("Model route pool capacity")).toBeTruthy();
+    expect(screen.getByText(/controller-wide state/i)).toBeTruthy();
+    expect(screen.getByText("Controller-global model route pool capacity")).toBeTruthy();
   });
 });

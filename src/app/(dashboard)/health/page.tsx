@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { DiagnosticStatus, DiagnosticSummary } from "@/diagnostics/types";
+import type { DiagnosticStatus, DiagnosticSummary, HiveWrightDiagnosticsScope } from "@/diagnostics/types";
 import type { SetupRuntimeReadinessWarning } from "@/setup-readiness/runtime";
 
 type HealthPageState = {
   checkedAt: string;
+  scope?: HiveWrightDiagnosticsScope;
   summary: DiagnosticSummary;
   diagnostics: DiagnosticStatus[];
   setupReadiness?: {
@@ -48,7 +49,7 @@ export default function DashboardHealthPage() {
         <p className="text-sm text-muted-foreground">HiveWright runtime</p>
         <h1 className="text-2xl font-semibold text-foreground">Health</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Product/runtime diagnostics for the app, dispatcher, queue, execution runs, and providers.
+          Controller-global product/runtime diagnostics for the app, dispatcher, queue, execution runs, and providers.
         </p>
       </header>
 
@@ -75,7 +76,9 @@ export default function DashboardHealthPage() {
 
           <section className="rounded-md border border-white/10 p-4 text-sm text-muted-foreground">
             <p>
-              Active runtime readiness is based on app, dispatcher, queue, execution-run, and provider diagnostics.
+              {state.scope?.summary
+                ?? "Active runtime readiness is based on app, dispatcher, queue, execution-run, and provider diagnostics."}
+              {" "}
               Optional setup debt is shown separately so missing or unchecked local tools do not look like owner escalations.
             </p>
           </section>
