@@ -1,5 +1,6 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
 import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type { DiscoveredModel } from "./types";
 
@@ -39,7 +40,7 @@ interface OllamaModel {
 const OPENAI_PUBLIC_MODELS_URL = "https://developers.openai.com/api/docs/models/all/";
 const GEMINI_PUBLIC_MODELS_URL = "https://ai.google.dev/gemini-api/docs/models";
 const ANTHROPIC_PUBLIC_MODELS_URL = "https://docs.anthropic.com/en/docs/models-overview";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+
 const STATIC_OPENAI_MODELS = [
   "gpt-5",
   "gpt-5-mini",
@@ -195,14 +196,9 @@ export async function discoverAnthropicModels(
 export async function discoverOllamaModels(
   options: OllamaDiscoveryOptions = {},
 ): Promise<DiscoveredModel[]> {
-  const baseUrl = trimTrailingSlash(
-    firstPresent(
-      options.baseUrl,
-      process.env.OLLAMA_ENDPOINT,
-      process.env.OLLAMA_BASE_URL,
-      getProviderEndpoint("ollama"),
-    ) ?? DEFAULT_OLLAMA_BASE_URL,
-  );
+  const baseUrl = getCanonicalOllamaEndpoint({
+    baseUrl: firstPresent(options.baseUrl, getProviderEndpoint("ollama")),
+  });
   const url = `${baseUrl}/api/tags`;
   const body = await fetchJson(url, {
     fetch: options.fetch,
@@ -491,10 +487,6 @@ function displayNameFromModelId(modelId: string): string {
 
 function stripPrefix(value: string, prefix: string): string {
   return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

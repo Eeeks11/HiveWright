@@ -10,6 +10,7 @@ import {
 } from "@/model-health/model-identity";
 import { classifyProbeFreshness, getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
 import {
   loadModelRoutingPolicyState,
@@ -159,7 +160,7 @@ export async function loadModelRoutingView(
     const healthFingerprint = row.credential_fingerprint ?? createRuntimeCredentialFingerprint({
       provider: row.provider,
       adapterType: row.adapter_type,
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: row.provider, adapterType: row.adapter_type }),
     });
     const health = await loadModelHealthByIdentity(sql, {
       fingerprint: healthFingerprint,

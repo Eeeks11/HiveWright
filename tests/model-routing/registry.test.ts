@@ -26,6 +26,56 @@ describe("model routing registry view", () => {
     })).toBe("openai:codex:openai-codex/gpt-5.5");
   });
 
+  it("uses the canonical Ollama endpoint fingerprint for local route health", async () => {
+    const originalEndpoint = process.env.OLLAMA_ENDPOINT;
+    process.env.OLLAMA_ENDPOINT = "http://runtime-ollama.test:11434/";
+    const fingerprint = createRuntimeCredentialFingerprint({
+      provider: "local",
+      adapterType: "ollama",
+      baseUrl: "http://runtime-ollama.test:11434",
+    });
+
+    try {
+      await sql`
+        INSERT INTO hive_models (
+          hive_id,
+          provider,
+          model_id,
+          adapter_type,
+          enabled
+        )
+        VALUES (${HIVE_ID}, 'local', 'ollama/qwen3:32b', 'ollama', true)
+      `;
+
+      await sql`
+        INSERT INTO model_health (
+          fingerprint,
+          model_id,
+          status,
+          last_probed_at,
+          next_probe_at
+        )
+        VALUES (${fingerprint}, 'ollama/qwen3:32b', 'healthy', NOW(), NOW() + INTERVAL '1 hour')
+      `;
+
+      const view = await loadModelRoutingView(sql, HIVE_ID);
+
+      expect(view.models[0]).toMatchObject({
+        adapterType: "ollama",
+        model: "ollama/qwen3:32b",
+        healthFingerprint: fingerprint,
+        status: "healthy",
+        local: true,
+      });
+    } finally {
+      if (originalEndpoint === undefined) {
+        delete process.env.OLLAMA_ENDPOINT;
+      } else {
+        process.env.OLLAMA_ENDPOINT = originalEndpoint;
+      }
+    }
+  });
+
   it("derives model rows from configured hive models and health", async () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "openai",
