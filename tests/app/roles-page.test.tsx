@@ -114,6 +114,8 @@ describe("RolesPage", () => {
     const optionValues = Array.from(modelSelect.options).map((option) => option.value);
 
     expect(optionValues).toContain("openai-codex/gpt-5.5");
+    expect(optionValues).toContain("openai-codex/gpt-5.4-mini");
+    expect(optionValues).not.toContain("openai-codex/gpt-5.3-codex");
     expect(Array.from(modelSelect.options).some((option) => option.text === "gpt-5.5")).toBe(true);
   });
 

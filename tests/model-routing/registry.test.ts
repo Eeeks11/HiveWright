@@ -418,6 +418,117 @@ describe("model routing registry view", () => {
     });
   });
 
+  it("prunes unsupported legacy Codex routes instead of retaining anonymous excluded inventory", async () => {
+    const legacyModel = "openai-codex/gpt-5.3-codex";
+    const retainedModel = "openai-codex/gpt-5.4-mini";
+
+    for (const [index, modelId] of [legacyModel, retainedModel].entries()) {
+      await sql`
+        INSERT INTO hive_models (
+          hive_id,
+          provider,
+          model_id,
+          adapter_type,
+          capabilities,
+          fallback_priority,
+          enabled
+        )
+        VALUES (
+          ${HIVE_ID},
+          'openai',
+          ${modelId},
+          'codex',
+          '["text","code","reasoning"]'::jsonb,
+          ${100 + index},
+          true
+        )
+      `;
+    }
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+
+    expect(view.models.map((model) => model.model)).not.toContain(legacyModel);
+    expect(view.basePolicyState.policy?.candidates.map((candidate) => candidate.model)).not.toContain(legacyModel);
+    expect(view.policy.candidates.map((candidate) => candidate.model)).not.toContain(legacyModel);
+    expect(view.policy.candidates.find((candidate) => candidate.model === retainedModel)).toMatchObject({
+      adapterType: "codex",
+      model: retainedModel,
+      enabled: true,
+      canonicalRouteSet: expect.objectContaining({ membership: "included" }),
+    });
+  });
+
+  it("persists an empty canonical policy after pruning the only unsupported legacy Codex route", async () => {
+    const legacyModel = "openai-codex/gpt-5.3-codex";
+
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        capabilities,
+        fallback_priority,
+        enabled
+      )
+      VALUES (
+        ${HIVE_ID},
+        'openai',
+        ${legacyModel},
+        'codex',
+        '["text","code","reasoning"]'::jsonb,
+        100,
+        true
+      )
+    `;
+
+    await saveModelRoutingPolicy(sql, HIVE_ID, {
+      preferences: { costQualityBalance: 42 },
+      routeOverrides: {
+        [`openai:codex:${legacyModel}`]: {
+          enabled: true,
+          roleSlugs: ["dev-agent"],
+        },
+      },
+      roleRoutes: {
+        "dev-agent": {
+          candidateModels: [legacyModel],
+        },
+      },
+      candidates: [
+        {
+          adapterType: "codex",
+          model: legacyModel,
+          enabled: true,
+          status: "healthy",
+        },
+      ],
+    });
+
+    const view = await loadModelRoutingView(sql, HIVE_ID);
+
+    expect(view.models).toHaveLength(0);
+    expect(view.basePolicyState.source).toBe("hive");
+    expect(view.basePolicyState.policy).toEqual({
+      preferences: { costQualityBalance: 42 },
+      candidates: [],
+    });
+    expect(view.policy.candidates).toHaveLength(0);
+    expect(view.policy.routeOverrides).toBeUndefined();
+    expect(view.policy.roleRoutes).toBeUndefined();
+
+    const persisted = await sql<{ config: { candidates?: unknown[]; routeOverrides?: unknown; roleRoutes?: unknown } }[]>`
+      SELECT config
+      FROM adapter_config
+      WHERE hive_id = ${HIVE_ID}
+        AND adapter_type = 'model-routing'
+      LIMIT 1
+    `;
+    expect(persisted[0].config.candidates).toEqual([]);
+    expect(persisted[0].config.routeOverrides).toBeUndefined();
+    expect(persisted[0].config.roleRoutes).toBeUndefined();
+  });
+
   it("retires disabled Anthropic claude-code routes from the canonical automatic pool", async () => {
     const disabledAnthropicModels = Array.from({ length: 17 }, (_, index) => (
       `anthropic/claude-disabled-${String(index + 1).padStart(2, "0")}`

@@ -47,10 +47,8 @@ const STATIC_OPENAI_MODELS = [
   "gpt-5-codex",
   "gpt-5.1",
   "gpt-5.1-codex",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
   "gpt-5.4",
+  "gpt-5.4-mini",
   "gpt-5.5",
   "gpt-4.1",
   "gpt-4.1-mini",
@@ -297,6 +295,7 @@ function extractOpenAiModelIds(text: string): string[] {
     .filter((id) => !/^gpt-4(?:-turbo(?:-preview)?|\.5(?:-preview)?)?$/.test(id))
     .filter((id) => !/(?:image|ui)/.test(id))
     .filter((id) => !/^gpt-\d-\d$/.test(id))
+    .filter((id) => !isUnsupportedModelDiscoveryCandidate("codex", id))
     .filter((id) => inferOpenAiCapabilities(id).length > 0);
 }
 

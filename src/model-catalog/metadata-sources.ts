@@ -60,6 +60,7 @@ const OFFICIAL_COST_FALLBACKS = new Map<string, {
 }>([
   ["openai-codex/gpt-5.5", { input: 5, output: 30, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
   ["openai-codex/gpt-5.4", { input: 2.5, output: 15, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
+  ["openai-codex/gpt-5.4-mini", { input: 0.5, output: 2, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
   ["anthropic/claude-opus-4-7", { input: 5, output: 25, sourceName: "Anthropic Opus pricing", sourceUrl: ANTHROPIC_OPUS_URL }],
   ["anthropic/claude-sonnet-4-6", { input: 3, output: 15, sourceName: "Anthropic Sonnet pricing", sourceUrl: ANTHROPIC_SONNET_URL }],
   ["google/gemini-2.5-flash", { input: 0.3, output: 2.5, sourceName: "Google Gemini API pricing", sourceUrl: GEMINI_PRICING_URL }],
@@ -82,6 +83,15 @@ const KNOWN_LIVE_MODELS: KnownLiveModel[] = [
     adapterType: "codex",
     modelId: "openai-codex/gpt-5.4",
     displayName: "GPT-5.4",
+    family: "gpt-5",
+    capabilities: ["text", "code", "reasoning"],
+    local: false,
+  },
+  {
+    provider: "openai",
+    adapterType: "codex",
+    modelId: "openai-codex/gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
     family: "gpt-5",
     capabilities: ["text", "code", "reasoning"],
     local: false,
@@ -173,6 +183,7 @@ export async function buildLiveModelCatalogEntries(
   const costs = new Map(OFFICIAL_COST_FALLBACKS);
   setCost(costs, "openai-codex/gpt-5.5", parseSectionTokenPrices(openAiPricing, "GPT-5.5", ["GPT-5.4"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.4", parseSectionTokenPrices(openAiPricing, "GPT-5.4", ["GPT-5.3", "Containers"]), "OpenAI API pricing", OPENAI_PRICING_URL);
+  setCost(costs, "openai-codex/gpt-5.4-mini", parseSectionTokenPrices(openAiPricing, "GPT-5.4 Mini", ["GPT-5.4", "GPT-5.3"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "anthropic/claude-opus-4-7", parseAnthropicOpusPricing(anthropicPricing), "Anthropic Opus pricing", ANTHROPIC_OPUS_URL);
   setCost(costs, "anthropic/claude-sonnet-4-6", parseAnthropicOpusPricing(anthropicSonnetPricing), "Anthropic Sonnet pricing", ANTHROPIC_SONNET_URL);
   setCost(costs, "google/gemini-2.5-flash", parseSectionTokenPrices(geminiPricing, "Gemini 2.5 Flash", ["Gemini 2.5 Flash-Lite", "Gemini 2.5 Pro", "Gemini 3"]), "Google Gemini API pricing", GEMINI_PRICING_URL);
@@ -347,6 +358,7 @@ function parseArtificialAnalysisScores(text: string): Map<string, number> {
   const scores = new Map<string, number>();
   setQuality(scores, "openai-codex/gpt-5.5", normalized, ["GPT-5.5"]);
   setQuality(scores, "openai-codex/gpt-5.4", normalized, ["GPT-5.4"]);
+  setQuality(scores, "openai-codex/gpt-5.4-mini", normalized, ["GPT-5.4 Mini", "GPT-5.4-mini"]);
   setQuality(scores, "anthropic/claude-opus-4-7", normalized, ["Claude Opus 4.7", "Opus 4.7"]);
   setQuality(scores, "anthropic/claude-sonnet-4-6", normalized, ["Claude Sonnet 4.6", "Sonnet 4.6"]);
   setQuality(scores, "google/gemini-2.5-flash", normalized, ["Gemini 2.5 Flash"]);
@@ -533,6 +545,7 @@ function parseLlmStatsScores(text: string): Map<string, number> {
   const scores = new Map<string, number>();
   setLlmStatsScore(scores, "openai-codex/gpt-5.5", normalized, ["GPT-5.5"]);
   setLlmStatsScore(scores, "openai-codex/gpt-5.4", normalized, ["GPT-5.4"]);
+  setLlmStatsScore(scores, "openai-codex/gpt-5.4-mini", normalized, ["GPT-5.4 Mini", "GPT-5.4-mini"]);
   setLlmStatsScore(scores, "anthropic/claude-opus-4-7", normalized, ["Claude Opus 4.7"]);
   setLlmStatsScore(scores, "anthropic/claude-sonnet-4-6", normalized, ["Claude Sonnet 4.6"]);
   setLlmStatsScore(scores, "google/gemini-2.5-flash", normalized, ["Gemini 2.5 Flash"]);

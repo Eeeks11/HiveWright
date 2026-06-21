@@ -136,7 +136,7 @@ const ANTHROPIC_MODELS = [
 const CODEX_MODELS = [
   "openai-codex/gpt-5.5",
   "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.4-mini",
 ];
 const GEMINI_MODELS = [
   "google/gemini-2.5-pro",
