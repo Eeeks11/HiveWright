@@ -223,7 +223,7 @@ export async function loadModelRoutingView(
   }
 
   const canonicalCandidates = buildCanonicalRouteCandidates(models);
-  if (canonicalCandidates.length > 0 && !sameCanonicalRouteCandidates(basePolicyState.policy?.candidates ?? [], canonicalCandidates)) {
+  if (!sameCanonicalRouteCandidates(basePolicyState.policy?.candidates ?? [], canonicalCandidates)) {
     const persistedPolicy: ModelRoutingPolicy = {
       preferences: basePolicyState.policy?.preferences,
       routeOverrides: basePolicyState.policy?.routeOverrides,
