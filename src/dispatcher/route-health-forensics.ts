@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DispatcherModelRouteHealthDecision } from "./adapter-health";
 import type { ProviderFailoverDecision } from "./provider-failover";
 import {
@@ -6,6 +7,7 @@ import {
 } from "@/diagnostics/build-provenance";
 
 export interface RuntimeHealthGateForensicsInput {
+  roleSlug?: string | null;
   primaryAdapterType: string;
   primaryModel: string;
   fallbackAdapterType?: string | null;
@@ -27,7 +29,9 @@ export interface RuntimeHealthGateForensics extends Record<string, unknown> {
     executionCapsuleExpected: false;
     reason: "dispatcher_blocked_before_adapter_session_startup";
   };
+  runtimeBlockFingerprint: string;
   routeDeclaration: {
+    roleSlug: string | null;
     primaryAdapterType: string;
     primaryModel: string;
     fallbackAdapterType: string | null;
@@ -78,7 +82,9 @@ export function buildRuntimeHealthGateForensics(
       executionCapsuleExpected: false,
       reason: "dispatcher_blocked_before_adapter_session_startup",
     },
+    runtimeBlockFingerprint: createRuntimeBlockFingerprint(input),
     routeDeclaration: {
+      roleSlug: input.roleSlug ?? null,
       primaryAdapterType: input.primaryAdapterType,
       primaryModel: input.primaryModel,
       fallbackAdapterType: input.fallbackAdapterType ?? null,
@@ -131,4 +137,23 @@ function persistRouteHealthDecision(
       result: decision.refresh.result ? { ...decision.refresh.result } : null,
     },
   };
+}
+
+
+function createRuntimeBlockFingerprint(input: RuntimeHealthGateForensicsInput): string {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      roleSlug: input.roleSlug ?? null,
+      primaryAdapterType: input.primaryAdapterType,
+      primaryModel: input.primaryModel,
+      primaryReason: input.primaryHealth.reason,
+      primaryHealthReason: input.primaryHealth.modelHealth.reason,
+      primaryHealthFingerprint: input.primaryHealth.modelHealth.fingerprint ?? null,
+      fallbackDeclared: Boolean(input.fallbackAdapterType && input.fallbackModel),
+      fallbackAdapterType: input.fallbackAdapterType ?? null,
+      fallbackModel: input.fallbackModel ?? null,
+      fallbackReason: input.fallbackHealth?.reason ?? null,
+      routeReason: input.route.reason,
+    }))
+    .digest("hex");
 }

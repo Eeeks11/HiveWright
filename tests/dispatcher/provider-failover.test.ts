@@ -130,6 +130,7 @@ describe("provider failover drill routing", () => {
 
   it("runs a healthy primary even when a role has no declared fallback path", () => {
     const decision = decideProviderFailoverRoute({
+      roleSlug: "dev-agent",
       primaryAdapterType: "claude-code",
       primaryModel: "anthropic/claude-sonnet-4-6",
       fallbackAdapterType: null,
@@ -150,12 +151,14 @@ describe("provider failover drill routing", () => {
       reason: "primary_adapter_healthy",
     });
     expect(decision.diagnostic).toContain("Fallback route declaration: missing.");
+    expect(decision.diagnostic).toContain("Affected role: dev-agent");
   });
 
-  it("parks an unhealthy primary when no fallback path is declared", () => {
+  it("parks an unhealthy local Ollama primary with role and route-family diagnostics when no fallback path is declared", () => {
     const decision = decideProviderFailoverRoute({
-      primaryAdapterType: "claude-code",
-      primaryModel: "anthropic/claude-sonnet-4-6",
+      roleSlug: "local-worker",
+      primaryAdapterType: "ollama",
+      primaryModel: "ollama/qwen3.6:35b",
       fallbackAdapterType: null,
       fallbackModel: null,
       primaryHealth: healthDecision({
@@ -166,13 +169,15 @@ describe("provider failover drill routing", () => {
     });
 
     expect(decision).toMatchObject({
-      adapterType: "claude-code",
-      model: "anthropic/claude-sonnet-4-6",
+      adapterType: "ollama",
+      model: "ollama/qwen3.6:35b",
       canRun: false,
       usedFallback: false,
       clearFallbackModel: false,
       reason: "no_declared_fallback_route",
     });
     expect(decision.diagnostic).toContain("Fallback route declaration: missing.");
+    expect(decision.diagnostic).toContain("Affected role: local-worker");
+    expect(decision.diagnostic).toContain("route family: local/ollama");
   });
 });

@@ -113,6 +113,7 @@ import {
   markInterruptedRunningExecutionRuns,
   recordExecutionRunOutput,
   startExecutionRun,
+  summarizeRuntimeBlockFingerprint,
   type ExecutionRunRecord,
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
@@ -889,6 +890,7 @@ export class Dispatcher {
       }
 
       const route = decideProviderFailoverRoute({
+        roleSlug: task.assignedTo,
         primaryAdapterType,
         primaryModel: ctx.model,
         fallbackAdapterType: ctx.fallbackAdapterType,
@@ -916,6 +918,7 @@ export class Dispatcher {
       if (!route.canRun) {
         const reason = `runtime_blocked: Runtime health gate blocked task before spawn. ${route.diagnostic}`;
         const routeHealthForensics = buildRuntimeHealthGateForensics({
+          roleSlug: task.assignedTo,
           primaryAdapterType,
           primaryModel: ctx.model,
           fallbackAdapterType: ctx.fallbackAdapterType,
@@ -941,10 +944,14 @@ export class Dispatcher {
           reason,
           evidence: routeHealthForensics,
         });
+        const repeatedRuntimeBlockAlert = await this.buildRepeatedRuntimeBlockAlert(
+          task.hiveId,
+          routeHealthForensics.runtimeBlockFingerprint,
+        );
         await writeTaskLog(this.sql, {
           taskId: task.id,
           goalId: task.goalId ?? undefined,
-          chunk: reason,
+          chunk: repeatedRuntimeBlockAlert ? `${reason} ${repeatedRuntimeBlockAlert}` : reason,
           type: "status",
         }).catch(() => {});
         await blockTask(this.sql, task.id, reason);
@@ -2166,6 +2173,28 @@ export class Dispatcher {
         return new OpenAIImageAdapter();
       }
     }
+  }
+
+
+  private async buildRepeatedRuntimeBlockAlert(
+    hiveId: string,
+    runtimeBlockFingerprint: string | undefined,
+  ): Promise<string | null> {
+    if (!runtimeBlockFingerprint) return null;
+    try {
+      const summary = await summarizeRuntimeBlockFingerprint(this.sql, {
+        hiveId,
+        fingerprint: runtimeBlockFingerprint,
+      });
+      if (summary.repeated) {
+        return `[runtime-route-alert] Repeated identical runtime block fingerprint ${summary.fingerprint} occurred ${summary.count} times in the last 24 hours; operator attention recommended.`;
+      }
+    } catch (err) {
+      console.warn(
+        `[dispatcher] repeated runtime block fingerprint check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return null;
   }
 
   /**
