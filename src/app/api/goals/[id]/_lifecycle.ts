@@ -1,12 +1,13 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { pruneGoalSupervisor } from "@/openclaw/goal-supervisor-cleanup";
 
 type GoalLifecycleStatus = "abandoned" | "cancelled";
 
 type GoalLifecycleBody = {
+  hiveId?: unknown;
   reason?: unknown;
 };
 
@@ -96,6 +97,13 @@ export async function changeGoalLifecycleStatus(
 
     const parsedReason = parseReason(body, status);
     if (!parsedReason.ok) return parsedReason.response;
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [goal] = await sql<{
       id: string;
@@ -106,19 +114,12 @@ export async function changeGoalLifecycleStatus(
     }[]>`
       SELECT id, hive_id, title, status, session_id
       FROM goals
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) return jsonError("Goal not found", 404);
 
     if (audit.sourceHiveId !== goal.hive_id) {
       return jsonError("Forbidden: EA audit hive does not match this goal", 403);
-    }
-
-    if (!user.isSystemOwner) {
-      const hasAccess = await canMutateHive(sql, user.id, goal.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal's hive", 403);
-      }
     }
 
     if (TERMINAL_GOAL_STATUSES.has(goal.status)) {
@@ -134,7 +135,7 @@ export async function changeGoalLifecycleStatus(
       await tx`
         UPDATE goals
         SET status = ${status}, session_id = NULL, updated_at = NOW()
-        WHERE id = ${id}
+        WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       `;
       await tx`
         INSERT INTO goal_comments (goal_id, body, created_by)

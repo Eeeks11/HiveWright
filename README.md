@@ -53,7 +53,7 @@ npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services instead of ad-hoc terminals, this repo includes `hivewrightv2-dashboard.service` and `hivewrightv2-dispatcher.service` as reference units.
+If you run HiveWright as user services, keep the services pointed at the locked operational install (`/home/trent/apps/HiveWright`) and keep runtime/private state under `~/.hivewright`. Do not run dashboard or dispatcher from a writable `~/dev` checkout; updates should flow through GitHub and the privileged operational updater.
 
 ## Setup Walkthrough
 
@@ -107,7 +107,7 @@ Before relying on a backup, test that you can restore it on another machine or a
 
 ## Update
 
-When you update HiveWright from `main`, use this order:
+When you update HiveWright from `main`, use this order for ad-hoc local terminals:
 
 ```bash
 git pull
@@ -116,6 +116,8 @@ npm run db:migrate:app
 systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
 ```
+
+For persistent live installs, use the privileged operational updater from the locked install. It fast-forwards `/home/trent/apps/HiveWright`, rebuilds dashboard and dispatcher artifacts, restarts the user services, and verifies the running PIDs have cwd `/home/trent/apps/HiveWright`.
 
 Notes:
 

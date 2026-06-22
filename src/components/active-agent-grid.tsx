@@ -61,6 +61,7 @@ export function ActiveAgentGrid({ hiveId }: { hiveId: string }) {
       {data.map((task) => (
         <AgentCard
           key={task.id}
+          hiveId={hiveId}
           taskId={task.id}
           assignedTo={task.assignedTo}
           title={task.title}

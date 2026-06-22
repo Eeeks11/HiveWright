@@ -8,6 +8,31 @@ type Finding = {
 };
 
 const HIVE_ID_QUERY_READ = /\bsearchParams\s*\.\s*get\s*\(\s*(['"`])hiveId\1\s*\)/;
+const STRICT_HIVE_TARGET_HELPER = "requireStrictHiveTarget";
+const MANUAL_HIVE_TARGET_ALLOWLIST = new Map<string, string>([
+  ["src/app/api/action-policies/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/active-supervisors/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/active-tasks/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/board/sessions/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/budget-controls/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/capture-sessions/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/connector-installs/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/connector-plugins/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/connectors/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/dashboard/summary/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/deliverables/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/ea/chat/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/events/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/oauth/[slug]/start/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/outcomes/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/roles/[slug]/observability/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/roles/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/runtime-drift/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/setup-health/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/supervisor-reports/route.ts", "existing manual access check; migrate in route-hardening slices"],
+  ["src/app/api/voice/sessions/latest/route.ts", "existing manual access check; migrate in route-hardening slices"],
+]);
+const FORBIDDEN_HIVE_TARGET_FALLBACK = /\b(activeHiveId|activeHive|getActiveHive|membershipHiveId|globalHiveId|defaultHiveId)\b/;
 const ESCAPE_HATCH = /\/\/\s*hive-access-not-required\s*:(.*)$/gm;
 
 async function findRouteFiles(dir: string): Promise<string[]> {
@@ -64,18 +89,30 @@ export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]
       });
     }
 
+    if (FORBIDDEN_HIVE_TARGET_FALLBACK.test(source) && !escapeHatch.hasValid) {
+      findings.push({
+        file: relativeFile,
+        message:
+          "route references an active/membership/global hive fallback; use requireStrictHiveTarget or document why this route is not hive-scoped.",
+      });
+    }
+
     if (!HIVE_ID_QUERY_READ.test(source)) {
       continue;
     }
 
-    if (source.includes("canAccessHive") || escapeHatch.hasValid) {
+    if (source.includes(STRICT_HIVE_TARGET_HELPER) || escapeHatch.hasValid) {
+      continue;
+    }
+
+    if (MANUAL_HIVE_TARGET_ALLOWLIST.has(relativeFile) && source.includes("canAccessHive")) {
       continue;
     }
 
     findings.push({
       file: relativeFile,
       message:
-        'reads searchParams.get("hiveId") but does not reference canAccessHive or a valid hive-access-not-required reason.',
+        'reads searchParams.get("hiveId") but does not use requireStrictHiveTarget, or a valid hive-access-not-required reason. Existing manual canAccessHive routes must be listed in MANUAL_HIVE_TARGET_ALLOWLIST with a migration reason.',
     });
   }
 
@@ -100,6 +137,11 @@ async function runSelfTest(): Promise<void> {
     await writeRoute(
       rootDir,
       "valid-access",
+      'import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";\nexport function GET(request: Request) { return new URL(request.url).searchParams.get("hiveId") && requireStrictHiveTarget; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "legacy-manual-access",
       'import { canAccessHive } from "@/auth/users";\nexport function GET(request: Request) { return new URL(request.url).searchParams.get("hiveId") && canAccessHive; }\n',
     );
     await writeRoute(
@@ -109,13 +151,23 @@ async function runSelfTest(): Promise<void> {
     );
     await writeRoute(
       rootDir,
+      "fallback-active-hive",
+      "export function GET() { const hiveId = activeHiveId; return Response.json({ hiveId }); }\n",
+    );
+    await writeRoute(
+      rootDir,
       "empty-escape",
       "// hive-access-not-required:   \nexport function GET() { return Response.json({ ok: true }); }\n",
     );
 
     const findings = await checkRouteAuth(rootDir);
     const files = new Set(findings.map((finding) => finding.file));
-    const expected = ["src/app/api/missing-access/route.ts", "src/app/api/empty-escape/route.ts"];
+    const expected = [
+      "src/app/api/missing-access/route.ts",
+      "src/app/api/legacy-manual-access/route.ts",
+      "src/app/api/fallback-active-hive/route.ts",
+      "src/app/api/empty-escape/route.ts",
+    ];
 
     for (const file of expected) {
       if (!files.has(file)) {

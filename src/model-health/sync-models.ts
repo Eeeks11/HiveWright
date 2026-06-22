@@ -199,6 +199,9 @@ function isUnsupportedModelHealthCandidate(adapterType: string, modelId: string)
   if (model === "google/gemini-3.1-flash-live-preview" || model === "gemini-3.1-flash-live-preview") {
     return true;
   }
+  if (adapter === "gemini" && model.includes("preview")) {
+    return true;
+  }
 
   return false;
 }

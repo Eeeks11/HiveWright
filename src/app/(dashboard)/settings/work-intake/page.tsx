@@ -27,7 +27,7 @@ const DEFAULTS: WorkIntakeConfig = {
   primaryProvider: "ollama",
   primaryModel: "qwen3:32b",
   fallbackProvider: "openrouter",
-  fallbackModel: "google/gemini-2.0-flash-exp:free",
+  fallbackModel: "google/gemini-2.5-flash",
   confidenceThreshold: 0.6,
   timeoutMs: 15000,
   temperature: 0.1,
@@ -51,7 +51,7 @@ export default function WorkIntakeSettingsPage() {
   const [testing, setTesting] = useState(false);
 
   const loadConfig = useCallback(async () => {
-    const res = await fetch("/api/adapter-config?adapterType=work-intake");
+    const res = await fetch("/api/adapter-config/global?adapterType=work-intake");
     const body = await res.json();
     const row = (body.data || []).find((c: { adapterType: string }) => c.adapterType === "work-intake");
     if (row?.config) setConfig({ ...DEFAULTS, ...row.config });

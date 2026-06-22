@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive, canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { serializeGoalBudgetStatus } from "@/budget/status";
 
 type GoalRow = {
@@ -72,7 +72,7 @@ function mapGoalRow(r: GoalRow) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -80,6 +80,8 @@ export async function GET(
     if ("response" in authz) return authz.response;
     const { user } = authz;
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
 
     const goalRows = await sql`
       SELECT id, hive_id, parent_id, title, description, priority, status,
@@ -89,7 +91,7 @@ export async function GET(
              outcome_process_references, outcome_classified_at, outcome_classified_by,
              created_at, updated_at
       FROM goals
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
 
     if (goalRows.length === 0) {
@@ -97,24 +99,18 @@ export async function GET(
     }
 
     const goal = mapGoalRow(goalRows[0] as unknown as GoalRow);
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, goal.hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal", 403);
-      }
-    }
 
     const [taskSummaryRows, subGoalRows] = await Promise.all([
       sql`
         SELECT status, COUNT(*) as count
         FROM tasks
-        WHERE goal_id = ${id}
+        WHERE goal_id = ${id} AND hive_id = ${target.hiveId}::uuid
         GROUP BY status
       `,
       sql`
         SELECT id, title, status, created_at
         FROM goals
-        WHERE parent_id = ${id}
+        WHERE parent_id = ${id} AND hive_id = ${target.hiveId}::uuid
         ORDER BY created_at ASC
       `,
     ]);
@@ -142,6 +138,7 @@ type PatchGoalBody = {
   description?: unknown;
   priority?: unknown;
   status?: unknown;
+  hiveId?: unknown;
 };
 
 function validatePatchBody(body: PatchGoalBody):
@@ -154,7 +151,7 @@ function validatePatchBody(body: PatchGoalBody):
     };
   }
   | { ok: false; response: Response } {
-  const allowed = new Set(["title", "description", "priority"]);
+  const allowed = new Set(["title", "description", "priority", "hiveId"]);
   const keys = Object.keys(body);
   const disallowed = keys.filter((key) => !allowed.has(key));
   if (disallowed.length > 0) {
@@ -232,21 +229,21 @@ export async function PATCH(
 
     const validated = validatePatchBody(body);
     if (!validated.ok) return validated.response;
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [goal] = await sql<{ id: string; hive_id: string }[]>`
       SELECT id, hive_id
       FROM goals
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) {
       return jsonError("Goal not found", 404);
-    }
-
-    if (!user.isSystemOwner) {
-      const hasAccess = await canMutateHive(sql, user.id, goal.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal", 403);
-      }
     }
 
     const { title, description, priority } = validated.updates;
@@ -260,7 +257,7 @@ export async function PATCH(
         END,
         priority = COALESCE(${priority ?? null}, priority),
         updated_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       RETURNING id, hive_id, parent_id, title, description, priority, status,
                 budget_cents, spent_cents, budget_state, budget_warning_triggered_at,
                 budget_enforced_at, budget_enforcement_reason, session_id,

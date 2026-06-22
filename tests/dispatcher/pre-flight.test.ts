@@ -1,9 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, it, expect } from "vitest";
 import { runPreFlightChecks } from "@/dispatcher/pre-flight";
 import type { SessionContext } from "@/adapters/types";
 
 const originalOpenAIKey = process.env.OPENAI_API_KEY;
 const originalCodexAuthFile = process.env.CODEX_AUTH_FILE;
+const originalTaskWorkspaceRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
 
 afterEach(() => {
   if (originalOpenAIKey === undefined) {
@@ -15,6 +19,11 @@ afterEach(() => {
     delete process.env.CODEX_AUTH_FILE;
   } else {
     process.env.CODEX_AUTH_FILE = originalCodexAuthFile;
+  }
+  if (originalTaskWorkspaceRoot === undefined) {
+    delete process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+  } else {
+    process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = originalTaskWorkspaceRoot;
   }
 });
 
@@ -72,6 +81,36 @@ describe("runPreFlightChecks", () => {
 
     const result = await runPreFlightChecks(ctx);
     expect(result.passed).toBe(true);
+  });
+
+  it("uses the dispatcher-owned Codex scratch workspace for non-git tasks instead of a missing hive workspace", async () => {
+    const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hw-preflight-codex-"));
+    process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = scratchRoot;
+    const ctx = {
+      task: { id: "codex-non-git-task", assignedTo: "ops-agent" },
+      roleTemplate: { slug: "ops-agent" },
+      projectWorkspace: "/nonexistent/hive/workspace",
+      hiveWorkspacePath: "/nonexistent/hive/workspace",
+      gitBackedProject: false,
+      workspaceIsolation: {
+        status: "skipped",
+        baseWorkspacePath: "/nonexistent/hive/workspace",
+        worktreePath: null,
+        branchName: null,
+        isolationActive: false,
+        reused: false,
+        reason: "not a git work tree",
+      },
+      model: "openai-codex/gpt-5.5",
+      primaryAdapterType: "codex",
+      credentials: {},
+    } as unknown as SessionContext;
+
+    const result = await runPreFlightChecks(ctx);
+
+    expect(result.passed).toBe(true);
+    expect(result.failures).toEqual([]);
+    expect(fs.existsSync(path.join(scratchRoot, "codex-non-git-task"))).toBe(true);
   });
 
   it("fails clearly when OpenAI Images API auth is missing", async () => {

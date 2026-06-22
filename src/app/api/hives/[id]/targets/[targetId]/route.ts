@@ -2,10 +2,10 @@ import { NextResponse } from "next/server";
 import { sql } from "../../../../_lib/db";
 import { jsonOk, jsonError } from "../../../../_lib/responses";
 import { requireApiUser } from "../../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireHiveTargetMatchesPath, requireStrictHiveTarget } from "../../../../_lib/hive-target";
 import { isValidStatus } from "../_status";
 
-const ALLOWED = new Set(["title", "target_value", "deadline", "notes", "sort_order", "status"]);
+const ALLOWED = new Set(["hiveId", "title", "target_value", "deadline", "notes", "sort_order", "status"]);
 
 function rowToApi(row: Record<string, unknown>) {
   return {
@@ -31,18 +31,13 @@ export async function PATCH(
   // Audit d20f7b46 Sprint 2: hive-scoped mutation must require hive access.
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
-  const { user } = authz;
-  if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, id);
-    if (!hasAccess) {
-      return jsonError("Forbidden: caller cannot access this hive", 403);
-    }
-  }
-
-  const [existing] = await sql`
-    SELECT id FROM hive_targets WHERE id = ${targetId} AND hive_id = ${id}
-  `;
-  if (!existing) return jsonError("target not found", 404);
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "path", params: { id }, key: "id" },
+    { mode: "mutate", label: "id" },
+  );
+  if (target.ok === false) return target.response;
 
   let body: Record<string, unknown>;
   try {
@@ -50,6 +45,14 @@ export async function PATCH(
   } catch {
     return jsonError("invalid JSON", 400);
   }
+
+  const requestedHive = requireHiveTargetMatchesPath({ kind: "body", body }, id);
+  if (requestedHive.ok === false) return requestedHive.response;
+
+  const [existing] = await sql`
+    SELECT id FROM hive_targets WHERE id = ${targetId} AND hive_id = ${id}
+  `;
+  if (!existing) return jsonError("target not found", 404);
 
   for (const key of Object.keys(body)) {
     if (!ALLOWED.has(key)) return jsonError(`unknown field: ${key}`, 400);
@@ -89,11 +92,11 @@ export async function PATCH(
     await sql`
       UPDATE hive_targets
       SET ${sql(updates)}, updated_at = NOW()
-      WHERE id = ${targetId}
+      WHERE id = ${targetId} AND hive_id = ${id}
     `;
   }
 
-  const [row] = await sql`SELECT * FROM hive_targets WHERE id = ${targetId}`;
+  const [row] = await sql`SELECT * FROM hive_targets WHERE id = ${targetId} AND hive_id = ${id}`;
   return jsonOk(rowToApi(row));
 }
 
@@ -106,13 +109,13 @@ export async function DELETE(
   // Audit d20f7b46 Sprint 2: hive-scoped mutation must require hive access.
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
-  const { user } = authz;
-  if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, id);
-    if (!hasAccess) {
-      return jsonError("Forbidden: caller cannot access this hive", 403);
-    }
-  }
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "path", params: { id }, key: "id" },
+    { mode: "mutate", label: "id" },
+  );
+  if (target.ok === false) return target.response;
 
   const result = await sql`
     DELETE FROM hive_targets WHERE id = ${targetId} AND hive_id = ${id}

@@ -21,6 +21,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 type GoalRow = {
   id: string;
+  hive_id: string;
   title: string;
   description: string | null;
   status: string;
@@ -67,7 +68,7 @@ export default async function GoalDetailPage({
 
   const [goalRows, subGoalRows, taskRows] = await Promise.all([
     sql<GoalRow[]>`
-      SELECT id, title, description, status, budget_cents, spent_cents, parent_id, created_at, updated_at
+      SELECT id, hive_id, title, description, status, budget_cents, spent_cents, parent_id, created_at, updated_at
       FROM goals
       WHERE id = ${id}
     `,
@@ -166,11 +167,12 @@ export default async function GoalDetailPage({
 
       {/* Supervisor's own thoughts + tool calls, parsed from the codex
           rollout file. Polls every 5 s while the goal is active. */}
-      <SupervisorActivityPanel goalId={goal.id} />
+      <SupervisorActivityPanel hiveId={goal.hive_id} goalId={goal.id} />
 
       {/* Live agent activity — uses goal stream so tasks that start after page
           load appear automatically without a manual refresh */}
       <GoalLiveActivity
+        hiveId={goal.hive_id}
         goalId={goal.id}
         taskTitles={Object.fromEntries(taskRows.map((t) => [t.id, t.title]))}
       />

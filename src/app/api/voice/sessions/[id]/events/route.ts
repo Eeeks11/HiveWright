@@ -1,6 +1,6 @@
 import { requireApiUser } from "@/app/api/_lib/auth";
 import { sql } from "@/app/api/_lib/db";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { db } from "@/db";
 import { voiceSessionEvents, voiceSessions } from "@/db/schema/voice-sessions";
 import { and, eq, gt } from "drizzle-orm";
@@ -35,25 +35,18 @@ export async function GET(
   if ("response" in authz) return authz.response;
 
   const { id: sessionId } = await params;
+  const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request: req });
+  if (!target.ok) return target.response;
   const [session] = await db
     .select({ hiveId: voiceSessions.hiveId })
     .from(voiceSessions)
-    .where(eq(voiceSessions.id, sessionId))
+    .where(and(eq(voiceSessions.id, sessionId), eq(voiceSessions.hiveId, target.hiveId)))
     .limit(1);
   if (!session) {
     return new Response(JSON.stringify({ error: "Voice session not found" }), {
       status: 404,
       headers: { "content-type": "application/json" },
     });
-  }
-  if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, session.hiveId);
-    if (!hasAccess) {
-      return new Response(
-        JSON.stringify({ error: "Forbidden: caller cannot access this voice session's hive" }),
-        { status: 403, headers: { "content-type": "application/json" } },
-      );
-    }
   }
 
   const encoder = new TextEncoder();

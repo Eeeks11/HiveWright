@@ -52,11 +52,19 @@ describe("GET /api/setup-readiness hive scope", () => {
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.loadModelRoutingView.mockResolvedValue({
       models: [
-        { adapterType: "codex", hiveModelEnabled: true, routingEnabled: true },
-        { adapterType: "ollama", hiveModelEnabled: true, routingEnabled: true },
-        { adapterType: "claude-code", hiveModelEnabled: false, routingEnabled: false },
-        { adapterType: "gemini", hiveModelEnabled: false, routingEnabled: false },
+        { provider: "openai", adapterType: "codex", model: "gpt-5.5", hiveModelEnabled: true, routingEnabled: true },
+        { provider: "local", adapterType: "ollama", model: "qwen3:32b", hiveModelEnabled: true, routingEnabled: true },
+        { provider: "anthropic", adapterType: "claude-code", model: "claude-opus", hiveModelEnabled: false, routingEnabled: false },
+        { provider: "google", adapterType: "gemini", model: "gemini-pro", hiveModelEnabled: false, routingEnabled: false },
       ],
+      policy: {
+        candidates: [
+          activeCandidate("codex", "gpt-5.5"),
+          activeCandidate("ollama", "qwen3:32b"),
+          excludedCandidate("claude-code", "claude-opus"),
+          excludedCandidate("gemini", "gemini-pro"),
+        ],
+      },
     });
 
     writeStub("codex", "#!/usr/bin/env bash\nexit 0\n");
@@ -85,6 +93,7 @@ describe("GET /api/setup-readiness hive scope", () => {
     expect(body.data.runtimes.ollama.status).toBe("ready");
     expect(body.data.runtimes).not.toHaveProperty("claude-code");
     expect(body.data.runtimes).not.toHaveProperty("gemini");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
   });
 });
 
@@ -99,4 +108,26 @@ function jsonResponse(body: unknown): Response {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function activeCandidate(adapterType: string, model: string) {
+  return {
+    adapterType,
+    model,
+    enabled: true,
+    canonicalRouteSet: {
+      membership: "included",
+    },
+  };
+}
+
+function excludedCandidate(adapterType: string, model: string) {
+  return {
+    adapterType,
+    model,
+    enabled: false,
+    canonicalRouteSet: {
+      membership: "excluded",
+    },
+  };
 }

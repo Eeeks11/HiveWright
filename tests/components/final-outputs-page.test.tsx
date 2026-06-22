@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FinalOutputsPage } from "@/components/outcomes/final-outputs-page";
@@ -48,6 +48,25 @@ describe("FinalOutputsPage", () => {
               primaryArtifactRenderMode: "html",
               primaryActionLabel: "View output page",
             },
+            {
+              id: "completion-2",
+              goalId: "goal-2",
+              hiveId: "hive-1",
+              goalTitle: "Archived launch notes",
+              summary: "Older launch notes handoff.",
+              whyItMatters: "Keeps the archive available without crowding the queue.",
+              recommendedNextAction: "Open only if you need historical context.",
+              impactStatement: "Business hive impact: prior work stays accessible.",
+              status: "archived",
+              createdAt: "2026-05-15T20:00:00.000Z",
+              evidenceWorkProductIds: ["wp-3"],
+              primaryWorkProductId: "wp-3",
+              primaryOpenUrl: "/deliverables/wp-3/open",
+              primaryDetailUrl: "/deliverables/wp-3",
+              primaryArtifactTitle: "Archived notes",
+              primaryArtifactRenderMode: "markdown",
+              primaryActionLabel: "Read output",
+            },
           ],
         }), { status: 200 });
       }
@@ -75,6 +94,7 @@ describe("FinalOutputsPage", () => {
     expect(screen.getByRole("heading", { name: "Final outputs" })).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("Hive 1 launch").length).toBeGreaterThan(0));
     expect(screen.getByText("Hive 1 final handoff.")).toBeTruthy();
+    expect(screen.queryByText("Archived launch notes")).toBeNull();
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/outcomes?hiveId=hive-1");
     expect(globalThis.fetch).not.toHaveBeenCalledWith("/api/outcomes");
   });
@@ -92,5 +112,24 @@ describe("FinalOutputsPage", () => {
     await waitFor(() => expect(screen.getByText(/No final outputs yet/i)).toBeTruthy());
     expect(screen.queryByText("Hive 1 launch")).toBeNull();
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/outcomes?hiveId=hive-2");
+  });
+
+  it("shows archived outputs only when the owner opts into the archived queue", async () => {
+    vi.mocked(useHiveContext).mockReturnValue({
+      selected: { id: "hive-1", slug: "hive-1", name: "Hive One", type: "business" },
+      hives: [],
+      selectHive: () => {},
+      loading: false,
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getAllByText("Hive 1 launch").length).toBeGreaterThan(0));
+    expect(screen.queryByText("Archived launch notes")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+
+    await waitFor(() => expect(screen.getAllByText("Archived launch notes").length).toBeGreaterThan(0));
+    expect(screen.queryByText("Hive 1 launch")).toBeNull();
   });
 });

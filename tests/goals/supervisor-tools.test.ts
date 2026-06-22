@@ -276,6 +276,40 @@ describe("executeSupervisorTool", () => {
     expect(tasks[0].created_by).toBe("goal-supervisor");
   });
 
+
+  it("moves new executable tasks from final-state goals into an active follow-up goal", async () => {
+    await sql`
+      UPDATE goals
+      SET status = 'execution_ready'
+      WHERE id = ${goalId}
+    `;
+
+    const result = await executeSupervisorTool(sql, goalId, bizId, "create_task", {
+      assigned_to: "suptool-role",
+      title: "follow-up remediation",
+      brief: "Reconcile remaining remediation backlog without reopening the finished goal.",
+      acceptance_criteria: "Follow-up work is claimable by the dispatcher",
+      sprint_number: 3,
+      qa_required: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("active follow-up goal");
+
+    const [task] = await sql<{ goal_id: string | null; status: string }[]>`
+      SELECT goal_id, status FROM tasks WHERE title = 'follow-up remediation'
+    `;
+    expect(task.status).toBe("pending");
+    expect(task.goal_id).not.toBe(goalId);
+
+    const [followUpGoal] = await sql<{ id: string; status: string; parent_id: string | null; title: string; project_id: string | null }[]>`
+      SELECT id, status, parent_id, title, project_id FROM goals WHERE id = ${task.goal_id}
+    `;
+    expect(followUpGoal.status).toBe("active");
+    expect(followUpGoal.parent_id).toBe(goalId);
+    expect(followUpGoal.title).toContain("Follow-up");
+  });
+
   it("rejects direct execution tasks for content work when the content-publishing pipeline is available", async () => {
     await sql`
       INSERT INTO pipeline_templates (

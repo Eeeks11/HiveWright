@@ -19,7 +19,21 @@ export async function verifyLandedState(input: LandedStateGateInput = {}): Promi
 
   const currentBranch = (await git(["branch", "--show-current"])).trim();
   if (currentBranch !== expectedBranch) {
-    failures.push(`Expected current branch ${expectedBranch}, got ${currentBranch || "(detached HEAD)"}.`);
+    if (currentBranch.length === 0) {
+      const expectedRemoteRef = `origin/${expectedBranch}`;
+      const headCommit = (await git(["rev-parse", "HEAD"])).trim();
+
+      try {
+        const expectedRemoteCommit = (await git(["rev-parse", expectedRemoteRef])).trim();
+        if (headCommit !== expectedRemoteCommit) {
+          failures.push(`Expected current branch ${expectedBranch}, got (detached HEAD) not pinned to ${expectedRemoteRef}.`);
+        }
+      } catch {
+        failures.push(`Expected current branch ${expectedBranch}, got (detached HEAD) and could not resolve origin/${expectedBranch}.`);
+      }
+    } else {
+      failures.push(`Expected current branch ${expectedBranch}, got ${currentBranch}.`);
+    }
   }
 
   const status = (await git(["status", "--porcelain"])).trim();

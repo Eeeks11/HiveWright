@@ -6,6 +6,7 @@ import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
 
 export const QUALITY_DOCTOR_MODEL = "auto";
 export const QUALITY_DOCTOR_DECISION_KIND = "quality_doctor_recommendation";
+export const QUALITY_DOCTOR_DIAGNOSIS_CONTRACT = "quality_doctor_diagnosis.v1";
 
 export type QualityDoctorCause =
   | "wrong_model"
@@ -14,11 +15,16 @@ export type QualityDoctorCause =
   | "wrong_role_or_brief";
 
 export interface QualityDoctorDiagnosis {
+  contract?: typeof QUALITY_DOCTOR_DIAGNOSIS_CONTRACT;
   cause: QualityDoctorCause;
   details: string;
   recommendation: string;
   options?: DecisionOption[];
 }
+
+export type ParseQualityDoctorDiagnosisResult =
+  | { ok: true; diagnosis: QualityDoctorDiagnosis }
+  | { ok: false; kind: "no_block" | "malformed" | "contaminated"; reason: string };
 
 const VALID_CAUSES: ReadonlySet<QualityDoctorCause> = new Set([
   "wrong_model",
@@ -27,26 +33,154 @@ const VALID_CAUSES: ReadonlySet<QualityDoctorCause> = new Set([
   "wrong_role_or_brief",
 ]);
 
-export function parseQualityDoctorDiagnosis(output: string): QualityDoctorDiagnosis | null {
+const QUALITY_DIAGNOSIS_FIELDS = new Set(["contract", "cause", "details", "recommendation", "options"]);
+const CONTAMINATED_DOCTOR_FIELDS = new Set([
+  "action",
+  "newBrief",
+  "newRole",
+  "subTasks",
+  "decisionTitle",
+  "decisionContext",
+  "failureContext",
+  "supervisorActions",
+  "SupervisorActions",
+  "actions",
+]);
+const REFERENCE_ONLY_PAYLOAD_FIELDS = new Set([
+  "sourceTaskOutput",
+  "source_task_output",
+  "priorAttempt",
+  "prior_attempt",
+  "priorAttemptPayload",
+  "prior_attempt_payload",
+  "previousOutput",
+  "previous_output",
+  "workProduct",
+  "work_product",
+  "deliverable",
+  "resultSummary",
+  "result_summary",
+]);
+
+export function parseQualityDoctorDiagnosisResult(output: string): ParseQualityDoctorDiagnosisResult {
   const matches = [...output.matchAll(/```json\s*\n([\s\S]*?)\n\s*```/gi)];
-  if (matches.length === 0) return null;
+  if (matches.length === 0) {
+    return { ok: false, kind: "no_block", reason: "No ```json block found in quality doctor output." };
+  }
   const raw = matches[matches.length - 1][1];
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!VALID_CAUSES.has(parsed.cause as QualityDoctorCause)) return null;
-    if (typeof parsed.details !== "string" || parsed.details.trim() === "") return null;
-    if (typeof parsed.recommendation !== "string" || parsed.recommendation.trim() === "") return null;
-    const options = parsed.options === undefined ? undefined : parseDecisionOptions(parsed.options);
-    if (parsed.options !== undefined && !options) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ok: false, kind: "malformed", reason: "Quality doctor diagnosis JSON must be an object." };
+    }
+    const obj = parsed as Record<string, unknown>;
+    const contaminatedField = Object.keys(obj).find((field) => CONTAMINATED_DOCTOR_FIELDS.has(field));
+    if (contaminatedField) {
+      return {
+        ok: false,
+        kind: "contaminated",
+        reason: `Quality doctor output used non-quality diagnosis field '${contaminatedField}'. SupervisorActions/doctor retry payloads are reference-only evidence, not the active diagnosis deliverable.`,
+      };
+    }
+    const referenceOnlyField = Object.keys(obj).find((field) => REFERENCE_ONLY_PAYLOAD_FIELDS.has(field));
+    if (referenceOnlyField) {
+      return {
+        ok: false,
+        kind: "contaminated",
+        reason: `Quality doctor output copied reference-only payload field '${referenceOnlyField}' into the active diagnosis deliverable slot.`,
+      };
+    }
+    const unknownField = Object.keys(obj).find((field) => !QUALITY_DIAGNOSIS_FIELDS.has(field));
+    if (unknownField) {
+      return { ok: false, kind: "malformed", reason: `Unknown quality diagnosis field '${unknownField}'.` };
+    }
+    if (obj.contract !== QUALITY_DOCTOR_DIAGNOSIS_CONTRACT) {
+      return {
+        ok: false,
+        kind: "malformed",
+        reason: `Quality doctor diagnosis must declare contract '${QUALITY_DOCTOR_DIAGNOSIS_CONTRACT}'.`,
+      };
+    }
+    if (!VALID_CAUSES.has(obj.cause as QualityDoctorCause)) {
+      return { ok: false, kind: "malformed", reason: `Unknown quality doctor cause: ${String(obj.cause)}` };
+    }
+    if (typeof obj.details !== "string" || obj.details.trim() === "") {
+      return { ok: false, kind: "malformed", reason: "Quality doctor diagnosis missing non-empty 'details'." };
+    }
+    if (typeof obj.recommendation !== "string" || obj.recommendation.trim() === "") {
+      return { ok: false, kind: "malformed", reason: "Quality doctor diagnosis missing non-empty 'recommendation'." };
+    }
+    const options = obj.options === undefined ? undefined : parseDecisionOptions(obj.options);
+    if (obj.options !== undefined && !options) {
+      return { ok: false, kind: "malformed", reason: "Quality doctor diagnosis 'options' is invalid." };
+    }
     return {
-      cause: parsed.cause as QualityDoctorCause,
-      details: parsed.details,
-      recommendation: parsed.recommendation,
-      options: options ?? undefined,
+      ok: true,
+      diagnosis: {
+        contract: QUALITY_DOCTOR_DIAGNOSIS_CONTRACT,
+        cause: obj.cause as QualityDoctorCause,
+        details: obj.details,
+        recommendation: obj.recommendation,
+        options: options ?? undefined,
+      },
     };
-  } catch {
-    return null;
+  } catch (error) {
+    return {
+      ok: false,
+      kind: "malformed",
+      reason: `Quality doctor diagnosis JSON malformed: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
+}
+
+export function parseQualityDoctorDiagnosis(output: string): QualityDoctorDiagnosis | null {
+  const result = parseQualityDoctorDiagnosisResult(output);
+  return result.ok ? result.diagnosis : null;
+}
+
+export async function recordQualityDoctorContaminationHandoff(
+  sql: Sql,
+  parentTaskId: string,
+  doctorTaskId: string,
+  reason: string,
+  doctorOutput: string,
+): Promise<void> {
+  const [parent] = await sql<{ hive_id: string; goal_id: string | null; title: string }[]>`
+    SELECT hive_id, goal_id, title
+    FROM tasks
+    WHERE id = ${parentTaskId}
+  `;
+  if (!parent) return;
+
+  const context = [
+    "A quality-diagnosis doctor retry produced a contaminated payload in the active deliverable slot.",
+    "",
+    `Parent task: ${parent.title}`,
+    `Doctor task id: ${doctorTaskId}`,
+    `Parse failure: ${reason}`,
+    "",
+    "Retry-control requirement: before authorizing another same-family quality-diagnosis retry, keep this durable handoff as the stable reference point and point the retry brief back to the original product complaint plus this handoff. Source-task output, prior-attempt JSON, and SupervisorActions payloads are reference-only evidence; they must not become the active diagnosis deliverable.",
+    "",
+    "Contaminated output excerpt:",
+    "```",
+    doctorOutput.slice(0, 4000),
+    "```",
+  ].join("\n");
+
+  await sql`
+    INSERT INTO decisions (hive_id, goal_id, task_id, title, context, recommendation, priority, status, kind)
+    VALUES (
+      ${parent.hive_id},
+      ${parent.goal_id},
+      ${parentTaskId},
+      ${`Quality diagnosis retry needs clean handoff: ${parent.title}`},
+      ${context},
+      ${"Create or confirm a clean handoff, then retry with the canonical quality_doctor_diagnosis.v1 contract only."},
+      'urgent',
+      'ea_review',
+      ${QUALITY_DOCTOR_DECISION_KIND}
+    )
+  `;
 }
 
 export async function maybeCreateQualityDoctorForSignal(
@@ -327,8 +461,10 @@ function buildQualityDoctorBrief(
     "",
     "Respond with one fenced JSON block only:",
     "```json",
-    '{"cause":"wrong_model|missing_skill|missing_tool_connector_credential|wrong_role_or_brief","details":"...","recommendation":"...","options":[{"key":"existing-codex-subscription-auth","label":"Use existing Codex subscription auth","consequence":"Reuses an already-paid path if technically supported.","response":"approved"}]}',
+    `{"contract":"${QUALITY_DOCTOR_DIAGNOSIS_CONTRACT}","cause":"wrong_model|missing_skill|missing_tool_connector_credential|wrong_role_or_brief","details":"...","recommendation":"...","options":[{"key":"existing-codex-subscription-auth","label":"Use existing Codex subscription auth","consequence":"Reuses an already-paid path if technically supported.","response":"approved"}]}`,
     "```",
+    "",
+    "Do not output SupervisorActions, regular doctor actions such as rewrite_brief, copied source-task output, prior-attempt JSON, work-product JSON, or multiple alternative JSON payloads as the active answer. Those are reference-only evidence.",
   ].filter(Boolean).join("\n");
 }
 

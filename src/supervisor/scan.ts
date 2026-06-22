@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { getHiveCreationPause } from "@/operations/creation-pause";
+import { hasSupervisorManagedTerminalDisposition } from "./reference-terminal-disposition";
 import type {
   FindingKind,
   FindingSeverity,
@@ -840,12 +841,13 @@ async function detectUnsatisfiedCompletions(
       completed_at: Date;
       result_summary: string | null;
       failure_reason: string | null;
+      terminal_disposition: unknown;
       has_work_product: boolean;
     }>
   >`
     SELECT
       t.id, t.assigned_to, t.title, t.brief, t.completed_at, t.result_summary,
-      t.failure_reason,
+      t.failure_reason, t.terminal_disposition,
       EXISTS (SELECT 1 FROM work_products wp WHERE wp.task_id = t.id) AS has_work_product
     FROM tasks t
     WHERE t.hive_id = ${hiveId}
@@ -893,6 +895,11 @@ async function detectUnsatisfiedCompletions(
   return rows
     .filter(
       (row) =>
+        (
+          row.failure_reason !== null
+          || !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)
+        )
+        &&
         !isTerminalVerificationTask({
           title: row.title,
           brief: row.brief,
@@ -1192,11 +1199,13 @@ async function detectOrphanOutputs(
       assigned_to: string;
       title: string;
       completed_at: Date;
+      terminal_disposition: unknown;
       work_product_count: number;
     }>
   >`
     SELECT
       t.id, t.assigned_to, t.title, t.completed_at,
+      t.terminal_disposition,
       (SELECT COUNT(*)::int FROM work_products wp WHERE wp.task_id = t.id) AS work_product_count
     FROM tasks t
     WHERE t.hive_id = ${hiveId}
@@ -1232,7 +1241,7 @@ async function detectOrphanOutputs(
           AND r.actions->'findings_addressed' @> to_jsonb('orphan_output:' || t.id::text)
       )
   `;
-  return rows.map((row) => ({
+  return rows.filter((row) => !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)).map((row) => ({
     id: findingId("orphan_output", row.id),
     kind: "orphan_output",
     severity: "info" as FindingSeverity,

@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import type { ButtonHTMLAttributes } from "react";
+import { useSearchParams } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 import { RunsTable, type RunsTableBadgeTone, type RunsTableRow } from "@/components/runs-table";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 type Decision = {
   id: string;
@@ -126,6 +128,96 @@ function isDirectTaskQaCapDecision(value: unknown) {
     (value as { kind?: unknown }).kind === "direct_task_qa_cap_recovery";
 }
 
+function ownerDecisionQuestion(decision: Decision): string {
+  const title = decision.title
+    .replace(/^hive needs your input:\s*/i, "")
+    .replace(/^owner decision required:?\s*/i, "")
+    .trim();
+  const question = title || "What should HiveWright do next?";
+  return /[?]$/.test(question) ? question : `${question}?`;
+}
+
+function ownerDecisionRecommendation(decision: Decision): string {
+  const recommendation = decision.recommendation?.replace(/\s+/g, " ").trim();
+  if (recommendation) return recommendation;
+  if (decision.status === "ea_review") {
+    return "Let HiveWright keep working unless this escalates back to you with a concrete question.";
+  }
+  if (decision.status === "auto_approved") {
+    return "Review only if this looks wrong; otherwise no owner action is needed.";
+  }
+  return "Choose the option that best matches your intent. If none fit, use Discuss so the hive can continue with your clarification.";
+}
+
+function fallbackDecisionOptions(decision: Decision): DecisionOption[] {
+  if (decision.status === "ea_review") {
+    return [
+      {
+        key: "watch_ea",
+        label: "Let HiveWright continue",
+        response: "discussed",
+        description: "No owner action is needed unless the EA escalates this into the Needs you queue.",
+      },
+    ];
+  }
+  if (decision.status === "auto_approved") {
+    return [
+      {
+        key: "accept_auto_path",
+        label: "Leave as-is",
+        response: "approved",
+        description: "Keep the already-approved path and let the hive continue.",
+      },
+      {
+        key: "override_auto_path",
+        label: "Override and reject",
+        response: "rejected",
+        description: "Stop or redirect the path HiveWright already took.",
+      },
+    ];
+  }
+  return [
+    {
+      key: "approve",
+      label: "Approve",
+      response: "approved",
+      description: "Let HiveWright continue with the recommended path.",
+    },
+    {
+      key: "discuss",
+      label: "Discuss",
+      response: "discussed",
+      description: "Add clarification when the recommendation is not enough to act safely.",
+    },
+    {
+      key: "reject",
+      label: "Reject",
+      response: "rejected",
+      description: "Stop this path and have the hive replan or park the work.",
+    },
+  ];
+}
+
+function ownerDecisionActionLabel(decision: Decision, options: DecisionOption[]): string {
+  if (decision.status === "ea_review") return "EA is handling this";
+  if (decision.status === "auto_approved") return "Review the system decision";
+  if (options.length > 0) return "Choose an option";
+  return "Approve, discuss, or reject";
+}
+
+function ownerDecisionNextStep(decision: Decision, options: DecisionOption[]): string {
+  if (decision.status === "ea_review") {
+    return "HiveWright is still working this through. If it cannot finish autonomously, it will return here for an owner call.";
+  }
+  if (decision.status === "auto_approved") {
+    return "HiveWright already acted on this path. Override and reject only if you want the work redirected.";
+  }
+  if (options.length > 0) {
+    return "HiveWright will record your answer and continue the blocked work using the option you choose.";
+  }
+  return "HiveWright will record your call, continue on approval, or replan the work if you reject it.";
+}
+
 const PRIORITY_TONE: Record<string, RunsTableBadgeTone> = {
   urgent: "red",
   high: "amber",
@@ -207,9 +299,12 @@ function ActionButton({
   );
 }
 
-export default function DecisionsPage() {
+function DecisionsPageContent() {
   const { selected, loading: bizLoading } = useHiveContext();
-  const selectedHiveId = selected?.id;
+  const searchParams = useSearchParams();
+  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -224,13 +319,13 @@ export default function DecisionsPage() {
   const [activityRefresh, setActivityRefresh] = useState(0);
 
   const fetchDecisions = useCallback(async () => {
-    if (!selectedHiveId) return;
+    if (!effectiveHiveId) return;
     setLoading(true);
     try {
       const query = new URLSearchParams({
         status: statusFilter,
         kind: kindFilter,
-        hiveId: selectedHiveId,
+        hiveId: effectiveHiveId,
         includeInternalSystem: String(includeInternalSystem),
       });
       const res = await fetch(
@@ -244,13 +339,14 @@ export default function DecisionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedHiveId, statusFilter, kindFilter, includeInternalSystem]);
+  }, [effectiveHiveId, statusFilter, kindFilter, includeInternalSystem]);
 
   useEffect(() => {
-    if (selectedHiveId) fetchDecisions();
-  }, [fetchDecisions, selectedHiveId]);
+    if (effectiveHiveId) fetchDecisions();
+  }, [fetchDecisions, effectiveHiveId]);
 
   async function respond(id: string, action: string, note?: string, option?: DecisionOption) {
+    if (!target.confirmCrossHiveWrite("Respond to decision")) return;
     setResponding(id);
     try {
       const response = option?.response ?? ACTION_MAP[action] ?? action;
@@ -258,6 +354,7 @@ export default function DecisionsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hiveId: effectiveHiveId,
           response,
           comment: note,
           selectedOptionKey: option?.key,
@@ -297,11 +394,12 @@ export default function DecisionsPage() {
   async function sendMessage(decisionId: string) {
     const content = newMessage.trim();
     if (!content) return;
+    if (!target.confirmCrossHiveWrite("Send decision message")) return;
     try {
       const res = await fetch(`/api/decisions/${decisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "discussed", comment: content }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, response: "discussed", comment: content }),
       });
       if (!res.ok) throw new Error("Failed to send message");
       const messages = await fetch(`/api/decisions/${decisionId}/messages`);
@@ -316,7 +414,29 @@ export default function DecisionsPage() {
     }
   }
 
-  if (bizLoading || loading) {
+  if (bizLoading || target.isResolvingTarget) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Decisions</h1>
+        <p className="text-zinc-500 text-sm">Loading...</p>
+      </div>
+    );
+  }
+
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  }
+
+  if (!effectiveHiveId) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-2xl font-semibold">Decisions</h1>
+        <p className="text-zinc-400">No hive selected.</p>
+      </div>
+    );
+  }
+
+  if (loading) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Decisions</h1>
@@ -343,7 +463,7 @@ export default function DecisionsPage() {
     );
   }
 
-  const pageTitle = kindFilter === "decision" ? "Decisions" : "System Health";
+  const pageTitle = kindFilter === "decision" ? "Decision inbox" : "System health";
   const emptyMessage = (() => {
     if (statusFilter === "ea_review") {
       return kindFilter === "decision"
@@ -362,16 +482,23 @@ export default function DecisionsPage() {
   })();
 
   const decisionRows: RunsTableRow[] = decisions.map((decision) => {
-    const structuredOptions = getDecisionOptions(decision.options);
+    const structuredOptions = getDecisionOptions(decision.options).slice(0, 4);
+    const displayOptions = structuredOptions.length > 0
+      ? structuredOptions
+      : fallbackDecisionOptions(decision).slice(0, 4);
     const isDirectTaskQaCap = isDirectTaskQaCapDecision(decision.options);
+    const question = ownerDecisionQuestion(decision);
+    const recommendation = ownerDecisionRecommendation(decision);
+    const nextStep = ownerDecisionNextStep(decision, structuredOptions);
+    const actionLabel = ownerDecisionActionLabel(decision, structuredOptions);
 
     return {
       id: decision.id,
-      title: decision.title,
-      href: `/decisions/${decision.id}`,
+      title: question,
+      href: target.withTargetHiveId(`/decisions/${decision.id}`),
       status: { label: decision.status, tone: decision.status === "pending" ? "amber" : "neutral" },
       priority: { label: decision.priority, tone: PRIORITY_TONE[decision.priority] ?? "neutral" },
-      primaryMeta: [{ label: "Kind", value: decision.kind }],
+      primaryMeta: [{ label: "Owner action", value: actionLabel }],
       secondaryMeta: [{ label: "Created", value: new Date(decision.createdAt).toLocaleDateString() }],
       rowClassName:
         decision.priority === "urgent"
@@ -380,31 +507,29 @@ export default function DecisionsPage() {
       expandedContent: (
         <div className="space-y-4 rounded-md border border-amber-200/50 bg-white/45 p-3 dark:border-white/[0.07] dark:bg-black/[0.12]">
           <div className="space-y-1.5">
-            <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">Context</p>
+            <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">Question</p>
             <p className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">
-              {decision.context}
+              {question}
             </p>
           </div>
 
-          {decision.recommendation && (
-            <div className="space-y-1.5">
-              <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
-                Recommendation
-              </p>
-              <p className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">
-                {decision.recommendation}
-              </p>
-            </div>
-          )}
+          <div className="space-y-1.5">
+            <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
+              Recommended answer
+            </p>
+            <p className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">
+              {recommendation}
+            </p>
+          </div>
 
-          {structuredOptions.length > 0 && (
+          {displayOptions.length > 0 && (
             <div className="space-y-2">
               <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
-                Options
+                Options and consequences
               </p>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {structuredOptions.map((option) => {
-                  const canAct = statusFilter === "pending";
+                {displayOptions.map((option) => {
+                  const canAct = statusFilter === "pending" && structuredOptions.length > 0;
                   if (canAct) {
                     const isRejecting =
                       option.response === "rejected" || option.response === "abandon";
@@ -445,6 +570,24 @@ export default function DecisionsPage() {
               </div>
             </div>
           )}
+
+          <div className="space-y-1.5">
+            <p className="text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
+              What happens next
+            </p>
+            <p className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">
+              {nextStep}
+            </p>
+          </div>
+
+          <details className="rounded-md border border-amber-200/70 bg-amber-50/45 p-3 dark:border-white/[0.08] dark:bg-white/[0.035]">
+            <summary className="cursor-pointer text-[0.68rem] font-semibold uppercase text-amber-900/55 dark:text-zinc-500">
+              Context / evidence
+            </summary>
+            <p className="mt-3 whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-300">
+              {decision.context}
+            </p>
+          </details>
 
           {decision.eaReasoning && (
             <div className="space-y-1 rounded-md border border-amber-300/35 bg-amber-300/10 p-3">
@@ -581,12 +724,17 @@ export default function DecisionsPage() {
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="hive-honey-glow flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase text-amber-800/70 dark:text-amber-200/70">
-            Decision operations
+            Owner handoffs
           </p>
           <h1 className="text-2xl font-semibold">{pageTitle}</h1>
+          <p className="mt-1 max-w-3xl text-sm text-zinc-500 dark:text-zinc-400">
+            Default rows only show decisions that genuinely need owner judgement. Internal or system residue stays behind the explicit opt-in filter.
+          </p>
         </div>
         <span className="text-sm text-zinc-500">
           {decisions.length}{" "}
@@ -622,7 +770,7 @@ export default function DecisionsPage() {
           onChange={(event) => setIncludeInternalSystem(event.target.checked)}
           className="h-4 w-4 rounded border-amber-300 text-amber-500 focus:ring-amber-400"
         />
-        Include internal/system
+        Include internal/system residue
       </label>
 
       <RunsTable
@@ -630,14 +778,22 @@ export default function DecisionsPage() {
         emptyState={emptyMessage}
         ariaLabel="Decisions list"
         columns={{
-          title: "Decision",
-          primaryMeta: "Kind",
+          title: "Question",
+          primaryMeta: "Owner action",
           status: "Status",
           priority: "Priority",
           secondaryMeta: "Created",
         }}
       />
     </div>
+  );
+}
+
+export default function DecisionsPage() {
+  return (
+    <Suspense fallback={<p className="text-zinc-400">Loading decisions...</p>}>
+      <DecisionsPageContent />
+    </Suspense>
   );
 }
 

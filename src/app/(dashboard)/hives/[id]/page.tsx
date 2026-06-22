@@ -6,6 +6,7 @@ import { HiveConnectorsPanel } from "@/components/hives/hive-connectors-panel";
 import { HiveRecordsPanel } from "@/components/hives/hive-records-panel";
 import { HiveScoreboard } from "@/components/hives/hive-scoreboard";
 import { HiveSectionNav } from "@/components/hive-section-nav";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 interface OperatingProfile {
   kind: string;
@@ -56,6 +57,7 @@ interface Target {
 export default function HiveDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const target = useResolvedHiveTarget(id);
 
   const [hive, setHive] = useState<Hive | null>(null);
   const [targets, setTargets] = useState<Target[]>([]);
@@ -74,6 +76,13 @@ export default function HiveDetailPage() {
 
   // Load hive + targets. Called on mount and after any mutation.
   const reload = useCallback(async () => {
+    if (target.isResolvingTarget) return;
+    if (target.isUnresolvedTarget || !target.effectiveHiveId) {
+      setHive(null);
+      setTargets([]);
+      setLoadError("Hive target not found");
+      return;
+    }
     setLoadError(null);
     const readJson = async (res: Response) => {
       const text = await res.text();
@@ -94,15 +103,14 @@ export default function HiveDetailPage() {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Failed to load hive");
     }
-  }, [id]);
+  }, [id, target.effectiveHiveId, target.isResolvingTarget, target.isUnresolvedTarget]);
 
   useEffect(() => {
     reload();
-  // reload is stable for a given id — re-run only when id changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [reload]);
 
   const patchHive = async (patch: Partial<Pick<Hive, "name" | "description" | "mission">>) => {
+    if (!target.confirmCrossHiveWrite("Saving hive profile changes")) return;
     const res = await fetch(`/api/hives/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -118,6 +126,7 @@ export default function HiveDetailPage() {
 
   const saveOperatingProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!target.confirmCrossHiveWrite("Saving operating profile changes")) return;
     setProfileSaveState("saving");
     const form = new FormData(event.currentTarget);
     const res = await fetch(`/api/hives/${id}`, {
@@ -150,6 +159,7 @@ export default function HiveDetailPage() {
   const saveBudget = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!hive) return;
+    if (!target.confirmCrossHiveWrite("Saving budget changes")) return;
     const form = new FormData(event.currentTarget);
     const dollars = Number(form.get("aiBudgetDollars"));
     const window = String(form.get("aiBudgetWindow") ?? hive.aiBudget.window);
@@ -183,6 +193,7 @@ export default function HiveDetailPage() {
   };
 
   const addTarget = async () => {
+    if (!target.confirmCrossHiveWrite("Adding a target")) return;
     await fetch(`/api/hives/${id}/targets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -192,6 +203,7 @@ export default function HiveDetailPage() {
   };
 
   const updateTarget = async (targetId: string, patch: Record<string, unknown>) => {
+    if (!target.confirmCrossHiveWrite("Updating a target")) return;
     await fetch(`/api/hives/${id}/targets/${targetId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -201,6 +213,7 @@ export default function HiveDetailPage() {
   };
 
   const deleteTarget = async (targetId: string) => {
+    if (!target.confirmCrossHiveWrite("Deleting a target")) return;
     if (!confirm("Delete this target? Use 'Achieved' or 'Abandoned' status for lifecycle changes.")) return;
     await fetch(`/api/hives/${id}/targets/${targetId}`, { method: "DELETE" });
     reload();
@@ -259,6 +272,7 @@ export default function HiveDetailPage() {
   };
   const uploadReferenceDocument = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!target.confirmCrossHiveWrite("Uploading a reference document")) return;
     if (!selectedReferenceFile) {
       setUploadSaveState("error");
       setTimeout(() => setUploadSaveState("idle"), 3000);
@@ -286,7 +300,11 @@ export default function HiveDetailPage() {
   };
 
 
-  if (!hive) {
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={id} />;
+  }
+
+  if (target.isResolvingTarget || !hive) {
     return (
       <p className={loadError ? "text-red-600 dark:text-red-400" : "text-amber-600/70 dark:text-amber-400/60"}>
         {loadError ?? "Loading…"}
@@ -370,6 +388,7 @@ export default function HiveDetailPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
       <div className="hive-honey-glow space-y-2">
         <input
           value={hive.name}
@@ -601,6 +620,7 @@ export default function HiveDetailPage() {
       <div className="flex items-center gap-3">
         <button
           onClick={async () => {
+            if (!target.confirmCrossHiveWrite("Saving hive profile changes")) return;
             setChangesSaveState("saving");
             const res = await fetch(`/api/hives/${id}`, {
               method: "PATCH",

@@ -200,7 +200,7 @@ function workIntakeConfigForPreset(preset: Required<OperatingPreferences>["reque
     primaryProvider: "ollama",
     primaryModel: "qwen3:32b",
     fallbackProvider: "openrouter",
-    fallbackModel: "google/gemini-2.0-flash-exp:free",
+    fallbackModel: "google/gemini-2.5-flash",
     timeoutMs: 15000,
     temperature: 0.1,
     maxTokens: 512,

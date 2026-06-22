@@ -33,10 +33,11 @@ vi.mock("postgres", () => {
 
 // sql.unsafe controls what rows come back from the replay query.
 let mockReplayRows: unknown[] = [];
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
 
 vi.mock("../../../_lib/db", () => ({
   sql: Object.assign(
-    vi.fn(async () => [{ hive_id: "hive-a" }]),
+    vi.fn(async () => [{ hive_id: HIVE_ID, id: HIVE_ID }]),
     { unsafe: vi.fn(async () => mockReplayRows) },
   ),
 }));
@@ -162,7 +163,7 @@ describe("GET /api/tasks/:id/stream", () => {
       makeDbRow({ id: 3, chunk: "", type: "done" }),
     ];
 
-    const request = new Request("http://localhost/api/tasks/task-1/stream", {
+    const request = new Request(`http://localhost/api/tasks/task-1/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(2000),
     });
 
@@ -196,7 +197,7 @@ describe("GET /api/tasks/:id/stream", () => {
     mockReplayRows = [];
 
     let listenCallbackReady = false;
-    const request = new Request("http://localhost/api/tasks/task-2/stream", {
+    const request = new Request(`http://localhost/api/tasks/task-2/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(3000),
     });
 
@@ -236,7 +237,7 @@ describe("GET /api/tasks/:id/stream", () => {
       makeDbRow({ id: 5, chunk: "", type: "done" }),
     ];
 
-    const request = new Request("http://localhost/api/tasks/task-3/stream", {
+    const request = new Request(`http://localhost/api/tasks/task-3/stream?hiveId=${HIVE_ID}`, {
       headers: { "last-event-id": "3" },
       signal: AbortSignal.timeout(2000),
     });
@@ -258,7 +259,7 @@ describe("GET /api/tasks/:id/stream", () => {
     // No historical rows — agent will emit "done" live
     mockReplayRows = [];
 
-    const request = new Request("http://localhost/api/tasks/task-4/stream", {
+    const request = new Request(`http://localhost/api/tasks/task-4/stream?hiveId=${HIVE_ID}`, {
       signal: AbortSignal.timeout(3000),
     });
 
@@ -323,7 +324,7 @@ describe("GET /api/tasks/:id/stream", () => {
       makeDbRow({ id: 6, chunk: "", type: "done" }),
     ];
 
-    const request = new Request("http://localhost/api/tasks/task-5/stream", {
+    const request = new Request(`http://localhost/api/tasks/task-5/stream?hiveId=${HIVE_ID}`, {
       headers: { "last-event-id": "4" },
       signal: AbortSignal.timeout(2000),
     });

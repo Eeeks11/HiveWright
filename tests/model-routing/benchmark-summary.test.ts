@@ -6,20 +6,44 @@ import { resolveConfiguredModelRoute, type ModelRoutingPolicy } from "@/model-ro
 const drifted: RuntimeRouteDriftReport = {
   status: "drift",
   declaredCandidates: 0,
+  explicitDeclaredCandidates: 0,
   runtimeProjectedCandidates: 2,
+  projectedInventoryBasis: "usable_runtime_routes",
+  inventoryExpectation: "fixed_inventory_unconfigured",
+  inventoryJustification: "No explicit policy candidates or configured hive model routes exist.",
   blockedRoutes: 0,
   quarantinedRoutes: 0,
   staleRoutes: 1,
+  freshRoutes: 1,
+  unknownHealthRoutes: 0,
+  onDemandUnknownHealthRoutes: 0,
+  staleRecovery: {
+    staleRoutes: 1,
+    automaticProbeRoutes: 1,
+    recoveryEligibleRoutes: 1,
+  },
   driftReasons: ["declared candidates (0) differ from runtime-projected candidates (2)"],
 };
 
 const inSync: RuntimeRouteDriftReport = {
   status: "in_sync",
   declaredCandidates: 2,
+  explicitDeclaredCandidates: 2,
   runtimeProjectedCandidates: 2,
+  projectedInventoryBasis: "declared_policy",
+  inventoryExpectation: "declared_policy",
+  inventoryJustification: "Model routing declares an explicit candidate set in policy configuration.",
   blockedRoutes: 0,
   quarantinedRoutes: 0,
   staleRoutes: 0,
+  freshRoutes: 2,
+  unknownHealthRoutes: 0,
+  onDemandUnknownHealthRoutes: 0,
+  staleRecovery: {
+    staleRoutes: 0,
+    automaticProbeRoutes: 2,
+    recoveryEligibleRoutes: 0,
+  },
   driftReasons: [],
 };
 

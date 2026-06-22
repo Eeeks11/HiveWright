@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { checkModelSpawnHealth } from "@/model-health/spawn-gate";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 const HIVE_ID = "aaaaaaaa-9999-4999-8999-aaaaaaaaaaaa";
@@ -15,6 +16,60 @@ beforeEach(async () => {
 });
 
 describe("checkModelSpawnHealth", () => {
+  it("uses the canonical Ollama runtime endpoint fingerprint for local models", async () => {
+    const staleNullEndpointFingerprint = createRuntimeCredentialFingerprint({
+      provider: "local",
+      adapterType: "ollama",
+      baseUrl: null,
+    });
+    const canonicalEndpointFingerprint = createRuntimeCredentialFingerprint({
+      provider: "local",
+      adapterType: "ollama",
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
+    });
+    await sql`
+      INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)
+      VALUES (${HIVE_ID}, 'local', 'ollama/qwen3.6:35b', 'ollama', true)
+    `;
+    await sql`
+      INSERT INTO model_health (
+        fingerprint,
+        model_id,
+        status,
+        last_probed_at,
+        next_probe_at
+      )
+      VALUES
+        (
+          ${staleNullEndpointFingerprint},
+          'ollama/qwen3.6:35b',
+          'healthy',
+          ${new Date(NOW.getTime() - 2 * 60 * 60 * 1000)},
+          ${new Date(NOW.getTime() - 60 * 1000)}
+        ),
+        (
+          ${canonicalEndpointFingerprint},
+          'ollama/qwen3.6:35b',
+          'healthy',
+          ${NOW},
+          ${new Date(NOW.getTime() + 60 * 60 * 1000)}
+        )
+    `;
+
+    const decision = await checkModelSpawnHealth(sql, {
+      hiveId: HIVE_ID,
+      adapterType: "ollama",
+      modelId: "ollama/qwen3.6:35b",
+      now: NOW,
+    });
+
+    expect(decision).toMatchObject({
+      canRun: true,
+      reason: "fresh_healthy_probe",
+      fingerprint: canonicalEndpointFingerprint,
+    });
+  });
+
   it("allows a model when the hive registry row has fresh healthy probe evidence", async () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "openai",
@@ -74,7 +129,7 @@ describe("checkModelSpawnHealth", () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "local",
       adapterType: "ollama",
-      baseUrl: null,
+      baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
     });
     await sql`
       INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)

@@ -260,7 +260,7 @@ export function buildOperationsMapModel(params: {
       sourceTaskId: task.id,
       kind: "agent",
       label: truncateLabel(task.assignedTo || "Agent", 22),
-      sublabel: truncateLabel(task.title, 60),
+      sublabel: truncateLabel(task.title, 36),
       href: `/tasks/${task.id}`,
       state: taskNodeState(task.status),
       liveBlocking: false,
@@ -435,6 +435,157 @@ function taskPosition(args: {
   };
 }
 
+interface TopologyFootprint {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+function topologyNodeRadius(node: OperationsTopologyNode): number {
+  if (node.kind === "hive") return 42;
+  if (node.liveBlocking || node.state === "failed" || node.state === "unresolvable") {
+    return node.kind === "goal" ? 30 : 26;
+  }
+  if (node.state === "history") return node.kind === "goal" ? 26 : 20;
+  if (node.state === "decision" || node.state === "escalation") return node.kind === "goal" ? 30 : 26;
+  if (node.active) return node.kind === "goal" ? 32 : 26;
+  return node.kind === "goal" ? 28 : 22;
+}
+
+function topologyNodeFootprint(node: OperationsTopologyNode): TopologyFootprint {
+  const radius = topologyNodeRadius(node);
+  const hexHalfHeight = radius * 0.866;
+  const labelWidth = node.label.length * 6.5;
+  const sublabelWidth = node.sublabel.length * 5.2;
+  const halfWidth = Math.max(radius, labelWidth / 2, sublabelWidth / 2) + 8;
+  return {
+    left: node.x - halfWidth,
+    right: node.x + halfWidth,
+    top: node.y - hexHalfHeight - 6,
+    bottom: node.y + hexHalfHeight + (node.sublabel ? 40 : 24),
+  };
+}
+
+function topologyFootprintsOverlap(a: TopologyFootprint, b: TopologyFootprint): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+function collisionWeight(node: OperationsTopologyNode): number {
+  if (node.kind === "hive") return 0;
+  if (node.kind === "goal") return 0.35;
+  return 1;
+}
+
+function separateTopologyNodes(nodes: OperationsTopologyNode[]): { width: number; height: number } {
+  const minX = 152;
+  const maxX = GRAPH_WIDTH - 152;
+
+  for (let iteration = 0; iteration < 120; iteration += 1) {
+    let moved = false;
+    for (let a = 0; a < nodes.length; a += 1) {
+      for (let b = a + 1; b < nodes.length; b += 1) {
+        const first = nodes[a];
+        const second = nodes[b];
+        const firstBox = topologyNodeFootprint(first);
+        const secondBox = topologyNodeFootprint(second);
+        if (!topologyFootprintsOverlap(firstBox, secondBox)) continue;
+
+        const firstWeight = collisionWeight(first);
+        const secondWeight = collisionWeight(second);
+        const totalWeight = firstWeight + secondWeight;
+        if (totalWeight === 0) continue;
+
+        const overlapX = Math.min(firstBox.right - secondBox.left, secondBox.right - firstBox.left);
+        const overlapY = Math.min(firstBox.bottom - secondBox.top, secondBox.bottom - firstBox.top);
+        const separateOnX = overlapX < overlapY * 0.82;
+        const rawDirection = separateOnX ? second.x - first.x : second.y - first.y;
+        const direction = rawDirection === 0 ? (b % 2 === 0 ? 1 : -1) : Math.sign(rawDirection);
+        const push = (separateOnX ? overlapX : overlapY) + 10;
+        const firstShare = firstWeight / totalWeight;
+        const secondShare = secondWeight / totalWeight;
+
+        if (separateOnX) {
+          first.x = clamp(first.x - direction * push * firstShare, minX, maxX);
+          second.x = clamp(second.x + direction * push * secondShare, minX, maxX);
+        } else {
+          first.y -= direction * push * firstShare;
+          second.y += direction * push * secondShare;
+        }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  return topologyBounds(nodes);
+}
+
+function topologyBounds(nodes: OperationsTopologyNode[]): { width: number; height: number } {
+  const boxes = nodes.map(topologyNodeFootprint);
+  const minTop = Math.min(...boxes.map((box) => box.top));
+  if (minTop < 20) {
+    const shiftY = 20 - minTop;
+    for (const node of nodes) {
+      node.y += shiftY;
+    }
+  }
+
+  const normalizedBoxes = nodes.map(topologyNodeFootprint);
+  const maxBottom = Math.max(...normalizedBoxes.map((box) => box.bottom));
+  return { width: GRAPH_WIDTH, height: Math.max(GRAPH_HEIGHT, Math.ceil(maxBottom + 20)) };
+}
+
+function applyDenseTopologyLayout(nodes: OperationsTopologyNode[], model: OperationsMapModel): { width: number; height: number } {
+  const hive = nodes.find((node) => node.id === "hive");
+  if (hive) {
+    hive.x = GRAPH_CENTER_X;
+    hive.y = 82;
+  }
+
+  const layoutColumns = model.clusters.length === 1 ? 1 : 2;
+  const yCursors = Array.from({ length: layoutColumns }, () => 220);
+
+  for (const cluster of model.clusters) {
+    const column = layoutColumns === 1 ? 0 : yCursors[0] <= yCursors[1] ? 0 : 1;
+    const goalX = layoutColumns === 1 ? GRAPH_CENTER_X : column === 0 ? 330 : 670;
+    const goalY = yCursors[column];
+    const goalNode = nodes.find((node) => node.id === `goal-${cluster.id}`);
+    if (goalNode) {
+      goalNode.x = goalX;
+      goalNode.y = goalY;
+    }
+
+    const taskNodes = cluster.tasks
+      .map((task) => nodes.find((node) => node.id === `goal-${cluster.id}-${task.id}`))
+      .filter((node): node is OperationsTopologyNode => Boolean(node));
+    const taskColumns = layoutColumns === 1 ? 4 : 2;
+    const taskXPositions =
+      layoutColumns === 1
+        ? [185, 395, 605, 815]
+        : column === 0
+          ? [160, 390]
+          : [610, 840];
+    const taskYStart = goalY + 105;
+    const taskRowGap = 100;
+    taskNodes.forEach((task, index) => {
+      const taskColumn = index % taskColumns;
+      const taskRow = Math.floor(index / taskColumns);
+      task.x = taskXPositions[taskColumn];
+      task.y = taskYStart + taskRow * taskRowGap;
+    });
+
+    const taskRows = Math.max(1, Math.ceil(taskNodes.length / taskColumns));
+    yCursors[column] = taskYStart + taskRows * taskRowGap + 120;
+  }
+
+  return topologyBounds(nodes);
+}
+
+function needsDenseTopologyLayout(model: OperationsMapModel): boolean {
+  return model.clusters.length > 4 || model.clusters.some((cluster) => cluster.tasks.length > 3);
+}
+
 export function buildOperationsTopology(model: OperationsMapModel): OperationsTopology {
   const nodes: OperationsTopologyNode[] = [
     {
@@ -514,7 +665,8 @@ export function buildOperationsTopology(model: OperationsMapModel): OperationsTo
     });
   });
 
-  return { nodes, edges, width: GRAPH_WIDTH, height: GRAPH_HEIGHT };
+  const bounds = needsDenseTopologyLayout(model) ? applyDenseTopologyLayout(nodes, model) : separateTopologyNodes(nodes);
+  return { nodes, edges, width: bounds.width, height: bounds.height };
 }
 
 function sourceLabel(hasError: boolean, count: number, noun: string) {

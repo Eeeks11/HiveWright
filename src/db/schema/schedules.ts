@@ -1,6 +1,7 @@
 import { pgTable, uuid, varchar, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
 import { hives } from "./hives";
 import { tasks } from "./tasks";
+import type { ActionLoopMetadata } from "@/operating-loops/action-loop";
 import type { ScheduleRevisionSnapshotV1 } from "@/schedules/revision-snapshot";
 
 export const schedules = pgTable("schedules", {
@@ -15,6 +16,7 @@ export const schedules = pgTable("schedules", {
     brief: string;
     qaRequired?: boolean;
     priority?: number;
+    actionLoop?: ActionLoopMetadata;
   }>().notNull(),
   enabled: boolean("enabled").default(true).notNull(),
   originType: varchar("origin_type", { length: 32 }).default("custom").notNull(),

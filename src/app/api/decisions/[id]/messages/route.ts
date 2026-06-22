@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { mirrorOwnerDecisionCommentToGoalComment } from "@/decisions/owner-comment-wake";
 
 type MessageRow = {
@@ -23,7 +23,7 @@ function mapRow(r: MessageRow) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
@@ -32,14 +32,12 @@ export async function GET(
 
   try {
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
     const [decision] = await sql<{ hive_id: string }[]>`
-      SELECT hive_id FROM decisions WHERE id = ${id}
+      SELECT hive_id FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decision) return jsonError("Decision not found", 404);
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decision.hive_id);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this decision's hive", 403);
-    }
 
     const rows = await sql`
       SELECT id, decision_id, sender, content, created_at
@@ -65,6 +63,13 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
     const { content, sender } = body as { content?: string; sender?: string };
 
     if (!content) {
@@ -72,13 +77,9 @@ export async function POST(
     }
 
     const [decision] = await sql<{ hive_id: string }[]>`
-      SELECT hive_id FROM decisions WHERE id = ${id}
+      SELECT hive_id FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decision) return jsonError("Decision not found", 404);
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decision.hive_id);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this decision's hive", 403);
-    }
 
     const senderValue = user.isSystemOwner ? sender || "owner" : "system";
 

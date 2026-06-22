@@ -1,4 +1,5 @@
 import { requireApiUser } from "../../../_lib/auth";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { sql } from "../../../_lib/db";
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
@@ -10,7 +11,6 @@ import {
 } from "../../_draft";
 import { recordCaptureAuditEvent } from "../../_audit";
 import {
-  ensureCanMutateHive,
   findRawMediaField,
   readMetadataOnlyJson,
   type CaptureSessionStatus,
@@ -24,8 +24,8 @@ function jsonParam(value: unknown) {
   return sql.json(value as Parameters<typeof sql.json>[0]);
 }
 
-async function loadSession(id: string) {
-  const [row] = await sql`SELECT * FROM capture_sessions WHERE id = ${id} LIMIT 1`;
+async function loadSession(id: string, hiveId: string) {
+  const [row] = await sql`SELECT * FROM capture_sessions WHERE id = ${id} AND hive_id = ${hiveId}::uuid LIMIT 1`;
   return row as Record<string, unknown> | undefined;
 }
 
@@ -130,20 +130,24 @@ function sessionRefs(session: Record<string, unknown>) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const session = await loadSession(id);
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "query", request },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+  const session = await loadSession(id, target.hiveId);
   if (!session || session.status === "deleted") {
     return jsonError("capture session not found", 404);
   }
-
-  const accessError = await ensureCanMutateHive(authz.user, session.hive_id as string);
-  if (accessError) return accessError;
   const rawMediaError = validateStoredMetadataOnly(session);
   if (rawMediaError) return rawMediaError;
 
@@ -161,7 +165,7 @@ export async function GET(
             rawMediaAccepted: false,
           }))},
           updated_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
   }
 
@@ -182,13 +186,17 @@ export async function POST(
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const session = await loadSession(id);
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "query", request },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+  const session = await loadSession(id, target.hiveId);
   if (!session || session.status === "deleted") {
     return jsonError("capture session not found", 404);
   }
-
-  const accessError = await ensureCanMutateHive(authz.user, session.hive_id as string);
-  if (accessError) return accessError;
   const rawMediaError = validateStoredMetadataOnly(session);
   if (rawMediaError) return rawMediaError;
 
@@ -257,7 +265,7 @@ export async function POST(
           }))},
           work_product_refs = ${jsonParam(refs.includes(draftRef) ? refs : [...refs, draftRef])},
           updated_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
 
     const status = session.status as CaptureSessionStatus;
@@ -330,13 +338,17 @@ export async function DELETE(
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const session = await loadSession(id);
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "query", request },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+  const session = await loadSession(id, target.hiveId);
   if (!session || session.status === "deleted") {
     return jsonError("capture session not found", 404);
   }
-
-  const accessError = await ensureCanMutateHive(authz.user, session.hive_id as string);
-  if (accessError) return accessError;
   const rawMediaError = validateStoredMetadataOnly(session);
   if (rawMediaError) return rawMediaError;
 
@@ -354,7 +366,7 @@ export async function DELETE(
           rawMediaAccepted: false,
         }))},
         updated_at = NOW()
-    WHERE id = ${id}
+    WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
   `;
 
   const status = session.status as CaptureSessionStatus;

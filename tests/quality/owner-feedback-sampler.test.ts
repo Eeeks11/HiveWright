@@ -26,6 +26,7 @@ async function seedTask(input: {
   resultSummary?: string | null;
   workProduct?: boolean;
   brief?: string;
+  terminalDisposition?: Parameters<typeof sql.json>[0] | null;
 }) {
   const hiveId = input.hiveId ?? HIVE_A;
   const taskId = input.id;
@@ -34,7 +35,7 @@ async function seedTask(input: {
   await sql`
     INSERT INTO tasks (
       id, hive_id, assigned_to, created_by, status, priority,
-      title, brief, result_summary, retry_count, completed_at
+      title, brief, result_summary, retry_count, completed_at, terminal_disposition
     )
     VALUES (
       ${taskId}, ${hiveId}, ${role}, 'test', 'completed', 5,
@@ -42,7 +43,8 @@ async function seedTask(input: {
       ${input.brief ?? "Brief with enough context for owner feedback sampling."},
       ${input.resultSummary ?? null},
       ${input.retryCount ?? 0},
-      ${input.completedAt ?? "2026-04-26T12:00:00.000Z"}
+      ${input.completedAt ?? "2026-04-26T12:00:00.000Z"},
+      ${input.terminalDisposition === undefined ? null : sql.json(input.terminalDisposition)}
     )
   `;
 
@@ -209,6 +211,37 @@ describe("findOwnerFeedbackSampleCandidates", () => {
 
     expect(candidates.map((candidate) => candidate.taskId)).toEqual([
       "10000000-0000-4000-8000-000000000001",
+    ]);
+  });
+  it("excludes already-governed terminal closeouts from owner/AI quality-feedback sampling", async () => {
+    await seedTask({
+      id: "10000000-0000-4000-8000-000000000007",
+      title: "HiveWright improvement scan: already routed",
+      brief: "Scheduled improvement scan already-routed to GitHub issue #107; no owner action required.",
+      workProduct: true,
+      terminalDisposition: {
+        kind: "improvement_scan_backlog_disposition",
+        terminal: true,
+        terminal_status: "closed_with_follow_up",
+        final_disposition_label: "github_issue_backlog_open",
+      },
+    });
+    await seedTask({
+      id: "10000000-0000-4000-8000-000000000008",
+      title: "HiveWright improvement scan: unresolved",
+      brief: "Scheduled improvement scan with no downstream route yet.",
+      workProduct: true,
+    });
+
+    const candidates = await findOwnerFeedbackSampleCandidates(
+      sql,
+      HIVE_A,
+      { eligibilityWindowDays: 7, duplicateCooldownDays: 30 },
+      NOW,
+    );
+
+    expect(candidates.map((candidate) => candidate.taskId)).toEqual([
+      "10000000-0000-4000-8000-000000000008",
     ]);
   });
 });

@@ -3,6 +3,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { testSql as sql, truncateAll } from "../../tests/_lib/test-db";
 import { syncRoleLibrary } from "../roles/sync";
 import { scanHive } from "./scan";
+import {
+  IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+  REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND,
+  reconcileReferenceOnlyTerminalDispositions,
+} from "./reference-terminal-disposition";
 
 const HIVE_ID = "11111111-1111-1111-1111-111111111111";
 const OTHER_HIVE_ID = "11111111-1111-1111-1111-111111111112";
@@ -2076,5 +2081,280 @@ describe.sequential("scanHive - goal_appears_complete detector", () => {
     const f = findings.filter((x) => x.kind === "goal_appears_complete");
     expect(f).toHaveLength(1);
     expect(f[0].ref.goalId).toBe("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb27");
+  });
+});
+
+describe.sequential("reference-only terminal dispositions", () => {
+  it("terminalizes durable reference-only outputs and suppresses orphan/unsatisfied findings", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3501";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES (
+        ${taskId}, ${HIVE_ID}, 'dev-agent', 'owner', 'completed',
+        'Reference-only audit report',
+        'Scan-only reconciliation evidence; no next implementation requested.',
+        'Durable reference-only audit evidence has been persisted for later lookup.',
+        NOW() - interval '2 hours', NOW() - interval '2 hours'
+      )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${taskId}, ${HIVE_ID}, 'dev-agent', 'reference artifact', 'Reference report', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
+      now: new Date("2026-06-08T00:00:00.000Z"),
+    });
+    expect(reconciled.disposed).toBe(1);
+
+    const [task] = await sql<Array<{ terminal_disposition: Record<string, unknown> | null }>>`
+      SELECT terminal_disposition FROM tasks WHERE id = ${taskId}
+    `;
+    expect(task.terminal_disposition?.kind).toBe(REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND);
+    expect(task.terminal_disposition?.terminal).toBe(true);
+    expect(task.terminal_disposition).toMatchObject({
+      terminal_status: "closed",
+      final_disposition_label: "reference_only_output",
+      closure_scope: "task",
+      decision_boundary: "autonomous_safe",
+      storage_root_family: "db_task_terminal_disposition",
+      source_finding: {
+        kind: "orphan_output",
+        key: `reference_only_output:${taskId}`,
+      },
+      source_record_ref: {
+        table: "tasks",
+        id: taskId,
+        field: "terminal_disposition",
+      },
+    });
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(false);
+    expect(report.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(false);
+  });
+
+  it("terminalizes governed no-action/already-routed improvement scans and suppresses orphan/unsatisfied findings", async () => {
+    const routedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3510";
+    const noActionTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3511";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES
+        (
+          ${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: performance analyst refresh',
+          'Scheduled improvement scan. Already-routed to existing backlog item #107; no owner action required.',
+          'Proposal routing found the downstream backlog route #107. No new decision needed.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: bounded no-action closeout',
+          'Scheduled improvement scan with explicit no-action terminal closeout. No new decision is needed.',
+          'The scan found no actionable product change and records a bounded no-action disposition.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES
+        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to backlog item #107.', 'Improvement scan route', 'reference_report'),
+        (${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'No-action terminal closeout.', 'Improvement scan no-action closeout', 'reference_report')
+    `;
+
+    const before = await scanHive(sql, HIVE_ID);
+    expect(before.findings.some((f) => f.id === `unsatisfied_completion:${routedTaskId}`)).toBe(true);
+    expect(before.findings.some((f) => f.id === `orphan_output:${routedTaskId}`)).toBe(true);
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
+      now: new Date("2026-06-17T00:00:00.000Z"),
+    });
+    expect(reconciled.disposed).toBe(2);
+
+    const rows = await sql<Array<{ id: string; terminal_disposition: Record<string, unknown> }>>`
+      SELECT id, terminal_disposition
+      FROM tasks
+      WHERE id IN (${routedTaskId}, ${noActionTaskId})
+      ORDER BY id
+    `;
+    expect(rows.map((row) => row.terminal_disposition.kind)).toEqual([
+      IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+      IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND,
+    ]);
+    expect(rows[0].terminal_disposition).toMatchObject({
+      terminal_status: "closed_with_follow_up",
+      final_disposition_label: "github_issue_backlog_open",
+      closure_scope: "github_issue",
+      decision_boundary: "external_state_only",
+      evidence: { disposition: "already_routed", githubRefs: expect.arrayContaining(["#107"]) },
+    });
+    expect(rows[1].terminal_disposition).toMatchObject({
+      terminal_status: "closed",
+      final_disposition_label: "reference_only_output",
+      evidence: { disposition: "explicit_no_action" },
+    });
+
+    const after = await scanHive(sql, HIVE_ID);
+    for (const taskId of [routedTaskId, noActionTaskId]) {
+      expect(after.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(false);
+      expect(after.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(false);
+    }
+  });
+
+  it("does not terminalize improvement scans when evidence is missing or no route/disposition exists", async () => {
+    const missingEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3512";
+    const unresolvedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3513";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES
+        (
+          ${missingEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: missing evidence route',
+          'Scheduled improvement scan says already-routed to issue #107 but has no work product evidence.',
+          ${"Already-routed to issue #107. ".repeat(10)},
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: unresolved recommendation',
+          'Scheduled improvement scan found a possible implementation follow-up but no downstream tracker or accepted closure.',
+          ${"Implement a follow-up later, but no GitHub tracker or accepted closure is named. ".repeat(4)},
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
+        )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Needs routing before closeout.', 'Unresolved scan output', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${missingEvidenceTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${unresolvedTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `orphan_output:${unresolvedTaskId}`)).toBe(true);
+  });
+
+  it("does not suppress owner-action-required reference outputs", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3502";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, completed_at, updated_at)
+      VALUES (
+        ${taskId}, ${HIVE_ID}, 'dev-agent', 'owner', 'completed',
+        'Reference-only audit requiring owner decision',
+        'Evidence is present but owner action required before this can be terminal.',
+        NOW() - interval '2 hours', NOW() - interval '2 hours'
+      )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${taskId}, ${HIVE_ID}, 'dev-agent', 'owner decision evidence', 'Decision evidence', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(true);
+  });
+
+  it("does not suppress reference outputs missing durable artifact evidence", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3503";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES (
+        ${taskId}, ${HIVE_ID}, 'dev-agent', 'owner', 'completed',
+        'Reference-only scan report',
+        'Scan-only reconciliation output.',
+        ${"x".repeat(220)},
+        NOW() - interval '2 hours', NOW() - interval '2 hours'
+      )
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(true);
+  });
+
+  it("does not suppress outputs whose artifact provenance does not match task/hive/role", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3504";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, completed_at, updated_at)
+      VALUES (
+        ${taskId}, ${HIVE_ID}, 'dev-agent', 'owner', 'completed',
+        'Reference-only scan report',
+        'Scan-only reconciliation output with unresolved lineage.',
+        NOW() - interval '2 hours', NOW() - interval '2 hours'
+      )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${taskId}, ${HIVE_ID}, 'research-analyst', 'wrong role artifact', 'Wrong role evidence', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const report = await scanHive(sql, HIVE_ID);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(true);
+  });
+
+  it("supersedes stale wrapper cleanup tasks for already-terminal reference outputs", async () => {
+    const sourceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3505";
+    const wrapperTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3506";
+    const sourceDisposition = {
+      schemaVersion: 1,
+      kind: REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND,
+      terminal: true,
+      recordedAt: "2026-06-08T00:00:00.000Z",
+      source: "supervisor.referenceOnlyTerminalDisposition",
+    };
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, completed_at, terminal_disposition)
+      VALUES (
+        ${sourceTaskId}, ${HIVE_ID}, 'dev-agent', 'owner', 'completed',
+        'Reference-only audit report', 'Scan-only evidence.', NOW() - interval '2 hours', ${sql.json(sourceDisposition)}
+      )
+    `;
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, parent_task_id)
+      VALUES (
+        ${wrapperTaskId}, ${HIVE_ID}, 'hive-supervisor', 'hive-supervisor', 'pending',
+        'Cleanup orphan_output reference-only wrapper', 'Reconcile wrapper for already attributable reference-only output.', ${sourceTaskId}
+      )
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
+      now: new Date("2026-06-08T00:00:00.000Z"),
+    });
+    expect(reconciled.wrappersSuperseded).toBe(1);
+
+    const [wrapper] = await sql<Array<{ status: string; terminal_disposition: Record<string, unknown> | null }>>`
+      SELECT status, terminal_disposition FROM tasks WHERE id = ${wrapperTaskId}
+    `;
+    expect(wrapper.status).toBe("superseded");
+    expect(wrapper.terminal_disposition?.kind).toBe("reference_only_wrapper_superseded");
+    expect(wrapper.terminal_disposition).toMatchObject({
+      terminal_status: "superseded",
+      final_disposition_label: "reference_only_wrapper_superseded",
+      closure_scope: "task",
+      decision_boundary: "autonomous_safe",
+      storage_root_family: "db_task_terminal_disposition",
+      source_finding: {
+        kind: "orphan_output",
+        key: `reference_only_wrapper_superseded:${wrapperTaskId}`,
+        evidence_ref: sourceTaskId,
+      },
+      source_record_ref: {
+        table: "tasks",
+        id: wrapperTaskId,
+        field: "terminal_disposition",
+      },
+    });
   });
 });

@@ -4,6 +4,7 @@ export type UpdateState =
   | "blocked-dirty-worktree"
   | "blocked-local-ahead"
   | "blocked-diverged"
+  | "locked-install-status-suppressed"
   | "not-configured"
   | "unknown";
 

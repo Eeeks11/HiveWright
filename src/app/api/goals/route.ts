@@ -2,12 +2,13 @@ import { sql } from "../_lib/db";
 import { jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../_lib/auth";
 import { readIdempotencyKey, runIdempotentCreate } from "../_lib/idempotency";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 import { canAccessHive } from "@/auth/users";
 import {
   recordEaDirectCreateBypass,
   requireEaDirectCreateBypassReason,
 } from "@/ea/native/direct-create-bypass";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError, resolveDefaultProjectIdForHive } from "@/projects/default-project";
 import {
   assertHiveCreationAllowed,
@@ -89,7 +90,9 @@ export async function GET(request: Request) {
   const { user } = authz;
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
     const status = params.get("status");
     const limit = params.getInt("limit", 50);
     const offset = params.getInt("offset", 0);
@@ -98,24 +101,9 @@ export async function GET(request: Request) {
     const values: unknown[] = [];
     let paramIdx = 1;
 
-    if (hiveId) {
-      if (!user.isSystemOwner) {
-        const hasAccess = await canAccessHive(sql, user.id, hiveId);
-        if (!hasAccess) {
-          return jsonError("Forbidden: caller cannot access this hive", 403);
-        }
-      }
-      conditions.push({ count: `hive_id = $${paramIdx}`, data: `g.hive_id = $${paramIdx}` });
-      values.push(hiveId);
-      paramIdx++;
-    } else if (!user.isSystemOwner) {
-      conditions.push({
-        count: `hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = $${paramIdx})`,
-        data: `g.hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = $${paramIdx})`,
-      });
-      values.push(user.id);
-      paramIdx++;
-    }
+    conditions.push({ count: `hive_id = $${paramIdx}`, data: `g.hive_id = $${paramIdx}` });
+    values.push(hiveId);
+    paramIdx++;
     if (status) {
       conditions.push({ count: `status = $${paramIdx}`, data: `g.status = $${paramIdx}` });
       values.push(status);
@@ -187,6 +175,9 @@ export async function POST(request: Request) {
     if (!hiveId || !title) {
       return jsonError("Missing required fields: hiveId, title", 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;

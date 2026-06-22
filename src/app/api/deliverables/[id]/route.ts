@@ -1,11 +1,11 @@
-import { canAccessHive } from "@/auth/users";
+import { requireResourceOwnedByHive, requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { getDeliverable, toDeliverableSummary } from "@/deliverables/queries";
 import { requireApiUser } from "../../_lib/auth";
 import { sql } from "../../_lib/db";
 import { jsonError, jsonOk } from "../../_lib/responses";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -13,13 +13,12 @@ export async function GET(
     if ("response" in authz) return authz.response;
 
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+    if (!target.ok) return target.response;
     const deliverable = await getDeliverable(sql, id);
+    const ownership = requireResourceOwnedByHive(deliverable?.hiveId, target.hiveId, { resourceName: "Deliverable" });
+    if (!ownership.ok) return ownership.response;
     if (!deliverable) return jsonError("Not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, deliverable.hiveId);
-      if (!hasAccess) return jsonError("Forbidden", 403);
-    }
 
     return jsonOk(toDeliverableSummary(deliverable));
   } catch {

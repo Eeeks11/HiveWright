@@ -33,14 +33,14 @@ describe("<AgentCard>", () => {
   });
 
   it("renders role + title and opens SSE to /api/tasks/:id/stream", () => {
-    render(<AgentCard taskId="t-1" assignedTo="dev-agent" title="Build X" />);
+    render(<AgentCard hiveId="hive-1" taskId="t-1" assignedTo="dev-agent" title="Build X" />);
     expect(screen.getByText("dev-agent")).toBeTruthy();
     expect(screen.getByText("Build X")).toBeTruthy();
-    expect(MockEventSource.instances[0].url).toBe("/api/tasks/t-1/stream");
+    expect(MockEventSource.instances[0].url).toBe("/api/tasks/t-1/stream?hiveId=hive-1");
   });
 
   it("wraps the card in a link to /tasks/:id for clickthrough", () => {
-    render(<AgentCard taskId="t-abc" assignedTo="dev-agent" title="Build X" />);
+    render(<AgentCard hiveId="hive-1" taskId="t-abc" assignedTo="dev-agent" title="Build X" />);
     const link = screen.getByTestId("agent-card-link") as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/tasks/t-abc");
     expect(link.getAttribute("aria-label")).toBe("Open task: Build X");
@@ -49,6 +49,7 @@ describe("<AgentCard>", () => {
   it("renders the runtime model label with the provider prefix stripped", () => {
     render(
       <AgentCard
+        hiveId="hive-1"
         taskId="t-1"
         assignedTo="dev-agent"
         title="Build X"
@@ -61,17 +62,17 @@ describe("<AgentCard>", () => {
   });
 
   it("falls back to 'model pending' when modelUsed is absent", () => {
-    render(<AgentCard taskId="t-1" assignedTo="dev-agent" title="Build X" />);
+    render(<AgentCard hiveId="hive-1" taskId="t-1" assignedTo="dev-agent" title="Build X" />);
     expect(screen.getByTestId("agent-card-model").textContent).toBe("model pending");
   });
 
   it("shows 'Waiting for output…' until the first chunk arrives", () => {
-    render(<AgentCard taskId="t-2" assignedTo="dev-agent" title="A" />);
+    render(<AgentCard hiveId="hive-1" taskId="t-2" assignedTo="dev-agent" title="A" />);
     expect(screen.getByText(/Waiting for output/)).toBeTruthy();
   });
 
   it("appends stdout/stderr chunks and drops the placeholder", () => {
-    render(<AgentCard taskId="t-3" assignedTo="dev-agent" title="A" />);
+    render(<AgentCard hiveId="hive-1" taskId="t-3" assignedTo="dev-agent" title="A" />);
     act(() => {
       MockEventSource.instances[0].emit({
         taskId: "t-3",
@@ -93,7 +94,7 @@ describe("<AgentCard>", () => {
   });
 
   it("closes SSE on unmount", () => {
-    const { unmount } = render(<AgentCard taskId="t-4" assignedTo="dev-agent" title="A" />);
+    const { unmount } = render(<AgentCard hiveId="hive-1" taskId="t-4" assignedTo="dev-agent" title="A" />);
     expect(MockEventSource.instances[0].closed).toBe(false);
     unmount();
     expect(MockEventSource.instances[0].closed).toBe(true);

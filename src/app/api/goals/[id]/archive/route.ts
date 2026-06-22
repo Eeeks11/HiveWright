@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 // Per-handler authorization (audit 2026-04-22 core-goal pass).
 // Archive flips a goal out of active listings. Previously any authenticated
@@ -10,25 +10,25 @@ import { canAccessHive } from "@/auth/users";
 // on that hive before the update. System owners bypass membership via the
 // helper itself.
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
-  const { user } = authz;
-  try {
+    try {
     const { id } = await params;
+    const body = (await request.json().catch(() => ({}))) as { hiveId?: unknown };
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
     const [goal] = await sql<{ id: string; hive_id: string; archived_at: Date | null }[]>`
-      SELECT id, hive_id, archived_at FROM goals WHERE id = ${id}
+      SELECT id, hive_id, archived_at FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) return jsonError("Goal not found", 404);
-
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, goal.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal's hive", 403);
-      }
-    }
 
     if (goal.archived_at !== null) {
       return jsonOk({ goalId: id, idempotent: true, archivedAt: goal.archived_at });
@@ -36,7 +36,7 @@ export async function POST(
 
     const [row] = await sql<{ archived_at: Date }[]>`
       UPDATE goals SET archived_at = NOW(), updated_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       RETURNING archived_at
     `;
     return jsonOk({ goalId: id, idempotent: false, archivedAt: row.archived_at });

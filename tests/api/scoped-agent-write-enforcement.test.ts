@@ -201,6 +201,125 @@ describe.sequential("scoped internal task writes", () => {
     expect(task.hive_id).toBe(hiveB);
   });
 
+  it("rejects EA-origin cross-hive work without destination hive confirmation and inserts nothing", async () => {
+    authState.taskId = null;
+    const [{ countBefore }] = await sql<{ countBefore: number }[]>`SELECT COUNT(*)::int AS "countBefore" FROM tasks`;
+
+    const response = await createWork(jsonRequest(
+      "/api/work",
+      {
+        hiveId: hiveB,
+        assignedTo: "dev-agent",
+        input: "Create unconfirmed EA work across hives.",
+      },
+      {
+        "X-HiveWright-EA-Source-Hive-Id": hiveA,
+        "X-HiveWright-EA-Thread-Id": eaThreadId,
+        "X-HiveWright-EA-Owner-Message-Id": eaOwnerMessageId,
+        "X-HiveWright-EA-Source": "dashboard",
+      },
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "EA_DESTINATION_HIVE_CONFIRMATION_REQUIRED",
+    });
+    const [{ after }] = await sql<{ after: number }[]>`SELECT COUNT(*)::int AS after FROM tasks`;
+    expect(after).toBe(countBefore);
+  });
+
+  it("rejects EA-origin cross-hive work when confirmation names the source hive", async () => {
+    authState.taskId = null;
+    const [{ countBefore }] = await sql<{ countBefore: number }[]>`SELECT COUNT(*)::int AS "countBefore" FROM tasks`;
+
+    const response = await createWork(jsonRequest(
+      "/api/work",
+      {
+        hiveId: hiveB,
+        assignedTo: "dev-agent",
+        input: "Create EA work with the wrong confirmation.",
+        destinationHiveConfirmation: "Scoped Write A",
+      },
+      {
+        "X-HiveWright-EA-Source-Hive-Id": hiveA,
+        "X-HiveWright-EA-Thread-Id": eaThreadId,
+        "X-HiveWright-EA-Owner-Message-Id": eaOwnerMessageId,
+        "X-HiveWright-EA-Source": "dashboard",
+      },
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "EA_DESTINATION_HIVE_CONFIRMATION_REQUIRED",
+    });
+    const [{ after }] = await sql<{ after: number }[]>`SELECT COUNT(*)::int AS after FROM tasks`;
+    expect(after).toBe(countBefore);
+  });
+
+  it("accepts EA-origin direct task creates when confirmation matches destination slug", async () => {
+    authState.taskId = null;
+    const response = await createTask(jsonRequest(
+      "/api/tasks",
+      {
+        hiveId: hiveB,
+        assignedTo: "dev-agent",
+        title: "Confirmed direct task",
+        brief: "Cross-hive direct create with destination confirmation.",
+        createdBy: "ea",
+        bypassReason: "Owner explicitly asked EA to create this in another hive.",
+        destinationHiveConfirmation: "scoped-write-b",
+      },
+      {
+        "X-HiveWright-EA-Source-Hive-Id": hiveA,
+        "X-HiveWright-EA-Thread-Id": eaThreadId,
+        "X-HiveWright-EA-Owner-Message-Id": eaOwnerMessageId,
+        "X-HiveWright-EA-Source": "dashboard",
+      },
+    ));
+
+    expect(response.status).toBe(201);
+    const body = await response.json();
+    const [task] = await sql<{ hive_id: string }[]>`
+      SELECT hive_id FROM tasks WHERE id = ${body.data.id}
+    `;
+    expect(task.hive_id).toBe(hiveB);
+  });
+
+  it("rejects EA-origin cross-hive goal and hive memory writes before insertion", async () => {
+    authState.taskId = null;
+    const headers = {
+      "X-HiveWright-EA-Source-Hive-Id": hiveA,
+      "X-HiveWright-EA-Thread-Id": eaThreadId,
+      "X-HiveWright-EA-Owner-Message-Id": eaOwnerMessageId,
+      "X-HiveWright-EA-Source": "dashboard",
+    };
+    const [{ goalsBefore }] = await sql<{ goalsBefore: number }[]>`SELECT COUNT(*)::int AS "goalsBefore" FROM goals`;
+    const [{ memoryBefore }] = await sql<{ memoryBefore: number }[]>`SELECT COUNT(*)::int AS "memoryBefore" FROM hive_memory`;
+
+    const goalResponse = await createGoal(jsonRequest("/api/goals", {
+      hiveId: hiveB,
+      title: "Unconfirmed cross-hive goal",
+      bypassReason: "Owner asked EA to create this goal directly.",
+    }, headers));
+    const memoryResponse = await createHiveMemory(jsonRequest("/api/memory/hive", {
+      hiveId: hiveB,
+      content: "Unconfirmed cross-hive memory.",
+    }, headers));
+
+    expect(goalResponse.status).toBe(400);
+    expect(memoryResponse.status).toBe(400);
+    await expect(goalResponse.json()).resolves.toMatchObject({
+      code: "EA_DESTINATION_HIVE_CONFIRMATION_REQUIRED",
+    });
+    await expect(memoryResponse.json()).resolves.toMatchObject({
+      code: "EA_DESTINATION_HIVE_CONFIRMATION_REQUIRED",
+    });
+    const [{ goalsAfter }] = await sql<{ goalsAfter: number }[]>`SELECT COUNT(*)::int AS "goalsAfter" FROM goals`;
+    const [{ memoryAfter }] = await sql<{ memoryAfter: number }[]>`SELECT COUNT(*)::int AS "memoryAfter" FROM hive_memory`;
+    expect(goalsAfter).toBe(goalsBefore);
+    expect(memoryAfter).toBe(memoryBefore);
+  });
+
   it("records one audit row for a successful EA-origin cross-hive write", async () => {
     authState.taskId = null;
     const response = await createWork(jsonRequest(
@@ -209,6 +328,7 @@ describe.sequential("scoped internal task writes", () => {
         hiveId: hiveB,
         assignedTo: "dev-agent",
         input: "Create audited EA work across hives.",
+        destinationHiveConfirmation: "Scoped Write B",
       },
       {
         "X-HiveWright-EA-Source-Hive-Id": hiveA,

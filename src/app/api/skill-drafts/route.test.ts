@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
     requireApiUser: vi.fn(),
     enforceInternalTaskHiveScope: vi.fn(),
     canAccessHive: vi.fn(),
+    requireEaDestinationHiveConfirmation: vi.fn(),
   };
 });
 
@@ -31,6 +32,7 @@ vi.mock("@/auth/users", () => ({
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: vi.fn(),
+  requireEaDestinationHiveConfirmation: mocks.requireEaDestinationHiveConfirmation,
 }));
 
 vi.mock("@/skills/self-creation", () => ({
@@ -74,7 +76,7 @@ const mockRecordAudit = vi.mocked(recordAgentAuditEventBestEffort);
 function captureDerivedDraft(overrides: Record<string, unknown> = {}) {
   return {
     id: "draft-123",
-    hiveId: "hive-1",
+    hiveId: "11111111-1111-4111-8111-111111111111",
     roleSlug: "owner",
     targetRoleSlugs: ["owner"],
     sourceTaskId: null,
@@ -123,6 +125,8 @@ describe("GET /api/skill-drafts access control", () => {
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
+    mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.unsafe.mockResolvedValue([]);
   });
 
@@ -131,7 +135,7 @@ describe("GET /api/skill-drafts access control", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=hive-1"));
+    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(response.status).toBe(401);
     expect(mocks.sql.unsafe).not.toHaveBeenCalled();
@@ -143,10 +147,28 @@ describe("GET /api/skill-drafts access control", () => {
     });
     mocks.canAccessHive.mockResolvedValueOnce(false);
 
-    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=hive-1"));
+    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(response.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing hiveId before querying skill drafts", async () => {
+    const response = await GET(new Request("http://localhost/api/skill-drafts"));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid hiveId before querying skill drafts", async () => {
+    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=not-a-uuid"));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
     expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 
@@ -155,7 +177,7 @@ describe("GET /api/skill-drafts access control", () => {
     mocks.sql.unsafe.mockResolvedValueOnce([
       {
         id: "draft-1",
-        hive_id: "hive-1",
+        hive_id: "11111111-1111-4111-8111-111111111111",
         role_slug: "dev-agent",
         target_role_slugs: ["dev-agent"],
         source_task_id: null,
@@ -186,14 +208,14 @@ describe("GET /api/skill-drafts access control", () => {
       },
     ]);
 
-    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=hive-1"));
+    const response = await GET(new Request("http://localhost/api/skill-drafts?hiveId=11111111-1111-4111-8111-111111111111"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body.data).toHaveLength(1);
     expect(body.data[0]).toMatchObject({
       id: "draft-1",
-      hiveId: "hive-1",
+      hiveId: "11111111-1111-4111-8111-111111111111",
       sourceType: "external",
       provenanceUrl: "https://example.com/skill.md",
       securityReviewStatus: "pending",
@@ -212,7 +234,8 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
     });
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
     mocks.canAccessHive.mockResolvedValue(true);
-    mocks.sql.mockResolvedValue([{ id: "draft-123", hiveId: "hive-1" }]);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
+    mocks.sql.mockResolvedValue([{ id: "draft-123", hiveId: "11111111-1111-4111-8111-111111111111" }]);
   });
 
   it("rejects callers without target draft hive access before mutation or audit emission", async () => {
@@ -235,11 +258,11 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
     expect(response.status).toBe(403);
     expect(body.error).toContain("cannot access this draft hive");
     expect(mocks.sql).toHaveBeenCalledTimes(1);
-    expect(mocks.enforceInternalTaskHiveScope).toHaveBeenCalledWith("hive-1");
+    expect(mocks.enforceInternalTaskHiveScope).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
     expect(mocks.canAccessHive).toHaveBeenCalledWith(
       mocks.sql,
       "cross-hive-user",
-      "hive-1",
+      "11111111-1111-4111-8111-111111111111",
     );
     expect(mockReviewSkill).not.toHaveBeenCalled();
     expect(mockApproveSkill).not.toHaveBeenCalled();
@@ -261,7 +284,7 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
       ok: true,
       scope: {
         taskId: "task-1",
-        hiveId: "hive-1",
+        hiveId: "11111111-1111-4111-8111-111111111111",
         assignedTo: "dev-agent",
         parentTaskId: null,
       },
@@ -281,14 +304,14 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(mocks.enforceInternalTaskHiveScope).toHaveBeenCalledWith("hive-1");
+    expect(mocks.enforceInternalTaskHiveScope).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
     expect(mockApproveSkill).toHaveBeenCalledWith(mocks.sql, "draft-123", "system");
     expect(mockRecordAudit).toHaveBeenCalledWith(
       mocks.sql,
       expect.objectContaining({
         eventType: "draft_workflow_approved",
-        hiveId: "hive-1",
+        hiveId: "11111111-1111-4111-8111-111111111111",
       }),
     );
   });
@@ -412,7 +435,7 @@ describe("PATCH /api/skill-drafts capture-derived publish audit", () => {
           id: "owner-user",
           type: "owner",
         }),
-        hiveId: "hive-1",
+        hiveId: "11111111-1111-4111-8111-111111111111",
         targetType: "skill_draft",
         targetId: "draft-123",
         outcome: "success",
@@ -438,6 +461,7 @@ describe("POST /api/skill-drafts access control", () => {
     });
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true, scope: null });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
   });
 
   it("returns 403 before proposing when the caller cannot manage the hive", async () => {
@@ -447,7 +471,7 @@ describe("POST /api/skill-drafts access control", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        hiveId: "hive-1",
+        hiveId: "11111111-1111-4111-8111-111111111111",
         roleSlug: "dev-agent",
         slug: "draft",
         content: "# Draft",
@@ -456,7 +480,7 @@ describe("POST /api/skill-drafts access control", () => {
     }));
 
     expect(response.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
     expect(mockProposeSkill).not.toHaveBeenCalled();
   });
 });

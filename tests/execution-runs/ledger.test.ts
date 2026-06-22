@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import {
   finishExecutionRun,
+  markExecutionRunBlocked,
   markInterruptedRunningExecutionRuns,
   recordExecutionRunOutput,
   startExecutionRun,
   summarizeExecutionRunSignals,
+  summarizeRuntimeBlockFingerprint,
 } from "@/execution-runs/ledger";
 
 beforeEach(async () => {
@@ -125,6 +127,154 @@ describe("execution run ledger", () => {
     expect(row).toMatchObject({ stdout_excerpt: null, output_bytes: 0 });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ event_type: "started", hive_id: hive.id });
+  });
+
+  it("persists runtime-health-gate blocked evidence with explicit pre-spawn session semantics", async () => {
+    const [hive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('execution-run-blocked-forensics-hive', 'Execution Run Blocked Forensics Hive', 'digital')
+      RETURNING id
+    `;
+
+    const evidence = {
+      routeStage: "runtime_health_gate",
+      blockedBeforeSpawn: true,
+      sessionSemantics: {
+        sessionId: null,
+        adapterSessionExpected: false,
+        executionCapsuleExpected: false,
+        reason: "dispatcher_blocked_before_adapter_session_startup",
+      },
+      buildProvenance: {
+        version: "1.2.3",
+        buildHash: "build-sha-123",
+        buildHashSource: "HIVEWRIGHT_BUILD_HASH",
+      },
+      runtimeHealthGate: {
+        primary: {
+          healthy: false,
+          reason: "health_probe_stale",
+          modelHealth: {
+            status: "healthy",
+            lastProbedAt: "2026-06-05T00:00:00.000Z",
+            failureReason: "probe too old",
+          },
+        },
+        fallback: null,
+      },
+    };
+
+    const run = await startExecutionRun(sql, {
+      hiveId: hive.id,
+      adapterType: "claude-code",
+      model: "anthropic/claude-sonnet-4-6",
+      sessionId: null,
+      dispatcherPid: 5555,
+      metadata: evidence,
+    });
+    await markExecutionRunBlocked(sql, {
+      runId: run.id,
+      hiveId: hive.id,
+      reason: "runtime_blocked: Runtime health gate blocked task before spawn.",
+      evidence,
+    });
+
+    const [row] = await sql<{ status: string; session_id: string | null; metadata: typeof evidence }[]>`
+      SELECT status, session_id, metadata
+      FROM execution_runs
+      WHERE id = ${run.id}
+    `;
+    expect(row.status).toBe("blocked");
+    expect(row.session_id).toBeNull();
+    expect(row.metadata).toMatchObject({
+      routeStage: "runtime_health_gate",
+      blockedBeforeSpawn: true,
+      sessionSemantics: {
+        sessionId: null,
+        adapterSessionExpected: false,
+        executionCapsuleExpected: false,
+      },
+      buildProvenance: {
+        buildHash: "build-sha-123",
+        buildHashSource: "HIVEWRIGHT_BUILD_HASH",
+      },
+      runtimeHealthGate: {
+        primary: {
+          reason: "health_probe_stale",
+          modelHealth: { failureReason: "probe too old" },
+        },
+      },
+    });
+
+    const events = await sql<{ event_type: string; payload: typeof evidence | null }[]>`
+      SELECT event_type, payload
+      FROM execution_run_events
+      WHERE run_id = ${run.id}
+      ORDER BY id
+    `;
+    expect(events.map((event) => event.event_type)).toEqual(["started", "finished", "blocked"]);
+    expect(events[2]?.payload).toMatchObject({
+      routeStage: "runtime_health_gate",
+      blockedBeforeSpawn: true,
+      sessionSemantics: { adapterSessionExpected: false },
+    });
+  });
+
+  it("summarizes repeated runtime block fingerprints inside the lookback window", async () => {
+    const [hive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('execution-run-repeated-block-hive', 'Execution Run Repeated Block Hive', 'digital')
+      RETURNING id
+    `;
+    const [otherHive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('execution-run-repeated-block-other-hive', 'Execution Run Repeated Block Other Hive', 'digital')
+      RETURNING id
+    `;
+
+    const first = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "ollama" });
+    const second = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "ollama" });
+    const different = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "codex" });
+
+    await markExecutionRunBlocked(sql, {
+      runId: first.id,
+      hiveId: hive.id,
+      reason: "Runtime route blocked",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-1" },
+    });
+    await markExecutionRunBlocked(sql, {
+      runId: second.id,
+      hiveId: hive.id,
+      reason: "Runtime route blocked again",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-1" },
+    });
+    await markExecutionRunBlocked(sql, {
+      runId: different.id,
+      hiveId: hive.id,
+      reason: "Different runtime route blocked",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-2" },
+    });
+
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: hive.id,
+      fingerprint: "fp-runtime-1",
+    })).resolves.toMatchObject({
+      fingerprint: "fp-runtime-1",
+      count: 2,
+      repeated: true,
+    });
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: hive.id,
+      fingerprint: "fp-runtime-2",
+    })).resolves.toMatchObject({
+      fingerprint: "fp-runtime-2",
+      count: 1,
+      repeated: false,
+    });
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: otherHive.id,
+      fingerprint: "fp-runtime-1",
+    })).resolves.toMatchObject({ count: 0, repeated: false });
   });
 
   it("marks stale running runs recovered during dispatcher lifecycle reconciliation", async () => {

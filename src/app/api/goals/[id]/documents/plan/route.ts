@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { sql } from "@/app/api/_lib/db";
 import { isInternalServiceAccountUser, requireApiUser } from "@/app/api/_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { getGoalPlan, upsertGoalPlan } from "@/goals/goal-documents";
 import {
   hasOutcomeClassificationInput,
@@ -16,27 +16,20 @@ import {
 const MAX_PLAN_BODY_BYTES = 1 * 1024 * 1024;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   const { user } = authz;
   const { id } = await params;
+  const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+  if (!target.ok) return target.response;
   const [goal] = await sql<{ id: string; hive_id: string }[]>`
-    SELECT id, hive_id FROM goals WHERE id = ${id}
+    SELECT id, hive_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
   `;
   if (!goal) {
     return NextResponse.json({ error: "goal not found" }, { status: 404 });
-  }
-  if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, goal.hive_id);
-    if (!hasAccess) {
-      return NextResponse.json(
-        { error: "Forbidden: caller cannot access this goal" },
-        { status: 403 },
-      );
-    }
   }
 
   const plan = await getGoalPlan(sql, id);
@@ -68,6 +61,7 @@ export async function PUT(
   const { user } = authz;
   const { id } = await params;
   const body = (await request.json()) as {
+    hiveId?: unknown;
     title?: string;
     body?: string;
     createdBy?: string;
@@ -100,10 +94,18 @@ export async function PUT(
     );
   }
 
+  const target = await requireStrictHiveTarget(
+    sql,
+    user,
+    { kind: "body", body: body as Record<string, unknown> },
+    { mode: "mutate" },
+  );
+  if (!target.ok) return target.response;
+
   // Verify the goal exists before attempting to upsert — otherwise the FK
   // constraint on goal_documents.goal_id surfaces as a 500 from Postgres.
   const [goal] = await sql<{ session_id: string | null }[]>`
-    SELECT session_id FROM goals WHERE id = ${id} LIMIT 1
+    SELECT session_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid LIMIT 1
   `;
   if (!goal) {
     return NextResponse.json({ error: "goal not found" }, { status: 404 });

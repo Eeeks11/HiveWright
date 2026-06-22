@@ -84,6 +84,13 @@ export interface FinishExecutionRunInput {
   logBytes?: number | null;
 }
 
+export interface MarkExecutionRunBlockedInput {
+  runId: string;
+  hiveId: string;
+  reason: string;
+  evidence?: Record<string, unknown> | null;
+}
+
 export interface ExecutionRunSignalSummary {
   running: number;
   interruptedRecovered: number;
@@ -92,6 +99,12 @@ export interface ExecutionRunSignalSummary {
   latestLivenessState: ExecutionRunLivenessState | null;
   latestLivenessReason: string | null;
   lastRecoveryAt: Date | null;
+}
+
+export interface RuntimeBlockFingerprintSummary {
+  fingerprint: string;
+  count: number;
+  repeated: boolean;
 }
 
 export async function startExecutionRun(sql: Sql, input: StartExecutionRunInput): Promise<ExecutionRunRecord> {
@@ -247,7 +260,7 @@ export async function finishExecutionRun(sql: Sql, input: FinishExecutionRunInpu
 }
 
 
-export async function markExecutionRunBlocked(sql: Sql, input: { runId: string; hiveId: string; reason: string }): Promise<void> {
+export async function markExecutionRunBlocked(sql: Sql, input: MarkExecutionRunBlockedInput): Promise<void> {
   await finishExecutionRun(sql, {
     runId: input.runId,
     hiveId: input.hiveId,
@@ -255,6 +268,34 @@ export async function markExecutionRunBlocked(sql: Sql, input: { runId: string; 
     finalizationResult: "runtime_blocked",
     errorMessage: input.reason,
   });
+  if (input.evidence) {
+    await appendExecutionRunEvent(sql, {
+      runId: input.runId,
+      hiveId: input.hiveId,
+      eventType: "blocked",
+      message: input.reason,
+      payload: input.evidence,
+    });
+  }
+}
+
+export async function summarizeRuntimeBlockFingerprint(
+  sql: Sql,
+  input: { hiveId: string; fingerprint: string; now?: Date; windowHours?: number; threshold?: number },
+): Promise<RuntimeBlockFingerprintSummary> {
+  const now = input.now ?? new Date();
+  const windowHours = input.windowHours ?? 24;
+  const threshold = input.threshold ?? 2;
+  const [row] = await sql<{ count: number | string }[]>`
+    SELECT COUNT(*)::int AS count
+    FROM execution_run_events
+    WHERE hive_id = ${input.hiveId}
+      AND event_type = 'blocked'
+      AND created_at >= ${now} - (${windowHours}::text || ' hours')::interval
+      AND payload->>'runtimeBlockFingerprint' = ${input.fingerprint}
+  `;
+  const count = Number(row?.count ?? 0);
+  return { fingerprint: input.fingerprint, count, repeated: count >= threshold };
 }
 
 export async function markInterruptedRunningExecutionRuns(

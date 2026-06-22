@@ -29,6 +29,7 @@ describe("GET /api/goals access control", () => {
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mocks.sql.mockResolvedValue([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.unsafe.mockResolvedValue([]);
   });
 
@@ -50,32 +51,36 @@ describe("GET /api/goals access control", () => {
     });
     mocks.canAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/goals?hiveId=hive-a"));
+    const res = await GET(new Request("http://localhost/api/goals?hiveId=11111111-1111-4111-8111-111111111111"));
     const body = await res.json();
 
     expect(res.status).toBe(403);
     expect(body.error).toBe("Forbidden: caller cannot access this hive");
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-a");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
     expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 
-  it("filters broad non-owner goal reads to accessible hives", async () => {
+  it("rejects missing hiveId even for non-owner goal reads", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
-    mocks.sql.unsafe
-      .mockResolvedValueOnce([{ total: "0" }])
-      .mockResolvedValueOnce([]);
 
     const res = await GET(new Request("http://localhost/api/goals?limit=10&offset=0"));
+    const body = await res.json();
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
-    expect(mocks.sql.unsafe).toHaveBeenCalledTimes(2);
-    expect(mocks.sql.unsafe.mock.calls[0][0]).toContain("hive_memberships");
-    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["member-1"]);
-    expect(mocks.sql.unsafe.mock.calls[1][0]).toContain("g.hive_id IN");
-    expect(mocks.sql.unsafe.mock.calls[1][1]).toEqual(["member-1", 10, 0]);
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid hiveId before querying goals", async () => {
+    const res = await GET(new Request("http://localhost/api/goals?hiveId=not-a-uuid"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 
   it("allows system-owner callers to request a hiveId without membership checks", async () => {
@@ -83,7 +88,7 @@ describe("GET /api/goals access control", () => {
       .mockResolvedValueOnce([{ total: "1" }])
       .mockResolvedValueOnce([{
         id: "goal-1",
-        hive_id: "hive-a",
+        hive_id: "11111111-1111-4111-8111-111111111111",
         project_id: null,
         parent_id: null,
         title: "Goal 1",
@@ -103,7 +108,7 @@ describe("GET /api/goals access control", () => {
         completed_tasks: "1",
       }]);
 
-    const res = await GET(new Request("http://localhost/api/goals?hiveId=hive-a"));
+    const res = await GET(new Request("http://localhost/api/goals?hiveId=11111111-1111-4111-8111-111111111111"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -118,7 +123,7 @@ describe("GET /api/goals access control", () => {
       reason: "Paused by budget",
     });
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
-    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["hive-a"]);
+    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["11111111-1111-4111-8111-111111111111"]);
   });
 
   it("allows system-owner callers to request a hiveId without membership checks", async () => {
@@ -126,10 +131,10 @@ describe("GET /api/goals access control", () => {
       .mockResolvedValueOnce([{ total: "0" }])
       .mockResolvedValueOnce([]);
 
-    const res = await GET(new Request("http://localhost/api/goals?hiveId=hive-a"));
+    const res = await GET(new Request("http://localhost/api/goals?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(res.status).toBe(200);
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
-    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["hive-a"]);
+    expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["11111111-1111-4111-8111-111111111111"]);
   });
 });

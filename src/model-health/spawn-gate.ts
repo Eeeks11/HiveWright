@@ -3,6 +3,7 @@ import {
   DEFAULT_MODEL_HEALTH_MAX_AGE_MS,
   hasFreshHealthyModelHealth,
 } from "./freshness";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { createRuntimeCredentialFingerprint } from "./probe-runner";
 import { loadModelHealthByIdentity } from "./stored-health";
 
@@ -81,7 +82,10 @@ export async function checkModelSpawnHealth(
     : createRuntimeCredentialFingerprint({
         provider: model.provider,
         adapterType: model.adapter_type,
-        baseUrl: null,
+        baseUrl: getCanonicalOllamaHealthBaseUrl({
+          provider: model.provider,
+          adapterType: model.adapter_type,
+        }),
       });
 
   if (!fingerprint) {

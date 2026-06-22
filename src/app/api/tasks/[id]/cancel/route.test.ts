@@ -30,14 +30,14 @@ const params = { params: Promise.resolve({ id: "task-1" }) };
 function request(body: Record<string, unknown> = {}) {
   return new Request("http://localhost/api/tasks/task-1/cancel", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", ...body }),
   });
 }
 
 function taskRow(status = "active") {
   return {
     id: "task-1",
-    hive_id: "hive-a",
+    hive_id: "11111111-1111-4111-8111-111111111111",
     assigned_to: "dev-agent",
     created_by: "owner",
     status,
@@ -54,7 +54,7 @@ function taskRow(status = "active") {
 
 describe("POST /api/tasks/[id]/cancel", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
@@ -77,6 +77,7 @@ describe("POST /api/tasks/[id]/cancel", () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "viewer-1", email: "viewer@example.com", isSystemOwner: false },
     });
+    mocks.sql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.mockResolvedValueOnce([taskRow()]);
     mocks.canMutateHive.mockResolvedValueOnce(false);
 
@@ -84,12 +85,13 @@ describe("POST /api/tasks/[id]/cancel", () => {
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot mutate this hive");
-    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "viewer-1", "hive-a");
+    expect(body.error).toBe("Forbidden: caller cannot manage this hive");
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "viewer-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("cancels active tasks and emits a dashboard event", async () => {
     const updated = { ...taskRow("cancelled"), completed_at: new Date("2026-05-01T00:05:00.000Z") };
+    mocks.sql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.mockResolvedValueOnce([taskRow()]).mockResolvedValueOnce([updated]);
 
     const res = await POST(request({ reason: "owner revocation" }), params);
@@ -99,20 +101,21 @@ describe("POST /api/tasks/[id]/cancel", () => {
     expect(body.data.cancelled).toBe(true);
     expect(body.data.task).toMatchObject({
       id: "task-1",
-      hiveId: "hive-a",
+      hiveId: "11111111-1111-4111-8111-111111111111",
       status: "cancelled",
       goalId: "goal-1",
       assignedTo: "dev-agent",
     });
-    expect(String(mocks.sql.mock.calls[1][0])).toContain("status = 'cancelled'");
+    expect(String(mocks.sql.mock.calls[2][0])).toContain("status = 'cancelled'");
     expect(mocks.emitTaskEvent).toHaveBeenCalledWith(mocks.sql, expect.objectContaining({
       type: "task_cancelled",
       taskId: "task-1",
-      hiveId: "hive-a",
+      hiveId: "11111111-1111-4111-8111-111111111111",
     }));
   });
 
   it("rejects completed tasks with 409", async () => {
+    mocks.sql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mocks.sql.mockResolvedValueOnce([taskRow("completed")]);
 
     const res = await POST(request(), params);

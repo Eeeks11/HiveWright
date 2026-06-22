@@ -56,6 +56,7 @@ import {
   type DispatcherModelRouteHealthDecision,
 } from "./adapter-health";
 import { decideProviderFailoverRoute } from "./provider-failover";
+import { buildRuntimeHealthGateForensics } from "./route-health-forensics";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
@@ -112,6 +113,7 @@ import {
   markInterruptedRunningExecutionRuns,
   recordExecutionRunOutput,
   startExecutionRun,
+  summarizeRuntimeBlockFingerprint,
   type ExecutionRunRecord,
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
@@ -154,13 +156,29 @@ export async function applyStructuredDoctorDiagnosis(
   if (task.assignedTo !== "doctor" || !task.parentTaskId) return false;
 
   if (isQualityDoctorDiagnosisTask(task)) {
-    const { parseQualityDoctorDiagnosis, applyQualityDoctorDiagnosis } =
+    const {
+      parseQualityDoctorDiagnosisResult,
+      applyQualityDoctorDiagnosis,
+      recordQualityDoctorContaminationHandoff,
+    } =
       await import("../quality/doctor");
-    const diagnosis = parseQualityDoctorDiagnosis(output);
-    if (diagnosis) {
-      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, diagnosis);
+    const parseResult = parseQualityDoctorDiagnosisResult(output);
+    if (parseResult.ok) {
+      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, parseResult.diagnosis);
       return true;
     }
+
+    console.warn(
+      `[dispatcher] Quality doctor diagnosis parse failed for task ${task.id}: ${parseResult.reason}`,
+    );
+    await recordQualityDoctorContaminationHandoff(
+      sql,
+      task.parentTaskId,
+      task.id,
+      parseResult.reason,
+      output,
+    );
+    return true;
   }
 
   const { parseDoctorDiagnosis, applyDoctorDiagnosis, escalateMalformedDiagnosis } =
@@ -872,6 +890,7 @@ export class Dispatcher {
       }
 
       const route = decideProviderFailoverRoute({
+        roleSlug: task.assignedTo,
         primaryAdapterType,
         primaryModel: ctx.model,
         fallbackAdapterType: ctx.fallbackAdapterType,
@@ -898,6 +917,16 @@ export class Dispatcher {
 
       if (!route.canRun) {
         const reason = `runtime_blocked: Runtime health gate blocked task before spawn. ${route.diagnostic}`;
+        const routeHealthForensics = buildRuntimeHealthGateForensics({
+          roleSlug: task.assignedTo,
+          primaryAdapterType,
+          primaryModel: ctx.model,
+          fallbackAdapterType: ctx.fallbackAdapterType,
+          fallbackModel: ctx.fallbackModel,
+          primaryHealth,
+          fallbackHealth,
+          route,
+        });
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
         const run = await startExecutionRun(this.sql, {
           hiveId: task.hiveId,
@@ -905,20 +934,24 @@ export class Dispatcher {
           goalId: task.goalId,
           adapterType: route.adapterType,
           model: route.model,
+          sessionId: null,
           dispatcherPid: process.pid,
-          metadata: {
-            routeStage: "runtime_health_gate",
-            primaryAdapterType,
-            primaryHealthy: primaryHealth.healthy,
-            fallbackHealthy: fallbackHealth?.healthy ?? null,
-            routeReason: route.reason,
-          },
+          metadata: routeHealthForensics,
         });
-        await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
+        await markExecutionRunBlocked(this.sql, {
+          runId: run.id,
+          hiveId: run.hiveId,
+          reason,
+          evidence: routeHealthForensics,
+        });
+        const repeatedRuntimeBlockAlert = await this.buildRepeatedRuntimeBlockAlert(
+          task.hiveId,
+          routeHealthForensics.runtimeBlockFingerprint,
+        );
         await writeTaskLog(this.sql, {
           taskId: task.id,
           goalId: task.goalId ?? undefined,
-          chunk: reason,
+          chunk: repeatedRuntimeBlockAlert ? `${reason} ${repeatedRuntimeBlockAlert}` : reason,
           type: "status",
         }).catch(() => {});
         await blockTask(this.sql, task.id, reason);
@@ -2140,6 +2173,28 @@ export class Dispatcher {
         return new OpenAIImageAdapter();
       }
     }
+  }
+
+
+  private async buildRepeatedRuntimeBlockAlert(
+    hiveId: string,
+    runtimeBlockFingerprint: string | undefined,
+  ): Promise<string | null> {
+    if (!runtimeBlockFingerprint) return null;
+    try {
+      const summary = await summarizeRuntimeBlockFingerprint(this.sql, {
+        hiveId,
+        fingerprint: runtimeBlockFingerprint,
+      });
+      if (summary.repeated) {
+        return `[runtime-route-alert] Repeated identical runtime block fingerprint ${summary.fingerprint} occurred ${summary.count} times in the last 24 hours; operator attention recommended.`;
+      }
+    } catch (err) {
+      console.warn(
+        `[dispatcher] repeated runtime block fingerprint check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return null;
   }
 
   /**

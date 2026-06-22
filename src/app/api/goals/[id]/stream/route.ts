@@ -70,7 +70,7 @@ import postgres from "postgres";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { jsonError } from "../../../_lib/responses";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 const DATABASE_URL =
   process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
@@ -100,14 +100,12 @@ export async function GET(
   if ("response" in authz) return authz.response;
 
   const { id: goalId } = await params;
+  const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+  if (!target.ok) return target.response;
   const [goal] = await sql<{ hive_id: string }[]>`
-    SELECT hive_id FROM goals WHERE id = ${goalId}
+    SELECT hive_id FROM goals WHERE id = ${goalId} AND hive_id = ${target.hiveId}::uuid
   `;
   if (!goal) return jsonError("Goal not found", 404);
-  if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, goal.hive_id);
-    if (!hasAccess) return jsonError("Forbidden: caller cannot access this goal", 403);
-  }
 
   // Last-Event-ID header: last successfully received chunk id (0 = none yet).
   const lastEventIdHeader = request.headers.get("last-event-id");

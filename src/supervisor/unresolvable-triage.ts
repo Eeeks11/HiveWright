@@ -82,6 +82,7 @@ interface UnresolvableTaskRow {
   model_used: string | null;
   role_adapter_type: string | null;
   created_at: Date;
+  decision_id?: string;
 }
 
 const TRIAGE_DECISION_KIND = "unresolvable_task_triage";
@@ -107,17 +108,32 @@ export async function reconcileUnresolvableTasks(
     checkModelHealth?: UnresolvableTriageModelHealthChecker;
   } = {},
 ): Promise<UnresolvableTriageResult> {
-  const rows = await loadUntriagedRows(sql, hiveId, input.limit ?? 50);
+  const now = input.now ?? new Date();
   const result: UnresolvableTriageResult = {
-    scanned: rows.length,
+    scanned: 0,
     touched: 0,
     byOutcome: emptyCounts(),
   };
+
+  const staleTriagedRows = await loadResolvedStaleTriagedRows(sql, hiveId, input.limit ?? 50);
+  for (const task of staleTriagedRows) {
+    await markDuplicateHistorical(sql, task, buildRouteSelectionEvidence(task, {
+      outcome: "duplicate_historical",
+      now,
+      decisionId: task.decision_id ?? null,
+    }));
+    result.byOutcome.duplicate_historical += 1;
+    result.touched += 1;
+  }
+
+  const remainingLimit = Math.max((input.limit ?? 50) - staleTriagedRows.length, 0);
+  const rows = remainingLimit > 0 ? await loadUntriagedRows(sql, hiveId, remainingLimit) : [];
+  result.scanned = staleTriagedRows.length + rows.length;
   const checkHealth = input.checkModelHealth ?? checkModelSpawnHealth;
 
   for (const task of rows) {
     const outcome = await classifyAndApply(sql, task, {
-      now: input.now ?? new Date(),
+      now,
       checkHealth,
     });
     if (!outcome) continue;
@@ -171,6 +187,51 @@ async function loadUntriagedRows(
   `;
 }
 
+async function loadResolvedStaleTriagedRows(
+  sql: Sql,
+  hiveId: string,
+  limit: number,
+): Promise<UnresolvableTaskRow[]> {
+  return sql<UnresolvableTaskRow[]>`
+    SELECT
+      t.id,
+      t.hive_id,
+      t.goal_id,
+      t.parent_task_id,
+      t.assigned_to,
+      t.title,
+      t.status,
+      t.failure_reason,
+      t.adapter_override,
+      t.model_override,
+      t.model_used,
+      rt.adapter_type AS role_adapter_type,
+      t.created_at,
+      d.id AS decision_id
+    FROM tasks t
+    JOIN LATERAL (
+      SELECT id
+      FROM decisions d
+      WHERE d.task_id = t.id
+        AND d.status = 'resolved'
+        AND d.kind = ${TRIAGE_DECISION_KIND}
+        AND (
+          d.owner_response ILIKE '%duplicate/stale%'
+          OR d.owner_response ILIKE '%stale%residue%'
+          OR d.owner_response ILIKE '%stale%failure-loop%'
+          OR d.selected_option_key IN ('duplicate', 'stale', 'superseded')
+        )
+      ORDER BY d.resolved_at DESC NULLS LAST, d.created_at DESC
+      LIMIT 1
+    ) d ON true
+    LEFT JOIN role_templates rt ON rt.slug = t.assigned_to
+    WHERE t.hive_id = ${hiveId}::uuid
+      AND t.status = 'unresolvable'
+    ORDER BY t.updated_at ASC, t.created_at ASC
+    LIMIT ${limit}
+  `;
+}
+
 async function classifyAndApply(
   sql: Sql,
   task: UnresolvableTaskRow,
@@ -187,6 +248,37 @@ async function classifyAndApply(
       fixTaskId: recoveredBy.fixTaskId,
     }));
     return "fixed_by_later_work";
+  }
+
+  if (isSupervisorHeartbeatResidue(task)) {
+    const laterHeartbeat = await hasLaterSupervisorHeartbeat(sql, task);
+    if (laterHeartbeat) {
+      await markDuplicateHistorical(sql, task, buildRouteSelectionEvidence(task, {
+        outcome: "duplicate_historical",
+        now: input.now,
+        supersedingTaskId: laterHeartbeat.id,
+      }));
+      return "duplicate_historical";
+    }
+
+    await createEaReviewDecision(sql, task, {
+      title: `EA review needed for hive-supervisor heartbeat: ${task.title}`,
+      context: [
+        "Hive Supervisor triaged an unresolvable heartbeat/runtime residue row.",
+        "",
+        `Task: ${task.title}`,
+        `Failure reason: ${task.failure_reason ?? "Unknown"}`,
+        "",
+        "Heartbeat watchdog rows are terminal system artifacts and must not spawn doctor recovery work.",
+        "Investigate the runtime/session path and confirm whether this row is stale residue or a current dispatcher-model issue.",
+      ].join("\n"),
+      recommendation:
+        "EA should classify this heartbeat/runtime residue and consolidate or retire it before any further recovery work is considered.",
+      priority: "high",
+      outcome: "needs_ea_review",
+      now: input.now,
+    });
+    return "needs_ea_review";
   }
 
   const replacement = await hasLaterReplacement(sql, task);
@@ -319,6 +411,36 @@ async function hasLaterReplacement(
       AND created_at > ${task.created_at}
       AND created_by IN ${sql(RECOVERY_CREATORS)}
       AND status IN ('pending', 'active', 'claimed', 'running', 'in_review', 'blocked', 'completed')
+    LIMIT 1
+  `;
+  return row ?? null;
+}
+
+function isSupervisorHeartbeatResidue(task: UnresolvableTaskRow): boolean {
+  return (
+    task.parent_task_id === null &&
+    task.assigned_to === "hive-supervisor" &&
+    /^Hive supervisor heartbeat\b/i.test(task.title)
+  );
+}
+
+async function hasLaterSupervisorHeartbeat(
+  sql: Sql,
+  task: UnresolvableTaskRow,
+): Promise<{ id: string } | null> {
+  if (!isSupervisorHeartbeatResidue(task)) return null;
+
+  const [row] = await sql<{ id: string }[]>`
+    SELECT id
+    FROM tasks
+    WHERE hive_id = ${task.hive_id}
+      AND id != ${task.id}
+      AND parent_task_id IS NULL
+      AND assigned_to = 'hive-supervisor'
+      AND title ILIKE 'Hive supervisor heartbeat%'
+      AND created_at > ${task.created_at}
+      AND status IN ('pending', 'active', 'claimed', 'running', 'in_review', 'blocked', 'completed', 'cancelled', 'superseded', 'unresolvable', 'failed')
+    ORDER BY created_at ASC
     LIMIT 1
   `;
   return row ?? null;

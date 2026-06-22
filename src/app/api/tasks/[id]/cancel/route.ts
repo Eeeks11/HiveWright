@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonError, jsonOk } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { emitTaskEvent } from "@/dispatcher/event-emitter";
 
 type TaskRow = {
@@ -47,8 +47,15 @@ export async function POST(
 
   try {
     const { id } = await ctx.params;
-    const body = (await request.json().catch(() => ({}))) as { reason?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { hiveId?: unknown; reason?: unknown };
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [task] = await sql<TaskRow[]>`
       SELECT
@@ -66,15 +73,10 @@ export async function POST(
         created_at,
         updated_at
       FROM tasks
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       LIMIT 1
     `;
     if (!task) return jsonError("Task not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const canMutate = await canMutateHive(sql, authz.user.id, task.hive_id);
-      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
-    }
 
     if (!["pending", "active"].includes(task.status)) {
       return jsonError(`Task status ${task.status} cannot be cancelled`, 409);
@@ -88,7 +90,7 @@ export async function POST(
         completed_at = NOW(),
         updated_at = NOW(),
         failure_reason = ${failureReason}
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       RETURNING
         id,
         hive_id,

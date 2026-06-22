@@ -136,14 +136,11 @@ const ANTHROPIC_MODELS = [
 const CODEX_MODELS = [
   "openai-codex/gpt-5.5",
   "openai-codex/gpt-5.4",
-  "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.4-mini",
 ];
 const GEMINI_MODELS = [
+  "google/gemini-2.5-pro",
   "google/gemini-2.5-flash",
-  "google/gemini-3.1-pro-preview",
-  "google/gemini-3.1-pro-preview-customtools",
-  "google/gemini-3.1-flash-lite-preview",
-  "google/gemini-3-flash-preview",
 ];
 const GENERAL_MODELS = [
   ...ANTHROPIC_MODELS,
@@ -464,7 +461,7 @@ export default function NewHiveWizard() {
   const useLocalEmbeddingSetup = () => runEmbeddingSetupAction("use");
 
   useEffect(() => {
-    fetch("/api/roles")
+    fetch("/api/roles/global")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();

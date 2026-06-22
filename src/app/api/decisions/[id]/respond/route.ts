@@ -5,10 +5,10 @@ import { TASK_QUALITY_FEEDBACK_DECISION_KIND } from "@/quality/owner-feedback-sa
 import { maybeCreateQualityDoctorForSignal } from "@/quality/doctor";
 import { mirrorOwnerDecisionCommentToGoalComment } from "@/decisions/owner-comment-wake";
 import { decisionEventForResponse, recordDecisionAuditEvent } from "../../_audit";
-import { canAccessHive, canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
 import { applyApprovedLearningGateFollowup, LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "@/goals/learning-gate-approval";
-import { executeApprovedExternalAction, rejectExternalAction, type ExecuteExternalActionResult } from "@/actions/external-actions";
+import { executeApprovedExternalAction, rejectExternalAction, type ExecuteExternalActionInput, type ExecuteExternalActionResult } from "@/actions/external-actions";
 
 const DIRECT_TASK_QA_CAP_ACTIONS = [
   "retry_with_different_role",
@@ -178,6 +178,111 @@ async function validateExternalActionDecisionLink(
     return jsonError("External action approval decision references an external action request that was not found for this hive", 400);
   }
   return requestId;
+}
+
+function isSalesManualQueueAction(routeMetadata: unknown): boolean {
+  if (!isRecord(routeMetadata)) return false;
+  return stringField(routeMetadata, ["domain"]) === "sales-conversion" &&
+    stringField(routeMetadata, ["operation"]) === "execute_sales_conversion_action";
+}
+
+type SalesQueuedDraftRow = {
+  id: string;
+  hive_id: string;
+  action_plan_id: string;
+  workflow: string;
+  request_payload?: Record<string, unknown> | null;
+};
+
+async function approveSalesManualQueueAction(
+  db: typeof sql,
+  input: ExecuteExternalActionInput,
+): Promise<ExecuteExternalActionResult> {
+  return db.begin(async (tx) => {
+    const [draft] = await tx<SalesQueuedDraftRow[]>`
+      SELECT sad.id, sad.hive_id, sad.action_plan_id, sad.workflow, ear.request_payload
+      FROM sales_action_drafts sad
+      JOIN external_action_requests ear ON ear.id = sad.external_action_request_id AND ear.hive_id = sad.hive_id
+      WHERE sad.external_action_request_id = ${input.requestId}::uuid
+        AND (${input.hiveId ?? null}::uuid IS NULL OR sad.hive_id = ${input.hiveId ?? null}::uuid)
+        AND (${input.decisionId ?? null}::uuid IS NULL OR ear.decision_id = ${input.decisionId ?? null}::uuid)
+      FOR UPDATE OF sad, ear
+      LIMIT 1
+    `;
+    if (!draft) throw new Error(`sales action draft for external action request ${input.requestId} not found`);
+
+    const resultPayload = {
+      queued: true,
+      mode: "manual_queue",
+      domain: "sales-conversion",
+      actionDraftId: draft.id,
+      actionPlanId: draft.action_plan_id,
+      workflow: draft.workflow,
+    };
+
+    const [updatedRequest] = await tx<{ id: string; state: ExecuteExternalActionResult["status"]; response_payload: unknown; error_message?: string | null }[]>`
+      UPDATE external_action_requests
+      SET state = 'succeeded',
+          reviewed_at = COALESCE(reviewed_at, NOW()),
+          reviewed_by = ${typeof input.actor === "string" ? input.actor : input.actor?.id ?? input.actor?.roleSlug ?? "owner"},
+          executed_at = COALESCE(executed_at, NOW()),
+          response_payload = ${JSON.stringify(resultPayload)}::jsonb,
+          error_message = NULL,
+          updated_at = NOW()
+      WHERE id = ${input.requestId}::uuid
+        AND hive_id = ${draft.hive_id}::uuid
+        AND state IN ('awaiting_approval', 'approved', 'executing', 'succeeded')
+      RETURNING id, state, response_payload, error_message
+    `;
+    if (!updatedRequest) throw new Error(`sales manual queue request ${input.requestId} could not be queued`);
+
+    await tx`
+      UPDATE sales_action_drafts
+      SET approval_status = 'approved', execution_status = 'queued', updated_at = NOW()
+      WHERE id = ${draft.id}::uuid
+        AND hive_id = ${draft.hive_id}::uuid
+      RETURNING id, approval_status, execution_status
+    `;
+
+    await tx`
+      INSERT INTO sales_execution_logs (hive_id, action_plan_id, action_draft_id, external_action_request_id, workflow, connector, trace)
+      VALUES (
+        ${draft.hive_id}, ${draft.action_plan_id}, ${draft.id}, ${input.requestId}, ${draft.workflow}, 'manual_queue',
+        ${JSON.stringify([{ event: "queued_after_owner_approval", mode: "manual_queue", requestPayload: draft.request_payload ?? {} }])}::jsonb
+      )
+      ON CONFLICT (external_action_request_id) WHERE external_action_request_id IS NOT NULL DO NOTHING
+      RETURNING id
+    `;
+
+    return {
+      requestId: updatedRequest.id,
+      status: updatedRequest.state,
+      result: updatedRequest.response_payload ?? resultPayload,
+      error: updatedRequest.error_message ?? undefined,
+    };
+  });
+}
+
+async function rejectSalesManualQueueAction(
+  db: typeof sql,
+  input: ExecuteExternalActionInput,
+): Promise<void> {
+  await db.begin(async (tx) => {
+    await tx`
+      UPDATE external_action_requests
+      SET state = 'rejected', reviewed_at = NOW(), reviewed_by = ${typeof input.actor === "string" ? input.actor : input.actor?.id ?? input.actor?.roleSlug ?? "owner"}, updated_at = NOW()
+      WHERE id = ${input.requestId}::uuid
+        AND (${input.hiveId ?? null}::uuid IS NULL OR hive_id = ${input.hiveId ?? null}::uuid)
+        AND (${input.decisionId ?? null}::uuid IS NULL OR decision_id = ${input.decisionId ?? null}::uuid)
+        AND state IN ('awaiting_approval', 'approved', 'proposed')
+    `;
+    await tx`
+      UPDATE sales_action_drafts
+      SET approval_status = 'rejected', execution_status = 'blocked', updated_at = NOW()
+      WHERE external_action_request_id = ${input.requestId}::uuid
+        AND (${input.hiveId ?? null}::uuid IS NULL OR hive_id = ${input.hiveId ?? null}::uuid)
+    `;
+  });
 }
 
 function extractReleaseScanModelPayload(
@@ -549,6 +654,13 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
     const { response: rawResponse, comment, rating, selectedOptionKey, selectedOptionLabel } = body as {
       response?: string;
       comment?: string;
@@ -576,23 +688,10 @@ export async function POST(
         is_qa_fixture: boolean;
       }[]
     >`
-      SELECT hive_id, kind, options, route_metadata, status, owner_response, is_qa_fixture FROM decisions WHERE id = ${id}
+      SELECT hive_id, kind, options, route_metadata, status, owner_response, is_qa_fixture FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decisionForAuth) {
       return jsonError("Decision not found", 404);
-    }
-    if (!user.isSystemOwner) {
-      const authorized = decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
-        ? await canMutateHive(sql, user.id, decisionForAuth.hive_id)
-        : await canAccessHive(sql, user.id, decisionForAuth.hive_id);
-      if (!authorized) {
-        return jsonError(
-          decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
-            ? "Forbidden: caller cannot approve external actions for this hive"
-            : "Forbidden: caller cannot access this hive",
-          403,
-        );
-      }
     }
 
     let selectedOption: NamedDecisionOption | null = null;
@@ -698,7 +797,7 @@ export async function POST(
                selected_option_key, selected_option_label, created_at, resolved_at,
                task_id, is_qa_fixture
         FROM decisions
-        WHERE id = ${id}
+        WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       `;
       const existingDecision = existingRows[0] as DecisionRowForModelProposal | undefined;
       const recordedApproval =
@@ -714,18 +813,32 @@ export async function POST(
         (response === "rejected" && recordedRejection);
       if (existingDecision && externalActionRequestId && sameRecordedResponse) {
         const externalActionResult = response === "approved"
-          ? await executeApprovedExternalAction(sql, {
-              requestId: externalActionRequestId,
-              decisionId: id,
-              hiveId: decisionForAuth.hive_id,
-              actor: user.id,
-            })
-          : (await rejectExternalAction(sql, {
-              requestId: externalActionRequestId,
-              decisionId: id,
-              hiveId: decisionForAuth.hive_id,
-              actor: user.id,
-            }), { requestId: externalActionRequestId, status: "rejected" as const });
+          ? isSalesManualQueueAction(existingDecision.route_metadata)
+            ? await approveSalesManualQueueAction(sql, {
+                requestId: externalActionRequestId,
+                decisionId: id,
+                hiveId: decisionForAuth.hive_id,
+                actor: user.id,
+              })
+            : await executeApprovedExternalAction(sql, {
+                requestId: externalActionRequestId,
+                decisionId: id,
+                hiveId: decisionForAuth.hive_id,
+                actor: user.id,
+              })
+          : (isSalesManualQueueAction(existingDecision.route_metadata)
+              ? await rejectSalesManualQueueAction(sql, {
+                  requestId: externalActionRequestId,
+                  decisionId: id,
+                  hiveId: decisionForAuth.hive_id,
+                  actor: user.id,
+                })
+              : await rejectExternalAction(sql, {
+                  requestId: externalActionRequestId,
+                  decisionId: id,
+                  hiveId: decisionForAuth.hive_id,
+                  actor: user.id,
+                }), { requestId: externalActionRequestId, status: "rejected" as const });
         return jsonOk({
           id: existingDecision.id,
           hiveId: existingDecision.hive_id,
@@ -797,7 +910,7 @@ export async function POST(
         SET owner_response = ${ownerResponse},
             selected_option_key = ${selectedOption?.key ?? null},
             selected_option_label = ${optionLabel}
-        WHERE id = ${id}
+        WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
         RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
                   priority, status, kind, owner_response,
                   selected_option_key, selected_option_label, created_at, resolved_at,
@@ -815,6 +928,7 @@ export async function POST(
             resolved_at = NOW(),
             resolved_by = ${user.id}
           WHERE id = ${id}
+            AND hive_id = ${target.hiveId}::uuid
             AND status <> 'resolved'
           RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
                     priority, status, kind, owner_response,
@@ -846,6 +960,7 @@ export async function POST(
           resolved_at = NOW(),
           resolved_by = ${user.id}
         WHERE id = ${id}
+          AND hive_id = ${target.hiveId}::uuid
           AND status <> 'resolved'
         RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
                   priority, status, kind, owner_response,
@@ -856,7 +971,7 @@ export async function POST(
 
     if (rows.length === 0) {
       const [current] = await sql<{ status: string }[]>`
-        SELECT status FROM decisions WHERE id = ${id}
+        SELECT status FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       `;
       if (current?.status === "resolved") {
         return jsonError(
@@ -914,19 +1029,35 @@ export async function POST(
     let externalActionResult: ExecuteExternalActionResult | { requestId: string; status: "rejected" } | null = null;
 
     if (externalActionRequestId && response === "approved") {
-      externalActionResult = await executeApprovedExternalAction(sql, {
-        requestId: externalActionRequestId,
-        decisionId: id,
-        hiveId: decisionForAuth.hive_id,
-        actor: user.id,
-      });
+      externalActionResult = isSalesManualQueueAction(decisionForAuth.route_metadata)
+        ? await approveSalesManualQueueAction(sql, {
+            requestId: externalActionRequestId,
+            decisionId: id,
+            hiveId: decisionForAuth.hive_id,
+            actor: user.id,
+          })
+        : await executeApprovedExternalAction(sql, {
+            requestId: externalActionRequestId,
+            decisionId: id,
+            hiveId: decisionForAuth.hive_id,
+            actor: user.id,
+          });
     } else if (externalActionRequestId && response === "rejected") {
-      await rejectExternalAction(sql, {
-        requestId: externalActionRequestId,
-        decisionId: id,
-        hiveId: decisionForAuth.hive_id,
-        actor: user.id,
-      });
+      if (isSalesManualQueueAction(decisionForAuth.route_metadata)) {
+        await rejectSalesManualQueueAction(sql, {
+          requestId: externalActionRequestId,
+          decisionId: id,
+          hiveId: decisionForAuth.hive_id,
+          actor: user.id,
+        });
+      } else {
+        await rejectExternalAction(sql, {
+          requestId: externalActionRequestId,
+          decisionId: id,
+          hiveId: decisionForAuth.hive_id,
+          actor: user.id,
+        });
+      }
       externalActionResult = { requestId: externalActionRequestId, status: "rejected" };
     }
 

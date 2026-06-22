@@ -2,6 +2,7 @@ import type { Sql, TransactionSql } from "postgres";
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { MODEL_ROUTING_ADAPTER_CONFIG_TYPE } from "@/model-routing/policy";
 import { routeKeyForModel } from "@/model-routing/registry";
+import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type {
   DiscoveredModel,
   ModelDiscoveryImportInput,
@@ -80,7 +81,10 @@ async function runModelDiscoveryImportInTransaction(
 ): Promise<ModelDiscoveryImportResult> {
   const provider = input.provider.trim().toLowerCase();
   const adapterType = input.adapterType.trim();
-  const models = input.models.map((model) => normalizeModel(model));
+  const rawModels = input.models.map((model) => normalizeModel(model));
+  const models = rawModels.filter(
+    (model) => !isUnsupportedModelDiscoveryCandidate(adapterType, model.modelId),
+  );
   const modelIds = models.map((model) => model.modelId);
   const [run] = await sql<DiscoveryRunRow[]>`
     INSERT INTO model_discovery_runs (
@@ -97,7 +101,7 @@ async function runModelDiscoveryImportInTransaction(
       ${provider},
       ${input.credentialId ?? null},
       ${input.source},
-      ${models.length}
+      ${rawModels.length}
     )
     RETURNING id
   `;
@@ -154,7 +158,7 @@ async function runModelDiscoveryImportInTransaction(
   return {
     runId: run.id,
     catalogIds,
-    modelsSeen: models.length,
+    modelsSeen: rawModels.length,
     modelsImported: models.length,
     modelsAutoEnabled,
     modelsMarkedStale,

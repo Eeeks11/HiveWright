@@ -196,7 +196,7 @@ export default function SettingsPage() {
   const loadModelEfficiencySettings = useCallback(async () => {
     try {
       const res = await fetch(
-        `/api/adapter-config?adapterType=${MODEL_EFFICIENCY_ADAPTER_TYPE}`,
+        `/api/adapter-config/global?adapterType=${MODEL_EFFICIENCY_ADAPTER_TYPE}`,
       );
       const body = await res.json();
       const row = (body.data || []).find(
@@ -220,7 +220,7 @@ export default function SettingsPage() {
   const loadEaReplaySettings = useCallback(async () => {
     try {
       const res = await fetch(
-        `/api/adapter-config?adapterType=${EA_REPLAY_ADAPTER_TYPE}`,
+        `/api/adapter-config/global?adapterType=${EA_REPLAY_ADAPTER_TYPE}`,
       );
       const body = await res.json();
       const row = (body.data || []).find(

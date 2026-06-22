@@ -73,7 +73,7 @@ describe("/api/capture-sessions metadata-only API", () => {
     expect(listed.data[0].id).toBe(sessionId);
 
     const readRes = await READ_CAPTURE_SESSION(
-      new Request(`http://t/api/capture-sessions/${sessionId}`),
+      new Request(`http://t/api/capture-sessions/${sessionId}?hiveId=${hiveId}`),
       params(sessionId),
     );
     expect(readRes.status).toBe(200);
@@ -84,6 +84,7 @@ describe("/api/capture-sessions metadata-only API", () => {
 
     const recordingRes = await UPDATE_CAPTURE_SESSION(
       jsonRequest(`http://t/api/capture-sessions/${sessionId}`, "PATCH", {
+        hiveId,
         status: "recording",
       }),
       params(sessionId),
@@ -95,6 +96,7 @@ describe("/api/capture-sessions metadata-only API", () => {
 
     const stoppedRes = await UPDATE_CAPTURE_SESSION(
       jsonRequest(`http://t/api/capture-sessions/${sessionId}`, "PATCH", {
+        hiveId,
         status: "stopped",
         metadata: { source: "api-smoke", durationSeconds: 42 },
       }),
@@ -111,6 +113,7 @@ describe("/api/capture-sessions metadata-only API", () => {
 
     const readyRes = await UPDATE_CAPTURE_SESSION(
       jsonRequest(`http://t/api/capture-sessions/${sessionId}`, "PATCH", {
+        hiveId,
         status: "review_ready",
         evidenceSummary: {
           redactedSteps: ["Open dashboard", "Filter tasks", "Review result"],
@@ -125,7 +128,7 @@ describe("/api/capture-sessions metadata-only API", () => {
     expect(ready.data.workProductRefs).toEqual(["work-product-placeholder"]);
 
     const deleteRes = await DELETE_CAPTURE_SESSION(
-      new Request(`http://t/api/capture-sessions/${sessionId}`, { method: "DELETE" }),
+      new Request(`http://t/api/capture-sessions/${sessionId}?hiveId=${hiveId}`, { method: "DELETE" }),
       params(sessionId),
     );
     expect(deleteRes.status).toBe(200);
@@ -154,6 +157,7 @@ describe("/api/capture-sessions metadata-only API", () => {
 
     const invalidTransition = await UPDATE_CAPTURE_SESSION(
       jsonRequest(`http://t/api/capture-sessions/${created.data.id}`, "PATCH", {
+        hiveId,
         status: "review_ready",
       }),
       params(created.data.id),
@@ -234,7 +238,7 @@ describe("/api/capture-sessions metadata-only API", () => {
     const sessionId = created.data.id as string;
 
     const draftRes = await CREATE_CAPTURE_DRAFT(
-      jsonRequest(`http://t/api/capture-sessions/${sessionId}/draft`, "POST", {
+      jsonRequest(`http://t/api/capture-sessions/${sessionId}/draft?hiveId=${hiveId}`, "POST", {
         reviewNotes: "Reviewed with a secret-like value sk-live-secret that must not be logged.",
       }),
       params(sessionId),
