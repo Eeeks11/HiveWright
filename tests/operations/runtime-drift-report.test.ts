@@ -34,6 +34,7 @@ function routingView(input: {
   const declared = input.declared ?? 1;
   const runtime = input.runtime ?? declared;
   const models = Array.from({ length: runtime }, (_, index) => {
+    // Blocked fixtures stay active so they exercise unhealthy/stale debt; disabled/excluded routes have dedicated coverage below.
     const status: "healthy" | "unhealthy" = input.blocked && index === 0 ? "unhealthy" : "healthy";
     const probeFreshness: "fresh" | "due" = input.stale && index === 0 ? "due" : "fresh";
     return ({
@@ -48,8 +49,8 @@ function routingView(input: {
     healthFingerprint: "fp",
     capabilities: [],
     fallbackPriority: index,
-    hiveModelEnabled: !(input.blocked && index === 0),
-    routingEnabled: !(input.blocked && index === 0),
+    hiveModelEnabled: true,
+    routingEnabled: true,
     roleSlugs: [],
     status,
     qualityScore: null,
@@ -216,7 +217,7 @@ describe("runtime drift report builder", () => {
       staleRecovery: {
         staleRoutes: 1,
         automaticProbeRoutes: 2,
-        recoveryEligibleRoutes: 0,
+        recoveryEligibleRoutes: 1,
       },
     });
     expect(drift.driftReasons.join("\n")).toContain("declared candidates");
@@ -237,7 +238,7 @@ describe("runtime drift report builder", () => {
       staleRecovery: {
         staleRoutes: 1,
         automaticProbeRoutes: 85,
-        recoveryEligibleRoutes: 0,
+        recoveryEligibleRoutes: 1,
       },
     });
     expect(drift.inventoryJustification).toContain("configured hive model inventory");
