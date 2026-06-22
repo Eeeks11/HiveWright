@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   sql: vi.fn(),
   requireApiAuth: vi.fn(),
   requireApiUser: vi.fn(),
+  getInternalTaskScope: vi.fn(),
   canAccessHive: vi.fn(),
   loadModelRoutingView: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("../_lib/auth", async () => {
     ...actual,
     requireApiAuth: mocks.requireApiAuth,
     requireApiUser: mocks.requireApiUser,
+    getInternalTaskScope: mocks.getInternalTaskScope,
   };
 });
 
@@ -49,6 +51,7 @@ describe("GET /api/setup-readiness hive scope", () => {
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "owner@example.com", isSystemOwner: false },
     });
+    mocks.getInternalTaskScope.mockResolvedValue({ ok: true, scope: null });
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.loadModelRoutingView.mockResolvedValue({
       models: [
@@ -94,6 +97,23 @@ describe("GET /api/setup-readiness hive scope", () => {
     expect(body.data.runtimes).not.toHaveProperty("claude-code");
     expect(body.data.runtimes).not.toHaveProperty("gemini");
     expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+  });
+
+  it("rejects hive-scoped reads that exceed the internal task hive scope", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "internal-service-account", email: "service@hivewright.local", isSystemOwner: true },
+    });
+    mocks.getInternalTaskScope.mockResolvedValueOnce({
+      ok: true,
+      scope: { taskId: "task-1", hiveId: "hive-1", assignedTo: "performance-analyst", parentTaskId: null },
+    });
+
+    const res = await GET(new Request("http://localhost/api/setup-readiness?hiveId=other-hive"));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toBe("Forbidden: task scope cannot access this hive");
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
   });
 });
 
