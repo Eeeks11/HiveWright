@@ -39,7 +39,7 @@ describe("GET /api/setup-readiness", () => {
       return new Response("not found", { status: 404 });
     };
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/setup-readiness"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -61,7 +61,7 @@ describe("GET /api/setup-readiness", () => {
       return jsonResponse({ models: [] });
     };
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/setup-readiness"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -74,7 +74,7 @@ describe("GET /api/setup-readiness", () => {
       throw new Error("ECONNREFUSED INTERNAL_SERVICE_TOKEN=secret");
     };
 
-    const res = await GET();
+    const res = await GET(new Request("http://localhost/api/setup-readiness"));
     const body = await res.json();
 
     expect(res.status).toBe(200);

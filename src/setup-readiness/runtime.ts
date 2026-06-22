@@ -12,6 +12,9 @@ const OLLAMA_TIMEOUT_MS = 5_000;
 export type SetupReadinessWarningPolicy = "active_provider" | "optional_runtime";
 
 export type RuntimeStatus = "ready" | "check_required" | "missing";
+export type SetupRuntimeSource = "codex" | "claude-code" | "gemini" | "ollama";
+
+const SETUP_RUNTIME_SOURCES: readonly SetupRuntimeSource[] = ["codex", "claude-code", "gemini", "ollama"];
 
 export interface RuntimeReadiness {
   label: string;
@@ -42,23 +45,36 @@ type ActiveRuntimeSourceRow = {
 
 type LoadRoutingView = (sql: Sql, hiveId: string) => Promise<ModelRoutingView>;
 
-export async function collectSetupRuntimeReadiness(): Promise<SetupRuntimeReadinessSnapshot> {
-  const [codex, claudeCode, gemini, ollama] = await Promise.all([
-    checkCliRuntime("codex", "Codex", ["--version"], "Open a terminal on this server and run `codex login`, then refresh this check.", ["login", "status"]),
-    checkCliRuntime("claude", "Claude Code", ["--version"], "Open a terminal on this server and run `claude login`, then refresh this check."),
-    checkCliRuntime("gemini", "Gemini CLI", ["--version"], "Open a terminal on this server and sign in to Gemini CLI, then refresh this check."),
-    checkOllamaRuntime(),
-  ]);
+export async function collectSetupRuntimeReadiness(
+  options: { runtimeSources?: Iterable<string> } = {},
+): Promise<SetupRuntimeReadinessSnapshot> {
+  const requestedSources = options.runtimeSources
+    ? new Set(Array.from(options.runtimeSources, normalizeRuntimeSource))
+    : null;
+  const sources = requestedSources
+    ? SETUP_RUNTIME_SOURCES.filter((source) => requestedSources.has(source))
+    : SETUP_RUNTIME_SOURCES;
+  const runtimes = Object.fromEntries(
+    await Promise.all(sources.map(async (source) => [source, await checkRuntimeSource(source)] as const)),
+  );
 
   return {
     checkedAt: new Date().toISOString(),
-    runtimes: {
-      codex,
-      "claude-code": claudeCode,
-      gemini,
-      ollama,
-    },
+    runtimes,
   };
+}
+
+async function checkRuntimeSource(source: SetupRuntimeSource): Promise<RuntimeReadiness> {
+  switch (source) {
+    case "codex":
+      return checkCliRuntime("codex", "Codex", ["--version"], "Open a terminal on this server and run `codex login`, then refresh this check.", ["login", "status"]);
+    case "claude-code":
+      return checkCliRuntime("claude", "Claude Code", ["--version"], "Open a terminal on this server and run `claude login`, then refresh this check.");
+    case "gemini":
+      return checkCliRuntime("gemini", "Gemini CLI", ["--version"], "Open a terminal on this server and sign in to Gemini CLI, then refresh this check.");
+    case "ollama":
+      return checkOllamaRuntime();
+  }
 }
 
 export function listSetupRuntimeReadinessWarnings(
