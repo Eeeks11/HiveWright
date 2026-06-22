@@ -43,6 +43,11 @@ export interface AnalystModelRoutingSummary {
   };
   providerCounts: Record<string, number>;
   adapterCounts: Record<string, number>;
+  activeRoutePool: {
+    routes: number;
+    providerCounts: Record<string, number>;
+    adapterCounts: Record<string, number>;
+  };
 }
 
 export interface AnalystRuntimeDriftSummary {
@@ -96,6 +101,9 @@ export function buildAnalystModelRoutingSummary(
 ): AnalystModelRoutingSummary {
   const providerCounts: Record<string, number> = {};
   const adapterCounts: Record<string, number> = {};
+  const activeProviderCounts: Record<string, number> = {};
+  const activeAdapterCounts: Record<string, number> = {};
+  let activeRoutePoolRoutes = 0;
   let routableRoutes = 0;
   let disabledRoutes = 0;
   let blockedRoutes = 0;
@@ -129,7 +137,13 @@ export function buildAnalystModelRoutingSummary(
     const enabled = model.hiveModelEnabled && model.routingEnabled;
     const healthEligible = hasFreshHealthyRouteEvidence(model);
     const candidate = policyCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
+    const activeRoutePool = enabled && isActiveRoutePoolCandidate(candidate);
     const excluded = candidate?.canonicalRouteSet?.membership === "excluded";
+    if (activeRoutePool) {
+      activeRoutePoolRoutes += 1;
+      increment(activeProviderCounts, sanitizeBucket(model.provider));
+      increment(activeAdapterCounts, sanitizeBucket(model.adapterType));
+    }
     if (excluded) {
       excludedRoutes += 1;
       if (model.status === "unknown") excludedUnknownHealthRoutes += 1;
@@ -198,6 +212,11 @@ export function buildAnalystModelRoutingSummary(
     },
     providerCounts,
     adapterCounts,
+    activeRoutePool: {
+      routes: activeRoutePoolRoutes,
+      providerCounts: activeProviderCounts,
+      adapterCounts: activeAdapterCounts,
+    },
   };
 }
 
@@ -261,4 +280,14 @@ function isQuarantinedRoute(model: { failureClass: string | null }): boolean {
 
 async function defaultLoadHeartbeat(sql: Sql, input: { now: Date }): Promise<DispatcherHeartbeatRecord> {
   return loadDispatcherHeartbeatStatus(sql, { now: input.now });
+}
+
+
+function isActiveRoutePoolCandidate(
+  candidate: ModelRoutingView["policy"]["candidates"][number] | undefined,
+): boolean {
+  if (!candidate) return false;
+  if (candidate.enabled === false) return false;
+  const membership = candidate.canonicalRouteSet?.membership;
+  return membership !== "excluded" && membership !== "intentionally_disabled";
 }

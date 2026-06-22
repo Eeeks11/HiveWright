@@ -118,17 +118,28 @@ describe("setup runtime readiness warning policy", () => {
     await expect(listActiveSetupRuntimeSources(sql)).resolves.toEqual(["codex", "ollama"]);
   });
 
-  it("keeps undeclared Claude and Gemini debt optional for hive-scoped OpenAI/local route inventory", async () => {
+  it("keeps undeclared Claude and Gemini debt optional for hive-scoped OpenAI/local eligible route inventory", async () => {
     const { listActiveSetupRuntimeSources, listSetupRuntimeReadinessWarnings } = await import("../../src/setup-readiness/runtime");
     const hiveId = "11111111-1111-4111-8111-111111111111";
-    const calls: Array<{ text: string; values: unknown[] }> = [];
-    const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      calls.push({ text: strings.join("?"), values });
-      return [
-        { provider: "openai", adapter_type: "http" },
-        { provider: "local", adapter_type: "local" },
-      ];
-    }) as never;
+    const loadRoutingView = async (_sql: unknown, requestedHiveId: string) => {
+      expect(requestedHiveId).toBe(hiveId);
+      return {
+        models: [
+          activeRoute("openai", "http", "gpt-5.5"),
+          activeRoute("local", "ollama", "qwen3:32b"),
+          excludedRoute("anthropic", "claude-code", "claude-opus"),
+          excludedRoute("google", "gemini", "gemini-pro"),
+        ],
+        policy: {
+          candidates: [
+            activeCandidate("http", "gpt-5.5"),
+            activeCandidate("ollama", "qwen3:32b"),
+            excludedCandidate("claude-code", "claude-opus"),
+            excludedCandidate("gemini", "gemini-pro"),
+          ],
+        },
+      } as never;
+    };
     const snapshot = {
       checkedAt: "2026-06-22T00:00:00.000Z",
       runtimes: {
@@ -138,12 +149,10 @@ describe("setup runtime readiness warning policy", () => {
       },
     };
 
-    const activeSources = await listActiveSetupRuntimeSources(sql, { hiveId });
+    const activeSources = await listActiveSetupRuntimeSources((async () => []) as never, { hiveId, loadRoutingView });
     const warnings = listSetupRuntimeReadinessWarnings(snapshot, { activeSources });
 
     expect(activeSources).toEqual(["ollama"]);
-    expect(calls[0]).toEqual(expect.objectContaining({ values: [hiveId] }));
-    expect(calls[0].text).toContain("AND hive_id =");
     expect(warnings).toEqual([
       expect.objectContaining({ source: "claude-code", policy: "optional_runtime" }),
       expect.objectContaining({ source: "gemini", policy: "optional_runtime" }),
@@ -181,4 +190,50 @@ function restoreEnv(key: string, value: string | undefined) {
   } else {
     process.env[key] = value;
   }
+}
+
+
+function activeRoute(provider: string, adapterType: string, model: string) {
+  return {
+    provider,
+    adapterType,
+    model,
+    hiveModelEnabled: true,
+    routingEnabled: true,
+  };
+}
+
+function excludedRoute(provider: string, adapterType: string, model: string) {
+  return {
+    provider,
+    adapterType,
+    model,
+    hiveModelEnabled: true,
+    routingEnabled: true,
+  };
+}
+
+function activeCandidate(adapterType: string, model: string) {
+  return {
+    adapterType,
+    model,
+    enabled: true,
+    canonicalRouteSet: {
+      source: "configured_route_inventory",
+      membership: "included",
+    },
+  };
+}
+
+function excludedCandidate(adapterType: string, model: string) {
+  return {
+    adapterType,
+    model,
+    enabled: false,
+    canonicalRouteSet: {
+      source: "configured_route_inventory",
+      membership: "excluded",
+      reason: "provider entitlement/scope failed",
+    },
+  };
 }
