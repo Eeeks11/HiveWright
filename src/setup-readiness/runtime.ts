@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Sql } from "postgres";
+import { loadModelRoutingView, type ModelRoutingView } from "@/model-routing/registry";
 import { sanitizeError } from "@/memory/local-embedding-setup";
 import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
 
@@ -38,6 +39,8 @@ type ActiveRuntimeSourceRow = {
   provider: string | null;
   adapter_type: string | null;
 };
+
+type LoadRoutingView = (sql: Sql, hiveId: string) => Promise<ModelRoutingView>;
 
 export async function collectSetupRuntimeReadiness(): Promise<SetupRuntimeReadinessSnapshot> {
   const [codex, claudeCode, gemini, ollama] = await Promise.all([
@@ -85,23 +88,51 @@ export function listActiveProviderReadinessWarnings(
 
 export async function listActiveSetupRuntimeSources(
   sql: Sql,
-  options: { hiveId?: string } = {},
+  options: { hiveId?: string; loadRoutingView?: LoadRoutingView } = {},
 ): Promise<string[]> {
-  const rows = options.hiveId
-    ? await sql<ActiveRuntimeSourceRow[]>`
-        SELECT DISTINCT provider, adapter_type
-        FROM hive_models
-        WHERE enabled = true
-          AND hive_id = ${options.hiveId}
-      `
-    : await sql<ActiveRuntimeSourceRow[]>`
-        SELECT DISTINCT provider, adapter_type
-        FROM hive_models
-        WHERE enabled = true
-      `;
+  if (options.hiveId) {
+    const view = await (options.loadRoutingView ?? loadModelRoutingView)(sql, options.hiveId);
+    return listActiveSetupRuntimeSourcesForRoutingView(view);
+  }
+
+  const rows = await sql<ActiveRuntimeSourceRow[]>`
+    SELECT DISTINCT provider, adapter_type
+    FROM hive_models
+    WHERE enabled = true
+  `;
 
   return Array.from(new Set(rows.flatMap((row) => runtimeSourcesForConfiguredRoute(row))))
     .sort();
+}
+
+export function listActiveSetupRuntimeSourcesForRoutingView(
+  view: Pick<ModelRoutingView, "models" | "policy">,
+): string[] {
+  const policyCandidatesByRoute = new Map(view.policy.candidates.map((candidate) => [
+    `${candidate.adapterType}:${candidate.model}`,
+    candidate,
+  ]));
+  const sources: string[] = view.models
+    .filter((model) => model.hiveModelEnabled && model.routingEnabled)
+    .filter((model) => {
+      const candidate = policyCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
+      return isActiveRoutePoolCandidate(candidate);
+    })
+    .flatMap((model) => runtimeSourcesForConfiguredRoute({
+      provider: model.provider,
+      adapter_type: model.adapterType,
+    }));
+
+  return Array.from(new Set<string>(sources)).sort();
+}
+
+function isActiveRoutePoolCandidate(
+  candidate: ModelRoutingView["policy"]["candidates"][number] | undefined,
+): boolean {
+  if (!candidate) return false;
+  if (candidate.enabled === false) return false;
+  const membership = candidate.canonicalRouteSet?.membership;
+  return membership !== "excluded" && membership !== "intentionally_disabled";
 }
 
 export function runtimeSourcesForConfiguredRoute(input: { provider: string | null; adapter_type: string | null }): string[] {

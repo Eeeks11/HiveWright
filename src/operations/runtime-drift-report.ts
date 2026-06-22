@@ -129,10 +129,10 @@ export function buildRuntimeRouteDriftReport(
   view: Pick<ModelRoutingView, "models" | "policy" | "basePolicyState">,
   heartbeat: Pick<DispatcherHeartbeatRecord, "state">,
 ): RuntimeRouteDriftReport {
-  const explicitDeclaredCandidates = view.basePolicyState.policy?.candidates.length ?? 0;
-  const configuredRouteInventory = view.policy.candidates.length;
-  const runtimeUsableCandidates = view.policy.candidates.filter((candidate) => (
-    candidate.enabled !== false && hasFreshHealthyRouteEvidence(candidate)
+  const explicitDeclaredCandidates = activeRoutePoolCandidates(view.basePolicyState.policy?.candidates ?? []).length;
+  const configuredRouteInventory = activeRoutePoolCandidates(view.policy.candidates).length;
+  const runtimeUsableCandidates = activeRoutePoolCandidates(view.policy.candidates).filter((candidate) => (
+    hasFreshHealthyRouteEvidence(candidate)
   )).length;
   const declaredCandidates = explicitDeclaredCandidates > 0 ? explicitDeclaredCandidates : configuredRouteInventory;
   const runtimeProjectedCandidates = explicitDeclaredCandidates > 0
@@ -153,7 +153,7 @@ export function buildRuntimeRouteDriftReport(
   const inventoryJustification = explicitDeclaredCandidates > 0
     ? "Model routing declares an explicit candidate set in policy configuration."
     : configuredRouteInventory > 0
-      ? "No explicit model-routing policy candidates exist, so telemetry declares the configured hive model inventory as the route pool expected to regain broader usable capacity."
+      ? "No explicit model-routing policy candidates exist, so telemetry declares the entitled, active configured hive model inventory as the route pool expected to regain broader usable capacity."
       : "No explicit policy candidates or configured hive model routes exist; the route pool is intentionally empty until models are configured.";
   const policyCandidatesByRoute = new Map(view.policy.candidates.map((candidate) => [
     `${candidate.adapterType}:${candidate.model}`,
@@ -161,7 +161,8 @@ export function buildRuntimeRouteDriftReport(
   ]));
   const isExpectedAutomaticRoute = (model: ModelRoutingView["models"][number]): boolean => {
     const candidate = policyCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
-    const membership = candidate?.canonicalRouteSet?.membership;
+    if (!candidate || candidate.enabled === false) return false;
+    const membership = candidate.canonicalRouteSet?.membership;
     return membership !== "excluded" && membership !== "intentionally_disabled";
   };
   const expectedAutomaticModels = view.models.filter(isExpectedAutomaticRoute);
@@ -247,4 +248,15 @@ function readGitSha(repoPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+
+function activeRoutePoolCandidates<T extends { enabled?: boolean; canonicalRouteSet?: { membership?: string } }>(
+  candidates: T[],
+): T[] {
+  return candidates.filter((candidate) => {
+    if (candidate.enabled === false) return false;
+    const membership = candidate.canonicalRouteSet?.membership;
+    return membership !== "excluded" && membership !== "intentionally_disabled";
+  });
 }

@@ -176,6 +176,11 @@ describe("analyst telemetry summary", () => {
       },
       providerCounts: { openai: 1, local: 1, anthropic: 1 },
       adapterCounts: { codex: 1, ollama: 1, claude: 1 },
+      activeRoutePool: {
+        routes: 2,
+        providerCounts: { openai: 1, anthropic: 1 },
+        adapterCounts: { codex: 1, claude: 1 },
+      },
     });
     const serialized = JSON.stringify(summary);
     expect(serialized).not.toContain("secret-model-name");
@@ -314,6 +319,11 @@ describe("analyst telemetry summary", () => {
       recoveryEligibleRoutes: 1,
       recoveryBlockedRoutes: 0,
     });
+    expect(summary.activeRoutePool).toMatchObject({
+      routes: 1,
+      providerCounts: { anthropic: 1 },
+      adapterCounts: { claude: 1 },
+    });
     expect(summary.excludedRouteInventory).toMatchObject({
       excludedRoutes: 2,
       unknownHealthRoutes: 2,
@@ -402,6 +412,11 @@ describe("analyst telemetry summary", () => {
       recoveryEligibleRoutes: 1,
       recoveryBlockedRoutes: 0,
     });
+    expect(summary.activeRoutePool).toMatchObject({
+      routes: 1,
+      providerCounts: { anthropic: 1 },
+      adapterCounts: { claude: 1 },
+    });
     expect(summary.excludedRouteInventory).toMatchObject({
       excludedRoutes: 1,
       unknownHealthRoutes: 1,
@@ -437,12 +452,12 @@ describe("analyst telemetry summary", () => {
         routeDrift: {
           status: "drift",
           declaredCandidates: 1,
-          runtimeProjectedCandidates: 3,
+          runtimeProjectedCandidates: 2,
           projectedInventoryBasis: "declared_policy",
           explicitDeclaredCandidates: 1,
           inventoryExpectation: "declared_policy",
-          blockedRoutes: 2,
-          quarantinedRoutes: 1,
+          blockedRoutes: 1,
+          quarantinedRoutes: 0,
           staleRoutes: 0,
           staleRecovery: {
             staleRoutes: 0,
