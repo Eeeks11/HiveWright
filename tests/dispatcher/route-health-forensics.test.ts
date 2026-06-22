@@ -30,6 +30,7 @@ function healthDecision(
 describe("runtime health gate forensics", () => {
   it("captures durable pre-spawn health, session-null semantics, and build provenance", () => {
     const forensics = buildRuntimeHealthGateForensics({
+      roleSlug: "dev-agent",
       primaryAdapterType: "claude-code",
       primaryModel: "anthropic/claude-sonnet-4-6",
       fallbackAdapterType: "codex",
@@ -96,7 +97,9 @@ describe("runtime health gate forensics", () => {
         executionCapsuleExpected: false,
         reason: "dispatcher_blocked_before_adapter_session_startup",
       },
+      runtimeBlockFingerprint: expect.any(String),
       routeDeclaration: {
+        roleSlug: "dev-agent",
         primaryAdapterType: "claude-code",
         primaryModel: "anthropic/claude-sonnet-4-6",
         fallbackAdapterType: "codex",
@@ -139,5 +142,6 @@ describe("runtime health gate forensics", () => {
         buildHashSource: "HIVEWRIGHT_BUILD_HASH",
       },
     });
+    expect(forensics.runtimeBlockFingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 });

@@ -1,6 +1,7 @@
 import type { DispatcherModelRouteHealthDecision } from "./adapter-health";
 
 export interface ProviderFailoverInput {
+  roleSlug?: string | null;
   primaryAdapterType: string;
   primaryModel: string;
   fallbackAdapterType: string | null | undefined;
@@ -121,7 +122,7 @@ function buildDiagnostic(
   ];
 
   if (!input.fallbackAdapterType || !input.fallbackModel) {
-    lines.push("Fallback route declaration: missing.");
+    lines.push(missingFallbackDiagnostic(input));
     return lines.join(" ");
   }
 
@@ -136,6 +137,23 @@ function buildDiagnostic(
   }
 
   return lines.join(" ");
+}
+
+function missingFallbackDiagnostic(input: ProviderFailoverInput): string {
+  const role = input.roleSlug?.trim() || "unknown-role";
+  return `Fallback route declaration: missing. Affected role: ${role}; route family: ${routeFamily(input.primaryAdapterType)}.`;
+}
+
+function routeFamily(adapterType: string): string {
+  const adapter = adapterType.trim().toLowerCase();
+  if (adapter === "ollama") {
+    return "local/ollama";
+  }
+  if (adapter === "claude-code") return "cloud/claude-code";
+  if (adapter === "codex") return "cloud/codex";
+  if (adapter === "gemini") return "cloud/gemini";
+  if (adapter === "openai-image") return "cloud/openai-image";
+  return adapter || "unknown";
 }
 
 function describeRoute(

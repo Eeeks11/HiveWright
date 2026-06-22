@@ -101,6 +101,12 @@ export interface ExecutionRunSignalSummary {
   lastRecoveryAt: Date | null;
 }
 
+export interface RuntimeBlockFingerprintSummary {
+  fingerprint: string;
+  count: number;
+  repeated: boolean;
+}
+
 export async function startExecutionRun(sql: Sql, input: StartExecutionRunInput): Promise<ExecutionRunRecord> {
   const [row] = await sql<ExecutionRunRow[]>`
     INSERT INTO execution_runs (
@@ -271,6 +277,25 @@ export async function markExecutionRunBlocked(sql: Sql, input: MarkExecutionRunB
       payload: input.evidence,
     });
   }
+}
+
+export async function summarizeRuntimeBlockFingerprint(
+  sql: Sql,
+  input: { hiveId: string; fingerprint: string; now?: Date; windowHours?: number; threshold?: number },
+): Promise<RuntimeBlockFingerprintSummary> {
+  const now = input.now ?? new Date();
+  const windowHours = input.windowHours ?? 24;
+  const threshold = input.threshold ?? 2;
+  const [row] = await sql<{ count: number | string }[]>`
+    SELECT COUNT(*)::int AS count
+    FROM execution_run_events
+    WHERE hive_id = ${input.hiveId}
+      AND event_type = 'blocked'
+      AND created_at >= ${now} - (${windowHours}::text || ' hours')::interval
+      AND payload->>'runtimeBlockFingerprint' = ${input.fingerprint}
+  `;
+  const count = Number(row?.count ?? 0);
+  return { fingerprint: input.fingerprint, count, repeated: count >= threshold };
 }
 
 export async function markInterruptedRunningExecutionRuns(

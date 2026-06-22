@@ -63,6 +63,8 @@ export interface ResolveConfiguredModelRouteInput {
 export interface ResolvedModelRoute {
   adapterType: string | null;
   model: string | null;
+  fallbackAdapterType?: string | null;
+  fallbackModel?: string | null;
   source: ModelRouteSource;
   reason: string;
   profile?: ModelRoutingProfile;
@@ -167,6 +169,9 @@ export function resolveConfiguredModelRoute(
     : undefined;
   const selectedScore = closeScoreWinner ?? best;
   const selected = selectedScore?.candidate;
+  const fallback = selected
+    ? selectAutoPolicyFallback(ranked.map((candidate) => candidate.candidate), selected)
+    : undefined;
   if (!selected) {
     return {
       adapterType: null,
@@ -181,6 +186,8 @@ export function resolveConfiguredModelRoute(
   return {
     adapterType: selected.adapterType,
     model: selected.model,
+    fallbackAdapterType: fallback?.adapterType ?? null,
+    fallbackModel: fallback?.model ?? null,
     source: "auto_policy",
     reason: closeScoreWinner && best && closeScoreWinner.candidate !== best.candidate
       ? `selected by auto policy close score for ${profileConfig.profile} with ${priorityReason}`
@@ -211,6 +218,16 @@ export function resolveConfiguredModelRoute(
       })),
     },
   };
+}
+
+function selectAutoPolicyFallback(
+  rankedCandidates: ModelRoutingCandidate[],
+  selected: ModelRoutingCandidate,
+): ModelRoutingCandidate | undefined {
+  return rankedCandidates.find((candidate) =>
+    candidate !== selected &&
+    (candidate.adapterType !== selected.adapterType || candidate.model !== selected.model)
+  );
 }
 
 function normalizeManualValue(value: string | null | undefined): string | null {

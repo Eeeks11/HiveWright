@@ -7,6 +7,7 @@ import {
   recordExecutionRunOutput,
   startExecutionRun,
   summarizeExecutionRunSignals,
+  summarizeRuntimeBlockFingerprint,
 } from "@/execution-runs/ledger";
 
 beforeEach(async () => {
@@ -217,6 +218,63 @@ describe("execution run ledger", () => {
       blockedBeforeSpawn: true,
       sessionSemantics: { adapterSessionExpected: false },
     });
+  });
+
+  it("summarizes repeated runtime block fingerprints inside the lookback window", async () => {
+    const [hive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('execution-run-repeated-block-hive', 'Execution Run Repeated Block Hive', 'digital')
+      RETURNING id
+    `;
+    const [otherHive] = await sql<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('execution-run-repeated-block-other-hive', 'Execution Run Repeated Block Other Hive', 'digital')
+      RETURNING id
+    `;
+
+    const first = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "ollama" });
+    const second = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "ollama" });
+    const different = await startExecutionRun(sql, { hiveId: hive.id, adapterType: "codex" });
+
+    await markExecutionRunBlocked(sql, {
+      runId: first.id,
+      hiveId: hive.id,
+      reason: "Runtime route blocked",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-1" },
+    });
+    await markExecutionRunBlocked(sql, {
+      runId: second.id,
+      hiveId: hive.id,
+      reason: "Runtime route blocked again",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-1" },
+    });
+    await markExecutionRunBlocked(sql, {
+      runId: different.id,
+      hiveId: hive.id,
+      reason: "Different runtime route blocked",
+      evidence: { runtimeBlockFingerprint: "fp-runtime-2" },
+    });
+
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: hive.id,
+      fingerprint: "fp-runtime-1",
+    })).resolves.toMatchObject({
+      fingerprint: "fp-runtime-1",
+      count: 2,
+      repeated: true,
+    });
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: hive.id,
+      fingerprint: "fp-runtime-2",
+    })).resolves.toMatchObject({
+      fingerprint: "fp-runtime-2",
+      count: 1,
+      repeated: false,
+    });
+    await expect(summarizeRuntimeBlockFingerprint(sql, {
+      hiveId: otherHive.id,
+      fingerprint: "fp-runtime-1",
+    })).resolves.toMatchObject({ count: 0, repeated: false });
   });
 
   it("marks stale running runs recovered during dispatcher lifecycle reconciliation", async () => {
