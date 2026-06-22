@@ -183,4 +183,86 @@ describe("GET /api/diagnostics", () => {
       activeSources: ["ollama"],
     });
   });
+
+  it("scopes setup-readiness active-provider policy to the requested hive", async () => {
+    const hiveId = "22222222-2222-4222-8222-222222222222";
+    const setupSnapshot = {
+      checkedAt: "2026-06-22T00:00:00.000Z",
+      runtimes: {
+        "claude-code": {
+          label: "Claude Code",
+          installed: false,
+          status: "missing",
+          detail: "Claude Code command is not installed on this server.",
+          nextStep: "Install Claude Code.",
+        },
+        gemini: {
+          label: "Gemini CLI",
+          installed: true,
+          status: "check_required",
+          detail: "Gemini CLI is installed, but auth was not checked.",
+          nextStep: "Sign in to Gemini CLI.",
+        },
+      },
+    };
+    const warningSources = [
+      {
+        source: "claude-code",
+        label: "Claude Code",
+        status: "missing",
+        policy: "optional_runtime",
+        detail: "Claude Code command is not installed on this server.",
+        nextStep: "Install Claude Code.",
+      },
+      {
+        source: "gemini",
+        label: "Gemini CLI",
+        status: "check_required",
+        policy: "optional_runtime",
+        detail: "Gemini CLI is installed, but auth was not checked.",
+        nextStep: "Sign in to Gemini CLI.",
+      },
+    ];
+    diagnosticsMock.collectHiveWrightDiagnostics.mockResolvedValue({
+      checkedAt: "2026-06-22T00:00:00.000Z",
+      scope: {
+        kind: "controller_global",
+        label: "Controller-global runtime diagnostics",
+        summary: "/api/diagnostics reports controller-wide state; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+        hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+      },
+      summary: {
+        severity: "warning",
+        ready: true,
+        counts: { ok: 8, info: 0, warning: 1, critical: 0 },
+        ownerActionRequired: false,
+      },
+      diagnostics: [],
+    });
+    setupReadinessMock.collectSetupRuntimeReadiness.mockResolvedValue(setupSnapshot);
+    setupReadinessMock.listActiveSetupRuntimeSources.mockResolvedValue(["ollama"]);
+    setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReturnValue(warningSources);
+    const { GET } = await import("../../src/app/api/diagnostics/route");
+
+    const response = await GET(new Request(`http://localhost/api/diagnostics?hiveId=${hiveId}`));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.setupReadiness.warningSources).toEqual(warningSources);
+    expect(setupReadinessMock.listActiveSetupRuntimeSources).toHaveBeenCalledWith(expect.any(Function), { hiveId });
+    expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot, {
+      activeSources: ["ollama"],
+    });
+  });
+
+  it("rejects malformed hive-scoped diagnostics readiness requests", async () => {
+    const { GET } = await import("../../src/app/api/diagnostics/route");
+
+    const response = await GET(new Request("http://localhost/api/diagnostics?hiveId=not-a-uuid"));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
+    expect(setupReadinessMock.listActiveSetupRuntimeSources).not.toHaveBeenCalled();
+  });
 });
