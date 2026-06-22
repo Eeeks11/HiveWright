@@ -83,12 +83,22 @@ export function listActiveProviderReadinessWarnings(
     .filter((warning) => warning.policy === "active_provider");
 }
 
-export async function listActiveSetupRuntimeSources(sql: Sql): Promise<string[]> {
-  const rows = await sql<ActiveRuntimeSourceRow[]>`
-    SELECT DISTINCT provider, adapter_type
-    FROM hive_models
-    WHERE enabled = true
-  `;
+export async function listActiveSetupRuntimeSources(
+  sql: Sql,
+  options: { hiveId?: string } = {},
+): Promise<string[]> {
+  const rows = options.hiveId
+    ? await sql<ActiveRuntimeSourceRow[]>`
+        SELECT DISTINCT provider, adapter_type
+        FROM hive_models
+        WHERE enabled = true
+          AND hive_id = ${options.hiveId}
+      `
+    : await sql<ActiveRuntimeSourceRow[]>`
+        SELECT DISTINCT provider, adapter_type
+        FROM hive_models
+        WHERE enabled = true
+      `;
 
   return Array.from(new Set(rows.flatMap((row) => runtimeSourcesForConfiguredRoute(row))))
     .sort();

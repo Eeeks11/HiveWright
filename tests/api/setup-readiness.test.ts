@@ -117,6 +117,39 @@ describe("setup runtime readiness warning policy", () => {
 
     await expect(listActiveSetupRuntimeSources(sql)).resolves.toEqual(["codex", "ollama"]);
   });
+
+  it("keeps undeclared Claude and Gemini debt optional for hive-scoped OpenAI/local route inventory", async () => {
+    const { listActiveSetupRuntimeSources, listSetupRuntimeReadinessWarnings } = await import("../../src/setup-readiness/runtime");
+    const hiveId = "11111111-1111-4111-8111-111111111111";
+    const calls: Array<{ text: string; values: unknown[] }> = [];
+    const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.push({ text: strings.join("?"), values });
+      return [
+        { provider: "openai", adapter_type: "http" },
+        { provider: "local", adapter_type: "local" },
+      ];
+    }) as never;
+    const snapshot = {
+      checkedAt: "2026-06-22T00:00:00.000Z",
+      runtimes: {
+        ollama: runtime("Ollama", "ready"),
+        "claude-code": runtime("Claude Code", "missing"),
+        gemini: runtime("Gemini CLI", "check_required"),
+      },
+    };
+
+    const activeSources = await listActiveSetupRuntimeSources(sql, { hiveId });
+    const warnings = listSetupRuntimeReadinessWarnings(snapshot, { activeSources });
+
+    expect(activeSources).toEqual(["ollama"]);
+    expect(calls[0]).toEqual(expect.objectContaining({ values: [hiveId] }));
+    expect(calls[0].text).toContain("AND hive_id =");
+    expect(warnings).toEqual([
+      expect.objectContaining({ source: "claude-code", policy: "optional_runtime" }),
+      expect.objectContaining({ source: "gemini", policy: "optional_runtime" }),
+    ]);
+    expect(warnings.some((warning) => warning.policy === "active_provider")).toBe(false);
+  });
 });
 
 function writeStub(name: string, content: string) {
@@ -132,7 +165,7 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-function runtime(label: string, status: "ready" | "missing") {
+function runtime(label: string, status: "ready" | "missing" | "check_required") {
   return {
     label,
     installed: status === "ready",
