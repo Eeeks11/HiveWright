@@ -177,6 +177,43 @@ describe("resolveConfiguredModelRoute", () => {
     expect(route.reason).toContain("selected by auto policy");
   });
 
+  it("declares a fallback route for auto-selected local Ollama routes", () => {
+    const policy: ModelRoutingPolicy = {
+      preferences: { costQualityBalance: 17 },
+      candidates: [
+        {
+          adapterType: "ollama",
+          model: "ollama/qwen3:32b",
+          qualityScore: 76,
+          costScore: 0,
+          local: true,
+        },
+        {
+          adapterType: "codex",
+          model: "openai-codex/gpt-5.5",
+          qualityScore: 90,
+          costScore: 25,
+        },
+      ],
+    };
+
+    const route = resolveConfiguredModelRoute({
+      roleSlug: "dev-agent",
+      roleType: "executor",
+      manualAdapterType: AUTO_MODEL_ROUTE,
+      manualModel: AUTO_MODEL_ROUTE,
+      policy,
+    });
+
+    expect(route).toMatchObject({
+      adapterType: "ollama",
+      model: "ollama/qwen3:32b",
+      fallbackAdapterType: "codex",
+      fallbackModel: "openai-codex/gpt-5.5",
+      source: "auto_policy",
+    });
+  });
+
   it("uses cost-side routing priority to prefer materially cheaper candidates", () => {
     const policy: ModelRoutingPolicy = {
       preferences: { costQualityBalance: 10 },

@@ -141,13 +141,12 @@ function buildDiagnostic(
 
 function missingFallbackDiagnostic(input: ProviderFailoverInput): string {
   const role = input.roleSlug?.trim() || "unknown-role";
-  return `Fallback route declaration: missing. Affected role: ${role}; route family: ${routeFamily(input.primaryAdapterType, input.primaryModel)}.`;
+  return `Fallback route declaration: missing. Affected role: ${role}; route family: ${routeFamily(input.primaryAdapterType)}.`;
 }
 
-function routeFamily(adapterType: string, model: string): string {
+function routeFamily(adapterType: string): string {
   const adapter = adapterType.trim().toLowerCase();
-  const normalizedModel = model.trim().toLowerCase();
-  if (adapter === "ollama" || normalizedModel.startsWith("ollama/") || normalizedModel.includes("qwen") || normalizedModel.includes("gemma")) {
+  if (adapter === "ollama") {
     return "local/ollama";
   }
   if (adapter === "claude-code") return "cloud/claude-code";

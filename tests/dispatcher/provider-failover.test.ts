@@ -95,6 +95,42 @@ describe("provider failover drill routing", () => {
     expect(decision.diagnostic).toContain("from=health_probe_stale");
   });
 
+  it("routes an unhealthy local Ollama primary to its declared fallback after a stale reprobe remains unhealthy", () => {
+    const decision = decideProviderFailoverRoute({
+      roleSlug: "dev-agent",
+      primaryAdapterType: "ollama",
+      primaryModel: "ollama/qwen3.6:35b",
+      fallbackAdapterType: "codex",
+      fallbackModel: "openai-codex/gpt-5.5",
+      primaryHealth: healthDecision({
+        healthy: false,
+        reason: "health_probe_unhealthy",
+        refresh: {
+          attempted: true,
+          initialReason: "health_probe_stale",
+          outcome: "still_unhealthy",
+          finalReason: "health_probe_unhealthy",
+        },
+      }),
+      fallbackHealth: healthDecision({
+        healthy: true,
+        reason: "model_health_and_provisioner_healthy",
+      }),
+    });
+
+    expect(decision).toMatchObject({
+      adapterType: "codex",
+      model: "openai-codex/gpt-5.5",
+      canRun: true,
+      usedFallback: true,
+      clearFallbackModel: true,
+      reason: "primary_unhealthy_fallback_healthy",
+    });
+    expect(decision.diagnostic).toContain("Primary route ollama/ollama/qwen3.6:35b: unroutable");
+    expect(decision.diagnostic).toContain("refresh=still_unhealthy");
+    expect(decision.diagnostic).toContain("Fallback route codex/openai-codex/gpt-5.5: routable");
+  });
+
   it("parks instead of spawning when both primary and fallback are unhealthy", () => {
     const decision = decideProviderFailoverRoute({
       primaryAdapterType: "claude-code",
@@ -179,5 +215,24 @@ describe("provider failover drill routing", () => {
     expect(decision.diagnostic).toContain("Fallback route declaration: missing.");
     expect(decision.diagnostic).toContain("Affected role: local-worker");
     expect(decision.diagnostic).toContain("route family: local/ollama");
+  });
+
+  it("does not classify cloud-hosted qwen or gemma models as local Ollama routes", () => {
+    const decision = decideProviderFailoverRoute({
+      roleSlug: "cloud-worker",
+      primaryAdapterType: "openrouter",
+      primaryModel: "google/gemma-4-26b-a4b:free",
+      fallbackAdapterType: null,
+      fallbackModel: null,
+      primaryHealth: healthDecision({
+        healthy: false,
+        reason: "health_probe_unhealthy",
+      }),
+      fallbackHealth: null,
+    });
+
+    expect(decision.reason).toBe("no_declared_fallback_route");
+    expect(decision.diagnostic).toContain("route family: openrouter");
+    expect(decision.diagnostic).not.toContain("route family: local/ollama");
   });
 });

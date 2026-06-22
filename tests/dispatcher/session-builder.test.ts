@@ -5,6 +5,7 @@ import { buildSessionContext } from "@/dispatcher/session-builder";
 import { renderSessionPrompt } from "@/adapters/context-renderer";
 import { storeCredential } from "@/credentials/manager";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { syncRoleLibrary } from "@/roles/sync";
 import type { ClaimedTask } from "@/dispatcher/types";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -99,14 +100,15 @@ describe("buildSessionContext", () => {
       ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
     `;
     await sql`
-      INSERT INTO adapter_config (hive_id, adapter_type, config)
-      VALUES (${bizId}, 'model-routing', ${sql.json({
+      UPDATE adapter_config
+      SET config = ${sql.json({
         routeOverrides: {
           "openai:openai-image:gpt-image-3": {
             roleSlugs: ["image-designer"],
           },
         },
-      })})
+      })}
+      WHERE hive_id = ${bizId} AND adapter_type = 'model-routing'
     `;
 
     const task: ClaimedTask = {
@@ -129,13 +131,88 @@ describe("buildSessionContext", () => {
       projectId: null,
     };
 
+    const previousExpensiveProbeMode = process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE;
+    process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE = "automatic";
     const ctx = await buildSessionContext(sql, task);
+    if (previousExpensiveProbeMode === undefined) {
+      delete process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE;
+    } else {
+      process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE = previousExpensiveProbeMode;
+    }
 
     expect(ctx.primaryAdapterType).toBe("openai-image");
     expect(ctx.model).toBe("gpt-image-3");
-    expect(ctx.fallbackAdapterType).toBeNull();
-    expect(ctx.fallbackModel).toBeNull();
+    expect(ctx.fallbackAdapterType).toBe("codex");
+    expect(ctx.fallbackModel).toBe("openai-codex/gpt-5.5");
     expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "executor_default" });
+  });
+
+  it("declares the next auto-routing candidate as fallback for a selected local Ollama route", async () => {
+    await sql`
+      UPDATE role_templates
+      SET adapter_type = 'auto',
+          recommended_model = 'auto',
+          fallback_adapter_type = NULL,
+          fallback_model = NULL
+      WHERE slug = 'dev-agent'
+    `;
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        benchmark_quality_score,
+        routing_cost_score,
+        enabled
+      )
+      VALUES (${bizId}, 'local', 'ollama/qwen3:32b', 'ollama', 76, 0, true)
+    `;
+    await sql`
+      INSERT INTO model_health (fingerprint, model_id, status)
+      VALUES (
+        ${createRuntimeCredentialFingerprint({
+          provider: "local",
+          adapterType: "ollama",
+          baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
+        })},
+        'ollama/qwen3:32b',
+        'healthy'
+      )
+      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
+    `;
+    await sql`
+      UPDATE adapter_config
+      SET config = ${sql.json({ preferences: { costQualityBalance: 17 } })}
+      WHERE hive_id = ${bizId} AND adapter_type = 'model-routing'
+    `;
+
+    const task: ClaimedTask = {
+      id: "00000000-0000-0000-0000-000000000198",
+      hiveId: bizId,
+      assignedTo: "dev-agent",
+      createdBy: "owner",
+      status: "active",
+      priority: 5,
+      title: "Auto route local implementation task",
+      brief: "Use the configured automatic local model route with fallback",
+      parentTaskId: null,
+      goalId: null,
+      sprintNumber: null,
+      qaRequired: false,
+      acceptanceCriteria: null,
+      retryCount: 0,
+      doctorAttempts: 0,
+      failureReason: null,
+      projectId: null,
+    };
+
+    const ctx = await buildSessionContext(sql, task);
+
+    expect(ctx.primaryAdapterType).toBe("ollama");
+    expect(ctx.model).toBe("ollama/qwen3:32b");
+    expect(ctx.fallbackAdapterType).toBe("codex");
+    expect(ctx.fallbackModel).toBe("openai-codex/gpt-5.5");
   });
 
   it("builds context with role template data", async () => {
