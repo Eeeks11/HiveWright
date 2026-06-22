@@ -1,15 +1,20 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { requireApiAuth } from "../_lib/auth";
-import { jsonOk } from "../_lib/responses";
+import { canAccessHive } from "@/auth/users";
+import { loadModelRoutingView } from "@/model-routing/registry";
+import { sql } from "../_lib/db";
+import { requireApiAuth, requireApiUser } from "../_lib/auth";
+import { jsonError, jsonOk, parseSearchParams } from "../_lib/responses";
 import { sanitizeError } from "@/memory/local-embedding-setup";
 
 const execFileAsync = promisify(execFile);
 const CLI_TIMEOUT_MS = 5_000;
 const OLLAMA_TIMEOUT_MS = 5_000;
 const OLLAMA_ENDPOINT = process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434";
+const RUNTIME_KEYS = ["codex", "claude-code", "gemini", "ollama"] as const;
 
 type RuntimeStatus = "ready" | "check_required" | "missing";
+type RuntimeKey = (typeof RUNTIME_KEYS)[number];
 
 interface RuntimeReadiness {
   label: string;
@@ -19,26 +24,71 @@ interface RuntimeReadiness {
   nextStep: string;
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   const unauth = await requireApiAuth();
   if (unauth) return unauth;
 
-  const [codex, claudeCode, gemini, ollama] = await Promise.all([
-    checkCliRuntime("codex", "Codex", ["--version"], "Open a terminal on this server and run `codex login`, then refresh this check.", ["login", "status"]),
-    checkCliRuntime("claude", "Claude Code", ["--version"], "Open a terminal on this server and run `claude login`, then refresh this check."),
-    checkCliRuntime("gemini", "Gemini CLI", ["--version"], "Open a terminal on this server and sign in to Gemini CLI, then refresh this check."),
-    checkOllamaRuntime(),
-  ]);
+  const runtimeKeys = await resolveRuntimeKeys(request);
+  if (runtimeKeys instanceof Response) return runtimeKeys;
+  const runtimes = Object.fromEntries(
+    await Promise.all(
+      runtimeKeys.map(async (runtimeKey) => [runtimeKey, await checkRuntime(runtimeKey)] as const),
+    ),
+  );
 
   return jsonOk({
     checkedAt: new Date().toISOString(),
-    runtimes: {
-      codex,
-      "claude-code": claudeCode,
-      gemini,
-      ollama,
-    },
+    runtimes,
   });
+}
+
+async function resolveRuntimeKeys(request?: Request): Promise<RuntimeKey[] | Response> {
+  if (!request) return [...RUNTIME_KEYS];
+
+  const hiveId = parseSearchParams(request.url).get("hiveId");
+  if (!hiveId) return [...RUNTIME_KEYS];
+
+  const authz = await requireApiUser();
+  if ("response" in authz) return authz.response;
+  if (!authz.user.isSystemOwner) {
+    const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
+    if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+  }
+
+  const view = await loadModelRoutingView(sql, hiveId);
+  const activeRuntimeKeys = new Set<RuntimeKey>();
+  for (const model of view.models) {
+    if (!model.hiveModelEnabled || !model.routingEnabled) continue;
+    const runtimeKey = normalizeRuntimeKey(model.adapterType);
+    if (runtimeKey) activeRuntimeKeys.add(runtimeKey);
+  }
+
+  return RUNTIME_KEYS.filter((runtimeKey) => activeRuntimeKeys.has(runtimeKey));
+}
+
+function normalizeRuntimeKey(adapterType: string): RuntimeKey | null {
+  switch (adapterType.trim().toLowerCase()) {
+    case "codex":
+    case "claude-code":
+    case "gemini":
+    case "ollama":
+      return adapterType.trim().toLowerCase() as RuntimeKey;
+    default:
+      return null;
+  }
+}
+
+async function checkRuntime(runtimeKey: RuntimeKey): Promise<RuntimeReadiness> {
+  switch (runtimeKey) {
+    case "codex":
+      return checkCliRuntime("codex", "Codex", ["--version"], "Open a terminal on this server and run `codex login`, then refresh this check.", ["login", "status"]);
+    case "claude-code":
+      return checkCliRuntime("claude", "Claude Code", ["--version"], "Open a terminal on this server and run `claude login`, then refresh this check.");
+    case "gemini":
+      return checkCliRuntime("gemini", "Gemini CLI", ["--version"], "Open a terminal on this server and sign in to Gemini CLI, then refresh this check.");
+    case "ollama":
+      return checkOllamaRuntime();
+  }
 }
 
 async function checkCliRuntime(command: string, label: string, args: string[], nextStep: string, authArgs?: string[]): Promise<RuntimeReadiness> {
