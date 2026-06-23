@@ -268,6 +268,116 @@ describe("Business OS profile foundation", () => {
     expect(unsafeActions.every((action) => action.approval_required && action.status === "awaiting_approval")).toBe(true);
   });
 
+  it("turns an existing-business audit intake into evidence-backed readiness, gaps, recommendations, and actions", async () => {
+    const fixture = createFixtureNamespace("business-os-existing-audit");
+    const slug = fixture.slug("existing-business-audit");
+    const result = await runHiveSetup(sql, buildRequest(slug, {
+      businessOs: {
+        mode: "existing_business",
+        profile: {
+          businessName: "Whiston-style Ops Co",
+          industry: "property services",
+          stage: "operating",
+          ownerGoals: ["Make the business agent-ready without risking customer trust"],
+          constraints: ["No public, spend, or customer-facing actions without owner approval"],
+          aiSpendBudget: { window: "monthly", capCents: 20000 },
+        },
+        audit: {
+          scope: ["strategy_governance", "marketing_attention", "sales_conversion", "finance_admin", "ai_governance"],
+          evidenceSources: [
+            { kind: "manual", label: "Owner notes", summary: "Current work is mostly owner-memory and ad hoc tools." },
+            { kind: "structured_state", label: "Existing marketing/sales modules", summary: "Marketing and sales foundations exist but are not yet connected to an audit loop." },
+          ],
+          knownUnknowns: ["No verified finance/admin system evidence supplied", "No SOP library evidence supplied"],
+        },
+      },
+    }));
+
+    const [auditProfile] = await sql<{
+      audit_status: string;
+      audit_scope: string[];
+      evidence_sources: Array<Record<string, unknown>>;
+      known_unknowns: string[];
+      overall_readiness_score: number;
+      overall_confidence: string;
+    }[]>`
+      SELECT audit_status, audit_scope, evidence_sources, known_unknowns, overall_readiness_score, overall_confidence
+      FROM business_audit_profiles
+      WHERE hive_id = ${result.id}::uuid
+    `;
+
+    expect(auditProfile).toMatchObject({
+      audit_status: "completed",
+      audit_scope: expect.arrayContaining(["strategy_governance", "marketing_attention", "sales_conversion", "finance_admin", "ai_governance"]),
+      overall_confidence: "medium",
+    });
+    expect(auditProfile.overall_readiness_score).toBeGreaterThan(0);
+    expect(auditProfile.evidence_sources.length).toBeGreaterThanOrEqual(2);
+    expect(auditProfile.known_unknowns).toContain("No verified finance/admin system evidence supplied");
+
+    const readinessRows = await sql<{
+      system_key: string;
+      source_kind: string;
+      readiness_score: number;
+      confidence: string;
+      evidence_refs: Array<Record<string, unknown>>;
+    }[]>`
+      SELECT system_key, source_kind, readiness_score, confidence, evidence_refs
+      FROM business_system_readiness
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY system_key ASC
+    `;
+    expect(readinessRows.length).toBeGreaterThanOrEqual(10);
+    expect(readinessRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ system_key: "marketing_attention", source_kind: "audit" }),
+      expect.objectContaining({ system_key: "sales_conversion", source_kind: "audit" }),
+      expect.objectContaining({ system_key: "software_integrations_data", source_kind: "audit" }),
+      expect.objectContaining({ system_key: "ai_governance", source_kind: "audit" }),
+    ]));
+    expect(readinessRows.every((row) => row.evidence_refs.length > 0)).toBe(true);
+
+    const gaps = await sql<{ title: string; gap_type: string; severity: string; confidence: string; evidence_refs: Array<Record<string, unknown>> }[]>`
+      SELECT title, gap_type, severity, confidence, evidence_refs
+      FROM business_gaps
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY severity DESC, title ASC
+    `;
+    expect(gaps.length).toBeGreaterThanOrEqual(5);
+    expect(gaps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringMatching(/agent-ready operating model/i), severity: "high" }),
+      expect.objectContaining({ title: expect.stringMatching(/finance/i), gap_type: "missing_data" }),
+    ]));
+    expect(gaps.every((gap) => gap.confidence && gap.evidence_refs.length > 0)).toBe(true);
+
+    const recommendations = await sql<{ title: string; status: string; requires_owner_approval: boolean }[]>`
+      SELECT title, status, requires_owner_approval
+      FROM business_recommendations
+      WHERE hive_id = ${result.id}::uuid
+    `;
+    expect(recommendations.length).toBeGreaterThanOrEqual(5);
+    expect(recommendations.every((recommendation) => recommendation.status === "converted_to_action")).toBe(true);
+
+    const actions = await sql<{
+      title: string;
+      status: string;
+      approval_required: boolean;
+      risk_level: string;
+      measurement_plan: Record<string, unknown>;
+    }[]>`
+      SELECT title, status, approval_required, risk_level, measurement_plan
+      FROM business_actions
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY priority DESC, title ASC
+    `;
+    expect(actions.length).toBeGreaterThanOrEqual(5);
+    expect(actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringMatching(/audit improvement/i), status: "queued" }),
+      expect.objectContaining({ title: expect.stringMatching(/owner approval/i), status: "awaiting_approval", approval_required: true, risk_level: "high" }),
+    ]));
+    expect(actions.every((action) => Object.keys(action.measurement_plan).length > 0)).toBe(true);
+    expect(actions.filter((action) => action.risk_level === "high").every((action) => action.approval_required && action.status === "awaiting_approval")).toBe(true);
+  });
+
   it("does not create Business OS state for non-business hives", async () => {
     const fixture = createFixtureNamespace("business-os-non-business");
     const result = await runHiveSetup(sql, buildRequest(fixture.slug("research-hive"), {
