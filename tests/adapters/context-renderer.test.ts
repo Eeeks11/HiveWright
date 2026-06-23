@@ -187,6 +187,11 @@ describe("renderSessionPrompt", () => {
     expect(prompt).not.toContain("Authorization: Bearer *** ");
     expect(prompt).toContain("X-HiveWright-Task-Id: $HIVEWRIGHT_TASK_ID");
     expect(prompt).toContain("primary runtime/model-routing evidence source");
+    expect(prompt).toContain("every promoted finding that will publish, reopen/close an issue, or route follow-up work must carry build-matched evidence");
+    expect(prompt).toContain("runtime buildHash");
+    expect(prompt).toContain("authenticated endpoint checkedAt timestamp");
+    expect(prompt).toContain("If the runtime buildHash changes before publication/routing, re-probe the affected endpoint family first");
+    expect(prompt).toContain("/api/readiness` is controller-global diagnostic context only");
     expect(prompt).toContain("secondary security signal only");
     expect(prompt).toContain("unexpected analyst telemetry auth failure");
   });

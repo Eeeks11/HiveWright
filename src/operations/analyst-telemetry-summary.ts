@@ -2,6 +2,10 @@ import type { Sql } from "postgres";
 import { loadDispatcherHeartbeatStatus, type DispatcherHeartbeatRecord } from "@/dispatcher/heartbeat";
 import { loadModelRoutingView, type ModelRoutingView } from "@/model-routing/registry";
 import { buildRuntimeRouteDriftReport, type RuntimeRouteDriftReport } from "./runtime-drift-report";
+import {
+  buildImprovementScanEvidenceContract,
+  type ImprovementScanEvidenceContract,
+} from "./improvement-scan-evidence";
 
 export interface AnalystModelRoutingSummary {
   policySource: string;
@@ -67,7 +71,7 @@ export interface RetainedExcludedRouteClassSummary {
 }
 
 export interface AnalystRuntimeDriftSummary {
-  dispatcherHeartbeat: Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt">;
+  dispatcherHeartbeat: Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt" | "version" | "buildHash">;
   routeDrift: RuntimeRouteDriftReport;
 }
 
@@ -76,6 +80,7 @@ export interface AnalystTelemetrySummary {
   hiveId: string;
   runtimeDrift: AnalystRuntimeDriftSummary;
   modelRouting: AnalystModelRoutingSummary;
+  improvementScanEvidence: ImprovementScanEvidenceContract;
   notices: string[];
 }
 
@@ -104,10 +109,24 @@ export async function buildAnalystTelemetrySummary(
         state: heartbeat.state,
         ageMs: heartbeat.ageMs,
         lastHeartbeatAt: heartbeat.lastHeartbeatAt,
+        version: heartbeat.version,
+        buildHash: heartbeat.buildHash,
       },
       routeDrift,
     },
     modelRouting,
+    improvementScanEvidence: buildImprovementScanEvidenceContract({
+      runtimeBuildHash: heartbeat.buildHash,
+      checkedAt: now.toISOString(),
+      authoritativeProbeSet: [
+        {
+          endpoint: "/api/analyst-telemetry?hiveId=...",
+          checkedAt: now.toISOString(),
+          buildHash: heartbeat.buildHash,
+          authoritativeFor: ["readiness", "model_routing", "runtime_drift"],
+        },
+      ],
+    }),
     notices: buildAnalystTelemetryNotices(routeDrift, modelRouting),
   };
 }
