@@ -953,6 +953,13 @@
       "when": 1781563740000,
       "tag": "0138_marketing_connector_metric_snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 137,
+      "version": "7",
+      "when": 1782176400000,
+      "tag": "0139_business_os_profiles",
+      "breakpoints": true
     }
   ]
 }

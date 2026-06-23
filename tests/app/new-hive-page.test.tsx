@@ -473,6 +473,41 @@ describe("NewHiveWizard", () => {
     });
   });
 
+  it("serialises Business OS mode from the business hive setup choice", async () => {
+    render(<NewHiveWizard />);
+
+    await fillRequiredHiveFields();
+    expect(screen.getByRole("group", { name: "Business OS mode" })).toBeTruthy();
+    expect(screen.getByText("New business — set up a new operating model")).toBeTruthy();
+    expect(screen.getByText("Existing business — audit and improve current operations")).toBeTruthy();
+    fireEvent.click(screen.getByText("Existing business — audit and improve current operations"));
+
+    await advanceFromHiveDetailsToRuntime();
+    await advanceFromRuntimeToEa();
+    fireEvent.click(screen.getByRole("button", { name: "I'll do this later" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Connect services" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
+
+    await waitFor(() => {
+      const setupCall = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input]) => input === "/api/hives/setup");
+      expect(setupCall).toBeTruthy();
+      const body = JSON.parse(setupCall?.[1]?.body as string);
+      expect(body.businessOs).toEqual({
+        mode: "existing_business",
+        profile: {
+          businessName: "Test Hive",
+          summary: "",
+          sourceProfile: { setupWizard: true },
+        },
+      });
+    });
+  });
+
   it("allows EA setup to be deferred without submitting an EA connector", async () => {
     render(<NewHiveWizard />);
 
