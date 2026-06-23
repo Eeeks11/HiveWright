@@ -192,7 +192,7 @@ export function buildAnalystModelRoutingSummary(
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
     if (model.probeMode === "on_demand") onDemandProbeRoutes += 1;
-    if (model.probeFreshness === "due" && model.probeMode === "automatic" && enabled && !quarantined && !excluded) {
+    if (activeRoutePool && model.probeFreshness === "due" && model.probeMode === "automatic" && !quarantined) {
       recoveryEligibleRoutes += 1;
     }
     if (model.status === "unknown" && model.probeMode === "automatic" && enabled && !quarantined && !excluded) {

@@ -455,6 +455,73 @@ describe("analyst telemetry summary", () => {
     });
   });
 
+  it("scopes stale recovery eligibility to the active route pool", () => {
+    const view = routingView();
+    view.models = [
+      {
+        ...view.models[2],
+        id: "route-disabled-policy-due",
+        routeKey: "openai:codex:disabled-policy-due-model",
+        provider: "openai",
+        adapterType: "codex",
+        model: "disabled-policy-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-missing-policy-due",
+        routeKey: "anthropic:claude:missing-policy-due-model",
+        provider: "anthropic",
+        adapterType: "claude",
+        model: "missing-policy-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+    ];
+    view.policy.candidates = [
+      {
+        adapterType: "codex",
+        model: "disabled-policy-due-model",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "included",
+          routeKey: "openai:codex:disabled-policy-due-model",
+          reason: "Route is currently disabled by policy.",
+        },
+      },
+    ];
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.activeRoutePool).toMatchObject({
+      routes: 0,
+      providerCounts: {},
+      adapterCounts: {},
+    });
+    expect(summary.staleRoutes).toBe(0);
+    expect(summary.staleRouteRecovery).toMatchObject({
+      staleRoutes: 0,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 0,
+      recoveryBlockedRoutes: 0,
+    });
+  });
+
   it("combines runtime drift and model routing counts for one hive", async () => {
     const sql = vi.fn();
     const summary = await buildAnalystTelemetrySummary({
