@@ -94,9 +94,10 @@ export function validateImprovementScanPublicationEvidence(
       continue;
     }
 
+    let buildMatchedEvidence: ImprovementScanEndpointEvidence[] = [];
     if (input.publicationBuildHash) {
-      const freshBuildEvidence = matchingEvidence.filter((evidence) => evidence.buildHash === input.publicationBuildHash);
-      if (freshBuildEvidence.length === 0) {
+      buildMatchedEvidence = matchingEvidence.filter((evidence) => evidence.buildHash === input.publicationBuildHash);
+      if (buildMatchedEvidence.length === 0) {
         block(finding.findingId, `no authoritative ${finding.endpointFamily} evidence matches publication buildHash ${input.publicationBuildHash}`);
         continue;
       }
@@ -106,13 +107,13 @@ export function validateImprovementScanPublicationEvidence(
     }
 
     if (READINESS_ROUTING_FAMILIES.has(finding.endpointFamily)) {
-      const usesAnalystTelemetry = matchingEvidence.some((evidence) => isAnalystTelemetryEndpoint(evidence.endpoint));
+      const usesAnalystTelemetry = buildMatchedEvidence.some((evidence) => isAnalystTelemetryEndpoint(evidence.endpoint));
       if (!usesAnalystTelemetry) {
         block(finding.findingId, `${finding.endpointFamily} findings must include /api/analyst-telemetry?hiveId=... as the primary hive-scoped source`);
       }
     }
 
-    const missingTimestamp = matchingEvidence.some((evidence) => !isIsoTimestamp(evidence.checkedAt));
+    const missingTimestamp = buildMatchedEvidence.some((evidence) => !isIsoTimestamp(evidence.checkedAt));
     if (missingTimestamp) {
       block(finding.findingId, "authoritative endpoint evidence is missing an ISO checkedAt timestamp");
     }

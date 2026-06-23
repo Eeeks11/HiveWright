@@ -78,6 +78,34 @@ describe("improvement scan evidence gate", () => {
     expect(result.reasons.join("\n")).toContain("/api/analyst-telemetry?hiveId=...");
   });
 
+  it("requires analyst telemetry evidence from the matching publication build", () => {
+    const finding: ImprovementScanPromotedFindingEvidence = {
+      findingId: "mixed-stale-telemetry",
+      actions: ["route_issue"],
+      endpointFamily: "model_routing",
+      endpointEvidence: [
+        {
+          endpoint: "/api/readiness?hiveId=11111111-1111-4111-8111-111111111111",
+          checkedAt: "2026-06-22T23:22:50.349Z",
+          buildHash: "build-current",
+          authoritativeFor: ["model_routing"],
+        },
+        {
+          ...ANALYST_TELEMETRY_EVIDENCE,
+          buildHash: "build-before-refresh",
+        },
+      ],
+    };
+
+    const result = validateImprovementScanPublicationEvidence({
+      publicationBuildHash: "build-current",
+      promotedFindings: [finding],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons.join("\n")).toContain("/api/analyst-telemetry?hiveId=...");
+  });
+
   it("documents the required evidence fields for generated scan artifacts", () => {
     const contract = buildImprovementScanEvidenceContract({
       runtimeBuildHash: "build-current",

@@ -8,6 +8,14 @@ import type {
   TerminalStatus,
 } from "@/closeout/registry";
 import { resolveTerminalDispositionCompatibility } from "@/closeout/registry";
+import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
+import {
+  validateImprovementScanPublicationEvidence,
+  type ImprovementScanEndpointEvidence,
+  type ImprovementScanEndpointFamily,
+  type ImprovementScanFindingAction,
+  type ImprovementScanPromotedFindingEvidence,
+} from "@/operations/improvement-scan-evidence";
 
 export const REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND = "reference_only_output";
 export const REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND = "reference_only_wrapper_superseded";
@@ -99,6 +107,7 @@ export interface ReferenceOnlyTerminalDispositionResult {
   disposed: number;
   wrappersScanned: number;
   wrappersSuperseded: number;
+  improvementScansBlockedByEvidenceGate: number;
 }
 
 export function hasReferenceOnlyTerminalDisposition(value: unknown): boolean {
@@ -153,7 +162,7 @@ export function isGovernedImprovementScanTerminalCandidateText(input: {
 export async function reconcileReferenceOnlyTerminalDispositions(
   sql: Sql,
   hiveId: string,
-  input: { now?: Date; limit?: number } = {},
+  input: { now?: Date; limit?: number; publicationBuildHash?: string | null } = {},
 ): Promise<ReferenceOnlyTerminalDispositionResult> {
   const now = input.now ?? new Date();
   const candidates = await loadReferenceOnlyCandidates(sql, hiveId, input.limit ?? 100);
@@ -162,7 +171,9 @@ export async function reconcileReferenceOnlyTerminalDispositions(
     disposed: 0,
     wrappersScanned: 0,
     wrappersSuperseded: 0,
+    improvementScansBlockedByEvidenceGate: 0,
   };
+  let currentPublicationBuildHash: string | null | undefined = input.publicationBuildHash;
 
   for (const task of candidates) {
     if (isGovernedImprovementScanTerminalCandidateText({
@@ -171,7 +182,19 @@ export async function reconcileReferenceOnlyTerminalDispositions(
       resultSummary: task.result_summary,
       workProductText: task.work_product_text,
     })) {
-      const disposition = buildImprovementScanBacklogDisposition(task, now);
+      if (currentPublicationBuildHash === undefined) {
+        currentPublicationBuildHash = (await loadDispatcherHeartbeatStatus(sql, { now })).buildHash;
+      }
+      const evidenceGate = validateImprovementScanPublicationEvidence({
+        publicationBuildHash: currentPublicationBuildHash,
+        promotedFindings: extractImprovementScanPromotedFindings(task),
+      });
+      if (!evidenceGate.ok) {
+        result.improvementScansBlockedByEvidenceGate += 1;
+        continue;
+      }
+
+      const disposition = buildImprovementScanBacklogDisposition(task, now, evidenceGate);
       await persistReferenceOnlyDisposition(sql, task.id, disposition);
       result.disposed += 1;
       continue;
@@ -254,6 +277,7 @@ async function loadReferenceOnlyCandidates(
 function buildImprovementScanBacklogDisposition(
   task: ReferenceOnlyCandidateRow,
   now: Date,
+  evidenceGate: ReturnType<typeof validateImprovementScanPublicationEvidence>,
 ) {
   const compatibility = resolveTerminalDispositionCompatibility(IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND);
   const text = [task.title, task.brief, task.result_summary, task.work_product_text]
@@ -301,6 +325,11 @@ function buildImprovementScanBacklogDisposition(
       workProductCount: task.work_product_ids.length,
       githubRefs,
       disposition: githubRefs.length > 0 ? "already_routed" : "explicit_no_action",
+      publicationEvidenceGate: {
+        ok: evidenceGate.ok,
+        blockedFindingIds: evidenceGate.blockedFindingIds,
+        reasons: evidenceGate.reasons,
+      },
     },
     safeguards: {
       noOpenOwnerAction: true,
@@ -309,6 +338,116 @@ function buildImprovementScanBacklogDisposition(
       durableEvidencePresent: true,
     },
   };
+}
+
+function extractImprovementScanPromotedFindings(
+  task: ReferenceOnlyCandidateRow,
+): ImprovementScanPromotedFindingEvidence[] {
+  const text = [task.title, task.brief, task.result_summary, task.work_product_text]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+
+  const candidates = extractJsonCandidates(text);
+  for (const candidate of candidates) {
+    const findings = coercePromotedFindings(candidate);
+    if (findings.length > 0) return findings;
+  }
+  return [];
+}
+
+function extractJsonCandidates(text: string): unknown[] {
+  const candidates: unknown[] = [];
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    const parsed = parseJson(match[1]);
+    if (parsed !== undefined) candidates.push(parsed);
+  }
+
+  const markerMatch = text.match(/improvementScanEvidence\s*[:=]\s*(\{[\s\S]*\}|\[[\s\S]*\])/i);
+  if (markerMatch) {
+    const parsed = parseJson(markerMatch[1]);
+    if (parsed !== undefined) candidates.push(parsed);
+  }
+
+  const trimmed = text.trim();
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    const parsed = parseJson(trimmed);
+    if (parsed !== undefined) candidates.push(parsed);
+  }
+  return candidates;
+}
+
+function parseJson(input: string): unknown | undefined {
+  try {
+    return JSON.parse(input);
+  } catch {
+    return undefined;
+  }
+}
+
+function coercePromotedFindings(value: unknown): ImprovementScanPromotedFindingEvidence[] {
+  if (Array.isArray(value)) return value.flatMap(coercePromotedFinding);
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const promotedFindings = record.promotedFindings ?? record.findings;
+  if (Array.isArray(promotedFindings)) return promotedFindings.flatMap(coercePromotedFinding);
+  if (record.improvementScanEvidence && typeof record.improvementScanEvidence === "object") {
+    return coercePromotedFindings(record.improvementScanEvidence);
+  }
+  return coercePromotedFinding(record);
+}
+
+function coercePromotedFinding(value: unknown): ImprovementScanPromotedFindingEvidence[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const findingId = typeof record.findingId === "string" ? record.findingId : typeof record.id === "string" ? record.id : null;
+  const endpointFamily = isEndpointFamily(record.endpointFamily) ? record.endpointFamily : null;
+  const actions = Array.isArray(record.actions)
+    ? record.actions.filter(isFindingAction)
+    : typeof record.action === "string" && isFindingAction(record.action)
+      ? [record.action]
+      : [];
+  const rawEvidence = Array.isArray(record.endpointEvidence)
+    ? record.endpointEvidence
+    : Array.isArray(record.evidence)
+      ? record.evidence
+      : [];
+  const endpointEvidence = rawEvidence.flatMap(coerceEndpointEvidence);
+
+  if (!findingId || !endpointFamily || actions.length === 0 || endpointEvidence.length === 0) return [];
+  return [{ findingId, actions, endpointFamily, endpointEvidence }];
+}
+
+function coerceEndpointEvidence(value: unknown): ImprovementScanEndpointEvidence[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  if (typeof record.endpoint !== "string" || typeof record.checkedAt !== "string") return [];
+  if (record.buildHash !== null && typeof record.buildHash !== "string") return [];
+  const authoritativeFor = Array.isArray(record.authoritativeFor)
+    ? record.authoritativeFor.filter(isEndpointFamily)
+    : [];
+  if (authoritativeFor.length === 0) return [];
+  return [{
+    endpoint: record.endpoint,
+    checkedAt: record.checkedAt,
+    buildHash: record.buildHash,
+    authoritativeFor,
+  }];
+}
+
+function isEndpointFamily(value: unknown): value is ImprovementScanEndpointFamily {
+  return typeof value === "string" && [
+    "readiness",
+    "model_routing",
+    "runtime_drift",
+    "setup_runtime",
+    "security",
+    "performance",
+    "other",
+  ].includes(value);
+}
+
+function isFindingAction(value: unknown): value is ImprovementScanFindingAction {
+  return typeof value === "string" && ["publish", "route_issue", "reopen_issue", "close_issue"].includes(value);
 }
 
 function buildReferenceOnlyTerminalDisposition(

@@ -12,6 +12,39 @@ import {
 const HIVE_ID = "11111111-1111-1111-1111-111111111111";
 const OTHER_HIVE_ID = "11111111-1111-1111-1111-111111111112";
 
+function improvementScanEvidenceBlock(input: {
+  findingId?: string;
+  action?: "publish" | "route_issue" | "reopen_issue" | "close_issue";
+  endpointFamily?: "readiness" | "model_routing" | "runtime_drift" | "other";
+  endpoint?: string;
+  buildHash?: string;
+  checkedAt?: string;
+  authoritativeFor?: Array<"readiness" | "model_routing" | "runtime_drift" | "other">;
+} = {}): string {
+  return [
+    "Improvement scan evidence:",
+    "```json",
+    JSON.stringify({
+      promotedFindings: [
+        {
+          findingId: input.findingId ?? "scan-finding",
+          actions: [input.action ?? "route_issue"],
+          endpointFamily: input.endpointFamily ?? "model_routing",
+          endpointEvidence: [
+            {
+              endpoint: input.endpoint ?? "/api/analyst-telemetry?hiveId=11111111-1111-1111-1111-111111111111",
+              checkedAt: input.checkedAt ?? "2026-06-17T00:00:00.000Z",
+              buildHash: input.buildHash ?? "build-current",
+              authoritativeFor: input.authoritativeFor ?? ["readiness", "model_routing", "runtime_drift"],
+            },
+          ],
+        },
+      ],
+    }),
+    "```",
+  ].join("\n");
+}
+
 /**
  * Seeds the role_templates rows tasks.assigned_to references. These are the
  * roles exercised across the supervisor detector tests (consulting +
@@ -2158,8 +2191,14 @@ describe.sequential("reference-only terminal dispositions", () => {
     await sql`
       INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
       VALUES
-        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to backlog item #107.', 'Improvement scan route', 'reference_report'),
-        (${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', 'No-action terminal closeout.', 'Improvement scan no-action closeout', 'reference_report')
+        (${routedTaskId}, ${HIVE_ID}, 'performance-analyst', ${`Already-routed to backlog item #107.\n${improvementScanEvidenceBlock({ findingId: "already-routed-107" })}`}, 'Improvement scan route', 'reference_report'),
+        (${noActionTaskId}, ${HIVE_ID}, 'performance-analyst', ${`No-action terminal closeout.\n${improvementScanEvidenceBlock({
+          findingId: "no-action-closeout",
+          action: "publish",
+          endpointFamily: "other",
+          authoritativeFor: ["other"],
+          endpoint: "/api/analyst-telemetry?hiveId=11111111-1111-1111-1111-111111111111",
+        })}`}, 'Improvement scan no-action closeout', 'reference_report')
     `;
 
     const before = await scanHive(sql, HIVE_ID);
@@ -2168,6 +2207,7 @@ describe.sequential("reference-only terminal dispositions", () => {
 
     const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
       now: new Date("2026-06-17T00:00:00.000Z"),
+      publicationBuildHash: "build-current",
     });
     expect(reconciled.disposed).toBe(2);
 
@@ -2201,9 +2241,10 @@ describe.sequential("reference-only terminal dispositions", () => {
     }
   });
 
-  it("does not terminalize improvement scans when evidence is missing or no route/disposition exists", async () => {
+  it("does not terminalize improvement scans when evidence is missing, stale, or no route/disposition exists", async () => {
     const missingEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3512";
     const unresolvedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3513";
+    const staleEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3514";
     await sql`
       INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
       VALUES
@@ -2220,19 +2261,31 @@ describe.sequential("reference-only terminal dispositions", () => {
           'Scheduled improvement scan found a possible implementation follow-up but no downstream tracker or accepted closure.',
           ${"Implement a follow-up later, but no GitHub tracker or accepted closure is named. ".repeat(4)},
           NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${staleEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: stale routed evidence',
+          'Scheduled improvement scan says already-routed to issue #108 and includes stale endpoint evidence.',
+          'Already-routed to issue #108 with stale build evidence.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
         )
     `;
     await sql`
       INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
-      VALUES (${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Needs routing before closeout.', 'Unresolved scan output', 'reference_report')
+      VALUES
+        (${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Needs routing before closeout.', 'Unresolved scan output', 'reference_report'),
+        (${staleEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', ${`Already-routed to issue #108.\n${improvementScanEvidenceBlock({ findingId: "stale-routed-108", buildHash: "build-before-refresh" })}`}, 'Stale improvement scan evidence', 'reference_report')
     `;
 
-    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
+      publicationBuildHash: "build-current",
+    });
     expect(reconciled.disposed).toBe(0);
 
     const report = await scanHive(sql, HIVE_ID);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${missingEvidenceTaskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${unresolvedTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${staleEvidenceTaskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `orphan_output:${unresolvedTaskId}`)).toBe(true);
   });
 
