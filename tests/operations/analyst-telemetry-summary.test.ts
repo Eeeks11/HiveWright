@@ -151,10 +151,10 @@ describe("analyst telemetry summary", () => {
       totalRoutes: 3,
       routableRoutes: 1,
       disabledRoutes: 1,
-      blockedRoutes: 2,
-      unhealthyRoutes: 1,
+      blockedRoutes: 1,
+      unhealthyRoutes: 0,
       unknownHealthRoutes: 1,
-      quarantinedRoutes: 1,
+      quarantinedRoutes: 0,
       staleRoutes: 0,
       freshRoutes: 1,
       localRoutes: 1,
@@ -216,7 +216,7 @@ describe("analyst telemetry summary", () => {
       recoveryEligibleRoutes: 1,
       recoveryBlockedRoutes: 1,
     });
-    expect(summary.quarantinedRoutes).toBe(2);
+    expect(summary.quarantinedRoutes).toBe(0);
   });
 
   it("separates excluded automatic unknown-health inventory from active recovery backlog", () => {
@@ -325,13 +325,29 @@ describe("analyst telemetry summary", () => {
       adapterCounts: { claude: 1 },
     });
     expect(summary.excludedRouteInventory).toMatchObject({
-      excludedRoutes: 2,
+      excludedRoutes: 0,
+      unknownHealthRoutes: 0,
+      automaticProbeRoutes: 0,
+      onDemandProbeRoutes: 0,
+      reasonCounts: {},
+    });
+    expect(summary.retainedExcludedRouteInventory).toMatchObject({
+      routes: 2,
       unknownHealthRoutes: 2,
       automaticProbeRoutes: 2,
       onDemandProbeRoutes: 0,
-      reasonCounts: {
+      classCounts: {
         codex_scope_or_entitlement_failure: 2,
       },
+      classes: [
+        expect.objectContaining({
+          class: "codex_scope_or_entitlement_failure",
+          routes: 2,
+          rationale: expect.stringContaining("not intended active capacity"),
+          supportPosture: expect.stringContaining("not retry as ordinary live-capacity recovery debt"),
+          owningWorkflow: expect.stringContaining("issue #154"),
+        }),
+      ],
     });
   });
 
@@ -401,10 +417,10 @@ describe("analyst telemetry summary", () => {
     const summary = buildAnalystModelRoutingSummary(view);
 
     expect(summary.staleRouteRecovery).toMatchObject({
-      staleRoutes: 2,
+      staleRoutes: 1,
       automaticProbeRoutes: 2,
       recoveryEligibleRoutes: 1,
-      recoveryBlockedRoutes: 1,
+      recoveryBlockedRoutes: 0,
     });
     expect(summary.unknownHealthRecovery).toMatchObject({
       unknownHealthRoutes: 1,
@@ -418,12 +434,91 @@ describe("analyst telemetry summary", () => {
       adapterCounts: { claude: 1 },
     });
     expect(summary.excludedRouteInventory).toMatchObject({
-      excludedRoutes: 1,
+      excludedRoutes: 0,
+      unknownHealthRoutes: 0,
+      automaticProbeRoutes: 0,
+      reasonCounts: {},
+    });
+    expect(summary.retainedExcludedRouteInventory).toMatchObject({
+      routes: 1,
       unknownHealthRoutes: 1,
       automaticProbeRoutes: 1,
-      reasonCounts: {
+      classCounts: {
         codex_scope_or_entitlement_failure: 1,
       },
+      classes: [
+        expect.objectContaining({
+          class: "codex_scope_or_entitlement_failure",
+          owningWorkflow: expect.stringContaining("issue #154"),
+        }),
+      ],
+    });
+  });
+
+  it("scopes stale recovery eligibility to the active route pool", () => {
+    const view = routingView();
+    view.models = [
+      {
+        ...view.models[2],
+        id: "route-disabled-policy-due",
+        routeKey: "openai:codex:disabled-policy-due-model",
+        provider: "openai",
+        adapterType: "codex",
+        model: "disabled-policy-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+      {
+        ...view.models[2],
+        id: "route-missing-policy-due",
+        routeKey: "anthropic:claude:missing-policy-due-model",
+        provider: "anthropic",
+        adapterType: "claude",
+        model: "missing-policy-due-model",
+        status: "unknown",
+        failureClass: null,
+        lastFailureReason: null,
+        failureMessage: null,
+        probeFreshness: "due",
+        probeMode: "automatic",
+        hiveModelEnabled: true,
+        routingEnabled: true,
+      },
+    ];
+    view.policy.candidates = [
+      {
+        adapterType: "codex",
+        model: "disabled-policy-due-model",
+        enabled: false,
+        status: "disabled",
+        canonicalRouteSet: {
+          source: "configured_route_inventory",
+          membership: "included",
+          routeKey: "openai:codex:disabled-policy-due-model",
+          reason: "Route is currently disabled by policy.",
+        },
+      },
+    ];
+
+    const summary = buildAnalystModelRoutingSummary(view);
+
+    expect(summary.activeRoutePool).toMatchObject({
+      routes: 0,
+      providerCounts: {},
+      adapterCounts: {},
+    });
+    expect(summary.staleRoutes).toBe(0);
+    expect(summary.staleRouteRecovery).toMatchObject({
+      staleRoutes: 0,
+      automaticProbeRoutes: 2,
+      recoveryEligibleRoutes: 0,
+      recoveryBlockedRoutes: 0,
     });
   });
 
@@ -469,7 +564,7 @@ describe("analyst telemetry summary", () => {
       modelRouting: {
         totalRoutes: 3,
         routableRoutes: 1,
-        blockedRoutes: 2,
+        blockedRoutes: 1,
         unknownHealthRecovery: {
           unknownHealthRoutes: 1,
           automaticProbeRoutes: 2,
