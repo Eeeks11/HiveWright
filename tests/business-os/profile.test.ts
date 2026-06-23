@@ -42,6 +42,45 @@ function buildRequest(slug: string, overrides: Partial<HiveSetupRequest> = {}): 
   };
 }
 
+function buildNewBusinessRequest(slug: string): HiveSetupRequest {
+  return buildRequest(slug, {
+    hive: {
+      name: "Launch Co",
+      slug,
+      type: "digital",
+      kind: "business",
+      description: "Launch a local services business",
+      mission: "Create a launch-ready operating model with governed ops",
+    },
+    businessOs: {
+      mode: "new_business",
+      profile: {
+        businessName: "Launch Co",
+        industry: "local services",
+        stage: "pre_launch",
+        ownerGoals: ["Validate the first offer within 30 days"],
+        constraints: ["Small AI spend budget", "No public launch actions without approval"],
+        aiSpendBudget: { window: "monthly", capCents: 15000 },
+      },
+      setup: {
+        idea: "A weekend maintenance service for busy property owners",
+        customerSegments: ["Time-poor property owners"],
+        problemStatements: ["Small maintenance jobs do not get handled quickly"],
+        offers: ["Monthly maintenance checkup"],
+        pricingModel: { model: "subscription", startingPriceCents: 19900 },
+        marketingModel: { channels: ["local referral partners", "Google Business Profile"] },
+        salesModel: { motion: "owner-led consult call" },
+        deliveryModel: { fulfilment: "scheduled local service visits" },
+        adminFinanceModel: { bookkeeping: "set up separate bookkeeping and payment workflow" },
+        legalComplianceChecklist: ["Confirm licensing and insurance requirements"],
+        toolStack: ["booking calendar", "invoicing", "CRM"],
+        rolesAndSops: ["intake SOP", "site visit checklist"],
+      },
+    },
+    safetyPreset: "owner_review_first",
+  });
+}
+
 async function insertHive(slug: string, kind = "business") {
   const [hive] = await sql<{ id: string }[]>`
     INSERT INTO hives (name, slug, type, kind, operating_mode)
@@ -157,6 +196,76 @@ describe("Business OS profile foundation", () => {
       businessOs: expect.objectContaining({ industry: "professional services" }),
     });
     expect(serializeOperatingProfileForPrompt(operatingProfile!)).toContain("businessMode: existing_business");
+  });
+
+  it("turns a new-business setup intake into structured operating state and an action queue", async () => {
+    const fixture = createFixtureNamespace("business-os-new-setup");
+    const slug = fixture.slug("new-business-setup");
+    const result = await runHiveSetup(sql, buildNewBusinessRequest(slug));
+
+    const [setupProfile] = await sql<{
+      idea: string;
+      customer_segments: string[];
+      offers: string[];
+      pricing_model: Record<string, unknown>;
+    }[]>`
+      SELECT idea, customer_segments, offers, pricing_model
+      FROM business_setup_profiles
+      WHERE hive_id = ${result.id}::uuid
+    `;
+
+    expect(setupProfile).toMatchObject({
+      idea: "A weekend maintenance service for busy property owners",
+      customer_segments: ["Time-poor property owners"],
+      offers: ["Monthly maintenance checkup"],
+      pricing_model: { model: "subscription", startingPriceCents: 19900 },
+    });
+
+    const readinessRows = await sql<{ system_key: string; source_kind: string; readiness_score: number; confidence: string }[]>`
+      SELECT system_key, source_kind, readiness_score, confidence
+      FROM business_system_readiness
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY system_key ASC
+    `;
+    expect(readinessRows.length).toBeGreaterThanOrEqual(10);
+    expect(readinessRows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ system_key: "customer_market", source_kind: "setup" }),
+      expect.objectContaining({ system_key: "offer_pricing", source_kind: "setup" }),
+      expect.objectContaining({ system_key: "ai_governance", source_kind: "setup" }),
+    ]));
+
+    const gaps = await sql<{ title: string; gap_type: string; severity: string; status: string }[]>`
+      SELECT title, gap_type, severity, status
+      FROM business_gaps
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY title ASC
+    `;
+    expect(gaps.length).toBeGreaterThanOrEqual(5);
+    expect(gaps.every((gap) => gap.status === "open")).toBe(true);
+
+    const actions = await sql<{
+      title: string;
+      status: string;
+      approval_required: boolean;
+      risk_level: string;
+      expected_outcome: string | null;
+      measurement_plan: Record<string, unknown>;
+    }[]>`
+      SELECT title, status, approval_required, risk_level, expected_outcome, measurement_plan
+      FROM business_actions
+      WHERE hive_id = ${result.id}::uuid
+      ORDER BY priority DESC, title ASC
+    `;
+    expect(actions.length).toBeGreaterThanOrEqual(5);
+    expect(actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: expect.stringMatching(/validate/i), status: "queued", approval_required: false }),
+      expect.objectContaining({ title: expect.stringMatching(/launch approval/i), status: "awaiting_approval", approval_required: true, risk_level: "high" }),
+    ]));
+    expect(actions.every((action) => action.expected_outcome && Object.keys(action.measurement_plan).length > 0)).toBe(true);
+
+    const unsafeActions = actions.filter((action) => action.risk_level === "high");
+    expect(unsafeActions.length).toBeGreaterThan(0);
+    expect(unsafeActions.every((action) => action.approval_required && action.status === "awaiting_approval")).toBe(true);
   });
 
   it("does not create Business OS state for non-business hives", async () => {

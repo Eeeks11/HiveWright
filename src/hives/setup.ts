@@ -1,7 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
-import { businessOsKindProfile, upsertBusinessOsProfile, type BusinessOsProfileInput } from "@/business-os/profile";
+import {
+  businessOsKindProfile,
+  createNewBusinessSetupState,
+  upsertBusinessOsProfile,
+  type BusinessOsProfileInput,
+  type NewBusinessSetupInput,
+} from "@/business-os/profile";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { storeCredential } from "@/credentials/manager";
@@ -62,6 +68,7 @@ export type HiveSetupRequest = {
   businessOs?: {
     mode?: BusinessOsProfileInput["mode"];
     profile?: Omit<BusinessOsProfileInput, "mode">;
+    setup?: NewBusinessSetupInput;
   };
   roleOverrides?: Record<string, RoleOverride>;
   connectors?: ConnectorSetup[];
@@ -633,6 +640,18 @@ export async function runHiveSetup(
           },
         });
         businessKindProfile = businessOsKindProfile(businessProfile);
+        if (businessProfile.businessMode === "new_business") {
+          await createNewBusinessSetupState(
+            tx,
+            hiveId,
+            businessProfile,
+            body.businessOs?.setup,
+            {
+              mode: body.businessOs?.mode,
+              ...(body.businessOs?.profile ?? {}),
+            },
+          );
+        }
       }
 
       const initialGoal = body.initialGoal?.trim() || defaultInitialGoalForHiveKind(hiveKind, hiveRow.name as string);

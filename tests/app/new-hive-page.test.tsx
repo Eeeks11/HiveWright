@@ -473,6 +473,46 @@ describe("NewHiveWizard", () => {
     });
   });
 
+  it("serialises guided new-business setup intake into the setup payload", async () => {
+    render(<NewHiveWizard />);
+
+    await fillRequiredHiveFields();
+    expect(screen.getByLabelText("New-business setup intake")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Business idea or opportunity"), { target: { value: "Launch a local maintenance service" } });
+    fireEvent.change(screen.getByLabelText("Target customers"), { target: { value: "Time-poor landlords\nHoliday-home owners" } });
+    fireEvent.change(screen.getByLabelText("Offer hypotheses"), { target: { value: "Monthly property checkup" } });
+    fireEvent.change(screen.getByLabelText("Marketing channels to test"), { target: { value: "Referral partners\nGoogle Business Profile" } });
+    fireEvent.change(screen.getByLabelText("Legal/admin/risk checklist"), { target: { value: "Confirm insurance\nCheck licensing" } });
+
+    await advanceFromHiveDetailsToRuntime();
+    await advanceFromRuntimeToEa();
+    fireEvent.click(screen.getByRole("button", { name: "I'll do this later" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Connect services" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Projects" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Dashboard handoff" })).toBeTruthy());
+    expect(screen.getByText("Output: structured setup profile, readiness rows, setup gaps, and approval-gated actions.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create Hive" }));
+
+    await waitFor(() => {
+      const setupCall = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(([input]) => input === "/api/hives/setup");
+      expect(setupCall).toBeTruthy();
+      const body = JSON.parse(setupCall?.[1]?.body as string);
+      expect(body.businessOs).toMatchObject({
+        mode: "new_business",
+        setup: {
+          idea: "Launch a local maintenance service",
+          customerSegments: ["Time-poor landlords", "Holiday-home owners"],
+          offers: ["Monthly property checkup"],
+          marketingModel: { channels: ["Referral partners", "Google Business Profile"] },
+          legalComplianceChecklist: ["Confirm insurance", "Check licensing"],
+        },
+      });
+    });
+  });
+
   it("serialises Business OS mode from the business hive setup choice", async () => {
     render(<NewHiveWizard />);
 

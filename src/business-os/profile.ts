@@ -18,6 +18,22 @@ export type BusinessOsProfileInput = {
   sourceProfile?: unknown;
 };
 
+export type NewBusinessSetupInput = {
+  idea?: string | null;
+  customerSegments?: unknown;
+  problemStatements?: unknown;
+  offers?: unknown;
+  pricingModel?: unknown;
+  brandPositioning?: unknown;
+  salesModel?: unknown;
+  marketingModel?: unknown;
+  deliveryModel?: unknown;
+  adminFinanceModel?: unknown;
+  legalComplianceChecklist?: unknown;
+  toolStack?: unknown;
+  rolesAndSops?: unknown;
+};
+
 export type BusinessOsProfile = {
   id: string;
   hiveId: string;
@@ -51,6 +67,35 @@ type BusinessOsProfileRow = {
   ai_spend_budget: unknown;
   autonomy_policy: unknown;
   source_profile: unknown;
+};
+
+type ReadinessSeed = {
+  systemKey: string;
+  systemLabel: string;
+  score: number;
+  maturityLevel: "missing" | "ad_hoc" | "defined";
+  confidence: "low" | "medium";
+  summary: string;
+};
+
+type GapSeed = {
+  systemKey: string;
+  gapType: string;
+  severity: "low" | "medium" | "high" | "critical";
+  title: string;
+  description: string;
+  recommendationType: string;
+  recommendationTitle: string;
+  rationale: string;
+  expectedOutcome: string;
+  actionType: string;
+  actionTitle: string;
+  actionBrief: string;
+  actionStatus: "queued" | "awaiting_approval";
+  priority: number;
+  riskLevel: "low" | "medium" | "high";
+  approvalRequired: boolean;
+  measurementPlan: Record<string, unknown>;
 };
 
 const businessModeSet = new Set<string>(BUSINESS_MODES);
@@ -98,6 +143,10 @@ function normalizeObject(value: unknown): Record<string, unknown> {
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
+function hasObjectContent(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length > 0;
+}
+
 function toJsonValue(value: unknown): JSONValue {
   return JSON.parse(JSON.stringify(value ?? null)) as JSONValue;
 }
@@ -118,6 +167,163 @@ function rowToProfile(row: BusinessOsProfileRow): BusinessOsProfile {
     autonomyPolicy: normalizeObject(row.autonomy_policy),
     sourceProfile: normalizeObject(row.source_profile),
   };
+}
+
+function normalizeSetupInput(input: NewBusinessSetupInput | undefined, profile: BusinessOsProfileInput): Required<NewBusinessSetupInput> {
+  const idea = trimText(input?.idea) ?? trimText(profile.summary) ?? trimText(profile.businessName) ?? "New business idea to validate";
+  return {
+    idea,
+    customerSegments: normalizeTextList(input?.customerSegments),
+    problemStatements: normalizeTextList(input?.problemStatements),
+    offers: normalizeTextList(input?.offers),
+    pricingModel: normalizeObject(input?.pricingModel),
+    brandPositioning: normalizeObject(input?.brandPositioning),
+    salesModel: normalizeObject(input?.salesModel),
+    marketingModel: normalizeObject(input?.marketingModel),
+    deliveryModel: normalizeObject(input?.deliveryModel),
+    adminFinanceModel: normalizeObject(input?.adminFinanceModel),
+    legalComplianceChecklist: normalizeTextList(input?.legalComplianceChecklist),
+    toolStack: normalizeTextList(input?.toolStack),
+    rolesAndSops: normalizeTextList(input?.rolesAndSops),
+  } satisfies Required<NewBusinessSetupInput> & { idea: string };
+}
+
+function readinessSeeds(setup: Required<NewBusinessSetupInput>): ReadinessSeed[] {
+  const listScore = (items: unknown, strong = 55) => normalizeTextList(items).length > 0 ? strong : 15;
+  const objectScore = (value: unknown, strong = 55) => hasObjectContent(normalizeObject(value)) ? strong : 15;
+  return [
+    { systemKey: "strategy_governance", systemLabel: "Strategy and governance", score: 35, maturityLevel: "ad_hoc", confidence: "low", summary: "Initial business idea captured; governance remains owner-reviewed." },
+    { systemKey: "customer_market", systemLabel: "Customer and market", score: listScore(setup.customerSegments, 60), maturityLevel: normalizeTextList(setup.customerSegments).length ? "defined" : "missing", confidence: "medium", summary: "Customer segments captured for validation." },
+    { systemKey: "offer_pricing", systemLabel: "Offer and pricing", score: Math.max(listScore(setup.offers, 60), objectScore(setup.pricingModel, 55)), maturityLevel: normalizeTextList(setup.offers).length ? "defined" : "ad_hoc", confidence: "medium", summary: "Offer/pricing hypothesis is ready for owner validation." },
+    { systemKey: "marketing_attention", systemLabel: "Marketing attention", score: objectScore(setup.marketingModel, 45), maturityLevel: hasObjectContent(setup.marketingModel as Record<string, unknown>) ? "ad_hoc" : "missing", confidence: "low", summary: "Marketing channels are draft-only until owner approves public work." },
+    { systemKey: "sales_conversion", systemLabel: "Sales conversion", score: objectScore(setup.salesModel, 45), maturityLevel: hasObjectContent(setup.salesModel as Record<string, unknown>) ? "ad_hoc" : "missing", confidence: "low", summary: "Sales motion needs scripts and measurement before customer outreach." },
+    { systemKey: "delivery_operations", systemLabel: "Delivery and operations", score: objectScore(setup.deliveryModel, 45), maturityLevel: hasObjectContent(setup.deliveryModel as Record<string, unknown>) ? "ad_hoc" : "missing", confidence: "low", summary: "Delivery path is sketched; SOPs and capacity checks remain." },
+    { systemKey: "finance_admin", systemLabel: "Finance and admin", score: objectScore(setup.adminFinanceModel, 40), maturityLevel: hasObjectContent(setup.adminFinanceModel as Record<string, unknown>) ? "ad_hoc" : "missing", confidence: "low", summary: "Finance/admin checklist is not execution-ready without owner review." },
+    { systemKey: "compliance_risk", systemLabel: "Compliance and risk", score: listScore(setup.legalComplianceChecklist, 35), maturityLevel: normalizeTextList(setup.legalComplianceChecklist).length ? "ad_hoc" : "missing", confidence: "low", summary: "Compliance items are checklist prompts, not legal advice." },
+    { systemKey: "software_integrations_data", systemLabel: "Software, integrations, and data", score: listScore(setup.toolStack, 40), maturityLevel: normalizeTextList(setup.toolStack).length ? "ad_hoc" : "missing", confidence: "low", summary: "Tool stack candidates are captured; connector setup should remain explicit." },
+    { systemKey: "people_roles_sops", systemLabel: "People, roles, and SOPs", score: listScore(setup.rolesAndSops, 35), maturityLevel: normalizeTextList(setup.rolesAndSops).length ? "ad_hoc" : "missing", confidence: "low", summary: "Initial SOP needs captured; role ownership still needs definition." },
+    { systemKey: "ai_governance", systemLabel: "AI governance", score: 45, maturityLevel: "defined", confidence: "medium", summary: "Controlled autonomy defaults require owner approval for public/spend/customer-facing actions." },
+  ];
+}
+
+function gapSeeds(setup: Required<NewBusinessSetupInput>): GapSeed[] {
+  const offer = normalizeTextList(setup.offers)[0] ?? "the first offer";
+  return [
+    {
+      systemKey: "customer_market",
+      gapType: "missing_data",
+      severity: "high",
+      title: "Validate target customer and problem",
+      description: "The setup has a customer hypothesis, but no evidence-backed validation yet.",
+      recommendationType: "setup_task",
+      recommendationTitle: "Run customer/problem validation",
+      rationale: "A new business should not proceed to launch work until the customer/problem hypothesis is tested.",
+      expectedOutcome: "Owner has evidence for whether the target customer feels the problem strongly enough to buy.",
+      actionType: "owner_task",
+      actionTitle: "Validate customer/problem hypothesis",
+      actionBrief: `Interview or otherwise validate whether target customers want ${offer}. Keep this as research until owner approves outreach wording.`,
+      actionStatus: "queued",
+      priority: 95,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "validated_customer_interviews", target: 5, reviewCadence: "before launch" },
+    },
+    {
+      systemKey: "offer_pricing",
+      gapType: "weak_process",
+      severity: "medium",
+      title: "Turn offer hypothesis into a testable package",
+      description: "The offer/pricing model exists, but needs acceptance criteria and margin/capacity assumptions before launch.",
+      recommendationType: "setup_task",
+      recommendationTitle: "Define offer acceptance criteria",
+      rationale: "Agents need a structured offer, price, and success criteria before creating sales or marketing assets.",
+      expectedOutcome: "Offer has a clear promise, included scope, price assumption, and validation metric.",
+      actionType: "owner_task",
+      actionTitle: "Define first offer validation package",
+      actionBrief: "Document the first offer promise, inclusions, price assumption, margin/capacity notes, and the validation metric.",
+      actionStatus: "queued",
+      priority: 90,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "offer_validation_package_completed", target: true, reviewCadence: "setup" },
+    },
+    {
+      systemKey: "marketing_attention",
+      gapType: "approval_gap",
+      severity: "high",
+      title: "Marketing launch needs owner approval",
+      description: "Public launch or spend-sensitive marketing must stay gated until the owner approves the exact action.",
+      recommendationType: "campaign",
+      recommendationTitle: "Draft first marketing test for owner review",
+      rationale: "Business OS can prepare draft-only marketing actions, but public posting and spend are external actions.",
+      expectedOutcome: "A draft marketing test exists with approval required before publishing or spend.",
+      actionType: "approval_request",
+      actionTitle: "Request launch approval before public marketing or spend",
+      actionBrief: "Prepare the first marketing test as a draft and require owner approval before any public post, ad spend, or external customer-facing action.",
+      actionStatus: "awaiting_approval",
+      priority: 85,
+      riskLevel: "high",
+      approvalRequired: true,
+      measurementPlan: { metric: "owner_launch_approval", target: "approved_or_rejected", approvalCategories: ["public", "spend"] },
+    },
+    {
+      systemKey: "sales_conversion",
+      gapType: "weak_process",
+      severity: "medium",
+      title: "Sales conversion path is not ready to execute",
+      description: "Sales motion is captured but needs a draft script, qualification rule, and conversion metric.",
+      recommendationType: "sales_action",
+      recommendationTitle: "Draft sales conversion path",
+      rationale: "Customer-facing sales actions must be scripted and approval-gated before outreach.",
+      expectedOutcome: "Owner can review the first sales script and conversion event before customer contact.",
+      actionType: "owner_task",
+      actionTitle: "Draft first sales script and conversion metric",
+      actionBrief: "Create a draft sales script, qualification rule, and first conversion event. Do not send it to customers until approved.",
+      actionStatus: "queued",
+      priority: 80,
+      riskLevel: "medium",
+      approvalRequired: true,
+      measurementPlan: { metric: "sales_script_reviewed", target: true, conversionEvent: "first_qualified_call" },
+    },
+    {
+      systemKey: "finance_admin",
+      gapType: "missing_system",
+      severity: "medium",
+      title: "Admin and finance baseline needs setup",
+      description: "Bookkeeping, payments, and business admin need explicit owner-selected tools and checks before trading.",
+      recommendationType: "finance_admin_action",
+      recommendationTitle: "Create finance/admin setup checklist",
+      rationale: "A launch plan without bookkeeping/payment controls creates downstream operational risk.",
+      expectedOutcome: "Owner has a concrete finance/admin checklist with no autonomous financial changes.",
+      actionType: "manual_check",
+      actionTitle: "Complete finance/admin launch checklist",
+      actionBrief: "Confirm bookkeeping, payment collection, invoices/receipts, and tax/compliance owner responsibilities. This is a checklist, not financial advice.",
+      actionStatus: "queued",
+      priority: 75,
+      riskLevel: "medium",
+      approvalRequired: true,
+      measurementPlan: { metric: "finance_admin_checklist_completed", target: true, reviewCadence: "before trading" },
+    },
+    {
+      systemKey: "delivery_operations",
+      gapType: "weak_process",
+      severity: "medium",
+      title: "Delivery SOPs and roles need definition",
+      description: "The delivery model needs SOPs, role ownership, and quality checks before launch.",
+      recommendationType: "sop",
+      recommendationTitle: "Create first delivery SOPs",
+      rationale: "Agents can only run or improve delivery when the process is explicit and measurable.",
+      expectedOutcome: "First delivery SOP and quality checklist are owner-reviewable.",
+      actionType: "owner_task",
+      actionTitle: "Write launch delivery SOP and quality checklist",
+      actionBrief: "Define the first delivery workflow, owner/operator responsibilities, and quality checklist.",
+      actionStatus: "queued",
+      priority: 70,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "delivery_sop_ready", target: true, reviewCadence: "setup" },
+    },
+  ];
 }
 
 export function businessOsKindProfile(profile: BusinessOsProfile): Record<string, unknown> {
@@ -244,4 +450,196 @@ export async function upsertBusinessOsProfile(
   `;
 
   return rowToProfile(row);
+}
+
+export async function createNewBusinessSetupState(
+  sql: JsonSqlExecutor,
+  hiveId: string,
+  businessOsProfile: BusinessOsProfile,
+  input: NewBusinessSetupInput | undefined,
+  profileInput: BusinessOsProfileInput = {},
+): Promise<{ setupProfileId: string; actionsCreated: number }> {
+  if (businessOsProfile.businessMode !== "new_business") {
+    return { setupProfileId: "", actionsCreated: 0 };
+  }
+
+  const setup = normalizeSetupInput(input, profileInput);
+  const [setupProfile] = await sql<{ id: string }[]>`
+    INSERT INTO business_setup_profiles (
+      hive_id,
+      business_os_profile_id,
+      idea,
+      customer_segments,
+      problem_statements,
+      offers,
+      pricing_model,
+      brand_positioning,
+      sales_model,
+      marketing_model,
+      delivery_model,
+      admin_finance_model,
+      legal_compliance_checklist,
+      tool_stack,
+      roles_and_sops
+    ) VALUES (
+      ${hiveId}::uuid,
+      ${businessOsProfile.id}::uuid,
+      ${setup.idea as string},
+      ${sql.json(toJsonValue(setup.customerSegments))},
+      ${sql.json(toJsonValue(setup.problemStatements))},
+      ${sql.json(toJsonValue(setup.offers))},
+      ${sql.json(toJsonValue(setup.pricingModel))},
+      ${sql.json(toJsonValue(setup.brandPositioning))},
+      ${sql.json(toJsonValue(setup.salesModel))},
+      ${sql.json(toJsonValue(setup.marketingModel))},
+      ${sql.json(toJsonValue(setup.deliveryModel))},
+      ${sql.json(toJsonValue(setup.adminFinanceModel))},
+      ${sql.json(toJsonValue(setup.legalComplianceChecklist))},
+      ${sql.json(toJsonValue(setup.toolStack))},
+      ${sql.json(toJsonValue(setup.rolesAndSops))}
+    )
+    ON CONFLICT (hive_id) DO UPDATE SET
+      business_os_profile_id = EXCLUDED.business_os_profile_id,
+      idea = EXCLUDED.idea,
+      customer_segments = EXCLUDED.customer_segments,
+      problem_statements = EXCLUDED.problem_statements,
+      offers = EXCLUDED.offers,
+      pricing_model = EXCLUDED.pricing_model,
+      brand_positioning = EXCLUDED.brand_positioning,
+      sales_model = EXCLUDED.sales_model,
+      marketing_model = EXCLUDED.marketing_model,
+      delivery_model = EXCLUDED.delivery_model,
+      admin_finance_model = EXCLUDED.admin_finance_model,
+      legal_compliance_checklist = EXCLUDED.legal_compliance_checklist,
+      tool_stack = EXCLUDED.tool_stack,
+      roles_and_sops = EXCLUDED.roles_and_sops,
+      updated_at = NOW()
+    RETURNING id
+  `;
+
+  const evidenceRef = { source: "business_setup_profiles", id: setupProfile.id };
+  const readinessBySystem = new Map<string, string>();
+  for (const seed of readinessSeeds(setup)) {
+    const [row] = await sql<{ id: string }[]>`
+      INSERT INTO business_system_readiness (
+        hive_id,
+        business_os_profile_id,
+        source_kind,
+        source_id,
+        system_key,
+        system_label,
+        readiness_score,
+        maturity_level,
+        confidence,
+        evidence_refs,
+        summary
+      ) VALUES (
+        ${hiveId}::uuid,
+        ${businessOsProfile.id}::uuid,
+        ${"setup"},
+        ${setupProfile.id}::uuid,
+        ${seed.systemKey},
+        ${seed.systemLabel},
+        ${seed.score},
+        ${seed.maturityLevel},
+        ${seed.confidence},
+        ${sql.json(toJsonValue([evidenceRef]))},
+        ${seed.summary}
+      )
+      RETURNING id
+    `;
+    readinessBySystem.set(seed.systemKey, row.id);
+  }
+
+  let actionsCreated = 0;
+  for (const seed of gapSeeds(setup)) {
+    const [gap] = await sql<{ id: string }[]>`
+      INSERT INTO business_gaps (
+        hive_id,
+        business_os_profile_id,
+        system_readiness_id,
+        gap_type,
+        severity,
+        title,
+        description,
+        evidence_refs,
+        confidence,
+        status
+      ) VALUES (
+        ${hiveId}::uuid,
+        ${businessOsProfile.id}::uuid,
+        ${readinessBySystem.get(seed.systemKey) ?? null},
+        ${seed.gapType},
+        ${seed.severity},
+        ${seed.title},
+        ${seed.description},
+        ${sql.json(toJsonValue([evidenceRef]))},
+        ${"medium"},
+        ${"open"}
+      )
+      RETURNING id
+    `;
+    const [recommendation] = await sql<{ id: string }[]>`
+      INSERT INTO business_recommendations (
+        hive_id,
+        gap_id,
+        recommendation_type,
+        title,
+        rationale,
+        expected_outcome,
+        estimated_effort,
+        risk_level,
+        requires_owner_approval,
+        status
+      ) VALUES (
+        ${hiveId}::uuid,
+        ${gap.id}::uuid,
+        ${seed.recommendationType},
+        ${seed.recommendationTitle},
+        ${seed.rationale},
+        ${seed.expectedOutcome},
+        ${"small"},
+        ${seed.riskLevel},
+        ${seed.approvalRequired},
+        ${"converted_to_action"}
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO business_actions (
+        hive_id,
+        business_os_profile_id,
+        recommendation_id,
+        system_key,
+        action_type,
+        title,
+        brief,
+        status,
+        priority,
+        risk_level,
+        approval_required,
+        source_refs,
+        expected_outcome,
+        measurement_plan
+      ) VALUES (
+        ${hiveId}::uuid,
+        ${businessOsProfile.id}::uuid,
+        ${recommendation.id}::uuid,
+        ${seed.systemKey},
+        ${seed.actionType},
+        ${seed.actionTitle},
+        ${seed.actionBrief},
+        ${seed.actionStatus},
+        ${seed.priority},
+        ${seed.riskLevel},
+        ${seed.approvalRequired},
+        ${sql.json(toJsonValue([evidenceRef, { source: "business_recommendations", id: recommendation.id }]))},
+        ${seed.expectedOutcome},
+        ${sql.json(toJsonValue(seed.measurementPlan))}
+      )
+    `;
+    actionsCreated += 1;
+  }
+
+  return { setupProfileId: setupProfile.id, actionsCreated };
 }
