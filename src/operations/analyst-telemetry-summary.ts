@@ -37,6 +37,14 @@ export interface AnalystModelRoutingSummary {
     onDemandProbeRoutes: number;
     reasonCounts: Record<string, number>;
   };
+  retainedExcludedRouteInventory: {
+    routes: number;
+    unknownHealthRoutes: number;
+    automaticProbeRoutes: number;
+    onDemandProbeRoutes: number;
+    classCounts: Record<string, number>;
+    classes: RetainedExcludedRouteClassSummary[];
+  };
   readinessPolicy: {
     criticalCapacityBasis: "no_routable_or_recoverable_route";
     justification: string;
@@ -48,6 +56,14 @@ export interface AnalystModelRoutingSummary {
     providerCounts: Record<string, number>;
     adapterCounts: Record<string, number>;
   };
+}
+
+export interface RetainedExcludedRouteClassSummary {
+  class: string;
+  routes: number;
+  rationale: string;
+  supportPosture: string;
+  owningWorkflow: string;
 }
 
 export interface AnalystRuntimeDriftSummary {
@@ -123,6 +139,11 @@ export function buildAnalystModelRoutingSummary(
   let excludedAutomaticProbeRoutes = 0;
   let excludedOnDemandProbeRoutes = 0;
   const excludedReasonCounts: Record<string, number> = {};
+  let retainedExcludedRoutes = 0;
+  let retainedExcludedUnknownHealthRoutes = 0;
+  let retainedExcludedAutomaticProbeRoutes = 0;
+  let retainedExcludedOnDemandProbeRoutes = 0;
+  const retainedExcludedClassCounts: Record<string, number> = {};
   const policyCandidatesByRoute = new Map<string, ModelRoutingView["policy"]["candidates"][number]>(
     view.policy.candidates.map((candidate) => [
       `${candidate.adapterType}:${candidate.model}`,
@@ -139,27 +160,34 @@ export function buildAnalystModelRoutingSummary(
     const candidate = policyCandidatesByRoute.get(`${model.adapterType}:${model.model}`);
     const activeRoutePool = enabled && isActiveRoutePoolCandidate(candidate);
     const excluded = candidate?.canonicalRouteSet?.membership === "excluded";
+    const retainedExcludedClass = excluded ? retainedExcludedRouteClass(candidate?.canonicalRouteSet?.reason) : null;
     if (activeRoutePool) {
       activeRoutePoolRoutes += 1;
       increment(activeProviderCounts, sanitizeBucket(model.provider));
       increment(activeAdapterCounts, sanitizeBucket(model.adapterType));
     }
-    if (excluded) {
+    if (excluded && retainedExcludedClass) {
+      retainedExcludedRoutes += 1;
+      if (model.status === "unknown") retainedExcludedUnknownHealthRoutes += 1;
+      if (model.probeMode === "automatic") retainedExcludedAutomaticProbeRoutes += 1;
+      if (model.probeMode === "on_demand") retainedExcludedOnDemandProbeRoutes += 1;
+      increment(retainedExcludedClassCounts, retainedExcludedClass.class);
+    } else if (excluded) {
       excludedRoutes += 1;
       if (model.status === "unknown") excludedUnknownHealthRoutes += 1;
       if (model.probeMode === "automatic") excludedAutomaticProbeRoutes += 1;
       if (model.probeMode === "on_demand") excludedOnDemandProbeRoutes += 1;
       increment(excludedReasonCounts, excludedRouteReasonBucket(candidate?.canonicalRouteSet?.reason));
     }
-    if (enabled && healthEligible) routableRoutes += 1;
+    if (activeRoutePool && healthEligible) routableRoutes += 1;
     if (!model.hiveModelEnabled || !model.routingEnabled) disabledRoutes += 1;
-    if (!enabled || !healthEligible) blockedRoutes += 1;
-    if (model.status === "unhealthy") unhealthyRoutes += 1;
+    if (activeRoutePool && (!enabled || !healthEligible)) blockedRoutes += 1;
+    if (activeRoutePool && model.status === "unhealthy") unhealthyRoutes += 1;
     if (model.status === "unknown" && model.probeMode === "automatic" && !excluded) unknownHealthRoutes += 1;
     if (model.status === "unknown" && model.probeMode === "on_demand") onDemandUnknownHealthRoutes += 1;
-    if (model.failureClass === "quarantined") quarantinedRoutes += 1;
+    if (activeRoutePool && model.failureClass === "quarantined") quarantinedRoutes += 1;
     const quarantined = isQuarantinedRoute(model);
-    if (model.probeFreshness === "due" && model.probeMode === "automatic") staleRoutes += 1;
+    if (activeRoutePool && model.probeFreshness === "due" && model.probeMode === "automatic") staleRoutes += 1;
     if (model.probeFreshness === "fresh") freshRoutes += 1;
     if (model.local) localRoutes += 1;
     if (model.probeMode === "automatic") automaticProbeRoutes += 1;
@@ -206,6 +234,14 @@ export function buildAnalystModelRoutingSummary(
       onDemandProbeRoutes: excludedOnDemandProbeRoutes,
       reasonCounts: excludedReasonCounts,
     },
+    retainedExcludedRouteInventory: {
+      routes: retainedExcludedRoutes,
+      unknownHealthRoutes: retainedExcludedUnknownHealthRoutes,
+      automaticProbeRoutes: retainedExcludedAutomaticProbeRoutes,
+      onDemandProbeRoutes: retainedExcludedOnDemandProbeRoutes,
+      classCounts: retainedExcludedClassCounts,
+      classes: retainedExcludedRouteClassSummaries(retainedExcludedClassCounts),
+    },
     readinessPolicy: {
       criticalCapacityBasis: "no_routable_or_recoverable_route",
       justification: "Readiness treats route-pool capacity as critical only when there is neither a currently routable model route nor an enabled automatic route that probe recovery can restore; broader stale or unknown inventory remains warning-level drift for analyst follow-up.",
@@ -240,6 +276,9 @@ function buildAnalystTelemetryNotices(
   if (modelRouting.onDemandUnknownHealthRoutes > 0) {
     notices.push(`${modelRouting.onDemandUnknownHealthRoutes} on-demand model route(s) have no automatic health evidence and are excluded from unknown-health debt.`);
   }
+  if (modelRouting.retainedExcludedRouteInventory.routes > 0) {
+    notices.push(`${modelRouting.retainedExcludedRouteInventory.routes} retained excluded route(s) are separated from active-capacity failure noise with explicit support posture and owning workflow.`);
+  }
   if (notices.length === 0) notices.push("Runtime drift and model routing summaries are in sync.");
   return notices;
 }
@@ -265,6 +304,49 @@ function excludedRouteReasonBucket(reason: string | null | undefined): string {
     return "on_demand_probe_policy";
   }
   return sanitizeBucket(reason);
+}
+
+function retainedExcludedRouteClass(reason: string | null | undefined): RetainedExcludedRouteClassSummary | null {
+  const bucket = excludedRouteReasonBucket(reason);
+  switch (bucket) {
+    case "codex_scope_or_entitlement_failure":
+      return {
+        class: bucket,
+        routes: 0,
+        rationale: "OpenAI Codex route probes returned non-retryable scope/model-entitlement failures; these routes are not intended active capacity for the hive until entitlement changes.",
+        supportPosture: "retained for audit and future entitlement reconciliation only; do not retry as ordinary live-capacity recovery debt",
+        owningWorkflow: "model-routing inventory cleanup / GitHub issue #154",
+      };
+    case "retired_anthropic_claude_code_route":
+      return {
+        class: bucket,
+        routes: 0,
+        rationale: "Disabled Anthropic claude-code routes are historical configured inventory, not current automatic model-routing capacity.",
+        supportPosture: "retired unless an owner explicitly re-enables a supported recovery path",
+        owningWorkflow: "model-routing route-pool hygiene / GitHub issues #121, #130, #139",
+      };
+    case "on_demand_probe_policy":
+      return {
+        class: bucket,
+        routes: 0,
+        rationale: "On-demand routes intentionally avoid automatic health probing and should not count as ordinary automatic-route health debt.",
+        supportPosture: "available only through owning on-demand workflows, not automatic route-pool recovery",
+        owningWorkflow: "model health probe policy / setup-readiness workflow",
+      };
+    default:
+      return null;
+  }
+}
+
+function retainedExcludedRouteClassSummaries(
+  counts: Record<string, number>,
+): RetainedExcludedRouteClassSummary[] {
+  return Object.entries(counts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .flatMap(([className, routes]) => {
+      const summary = retainedExcludedRouteClass(className);
+      return summary ? [{ ...summary, routes }] : [];
+    });
 }
 
 function hasFreshHealthyRouteEvidence(model: {
