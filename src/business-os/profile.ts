@@ -1,4 +1,5 @@
 import type { JSONValue, Sql, TransactionSql } from "postgres";
+import { buildBusinessSystemTemplateOutputs } from "@/business-os/system-templates";
 
 export const BUSINESS_MODES = ["new_business", "existing_business"] as const;
 
@@ -191,7 +192,7 @@ function normalizeSetupInput(input: NewBusinessSetupInput | undefined, profile: 
 function readinessSeeds(setup: Required<NewBusinessSetupInput>): ReadinessSeed[] {
   const listScore = (items: unknown, strong = 55) => normalizeTextList(items).length > 0 ? strong : 15;
   const objectScore = (value: unknown, strong = 55) => hasObjectContent(normalizeObject(value)) ? strong : 15;
-  return [
+  const seeds: ReadinessSeed[] = [
     { systemKey: "strategy_governance", systemLabel: "Strategy and governance", score: 35, maturityLevel: "ad_hoc", confidence: "low", summary: "Initial business idea captured; governance remains owner-reviewed." },
     { systemKey: "customer_market", systemLabel: "Customer and market", score: listScore(setup.customerSegments, 60), maturityLevel: normalizeTextList(setup.customerSegments).length ? "defined" : "missing", confidence: "medium", summary: "Customer segments captured for validation." },
     { systemKey: "offer_pricing", systemLabel: "Offer and pricing", score: Math.max(listScore(setup.offers, 60), objectScore(setup.pricingModel, 55)), maturityLevel: normalizeTextList(setup.offers).length ? "defined" : "ad_hoc", confidence: "medium", summary: "Offer/pricing hypothesis is ready for owner validation." },
@@ -204,11 +205,25 @@ function readinessSeeds(setup: Required<NewBusinessSetupInput>): ReadinessSeed[]
     { systemKey: "people_roles_sops", systemLabel: "People, roles, and SOPs", score: listScore(setup.rolesAndSops, 35), maturityLevel: normalizeTextList(setup.rolesAndSops).length ? "ad_hoc" : "missing", confidence: "low", summary: "Initial SOP needs captured; role ownership still needs definition." },
     { systemKey: "ai_governance", systemLabel: "AI governance", score: 45, maturityLevel: "defined", confidence: "medium", summary: "Controlled autonomy defaults require owner approval for public/spend/customer-facing actions." },
   ];
+
+  const seededSystems = new Set(seeds.map((seed) => seed.systemKey));
+  const templateSeeds = buildBusinessSystemTemplateOutputs("new_business")
+    .filter((output) => !seededSystems.has(output.readiness.systemKey))
+    .map((output): ReadinessSeed => ({
+      systemKey: output.readiness.systemKey,
+      systemLabel: output.readiness.systemLabel,
+      score: output.readiness.readinessScore,
+      maturityLevel: output.readiness.maturityLevel === "managed" || output.readiness.maturityLevel === "optimising" ? "defined" : output.readiness.maturityLevel,
+      confidence: output.readiness.confidence === "high" ? "medium" : output.readiness.confidence,
+      summary: output.readiness.summary,
+    }));
+
+  return [...seeds, ...templateSeeds];
 }
 
 function gapSeeds(setup: Required<NewBusinessSetupInput>): GapSeed[] {
   const offer = normalizeTextList(setup.offers)[0] ?? "the first offer";
-  return [
+  const seeds: GapSeed[] = [
     {
       systemKey: "customer_market",
       gapType: "missing_data",
@@ -324,6 +339,36 @@ function gapSeeds(setup: Required<NewBusinessSetupInput>): GapSeed[] {
       measurementPlan: { metric: "delivery_sop_ready", target: true, reviewCadence: "setup" },
     },
   ];
+
+  const seededSystems = new Set(seeds.map((seed) => seed.systemKey));
+  const templateSeeds = buildBusinessSystemTemplateOutputs("new_business")
+    .filter((output) => !seededSystems.has(output.readiness.systemKey))
+    .map((output): GapSeed => {
+      const gap = output.gaps[0];
+      const recommendation = output.recommendations[0];
+      const candidate = output.actionCandidates[0];
+      return {
+        systemKey: output.readiness.systemKey,
+        gapType: gap.gapType,
+        severity: gap.severity,
+        title: gap.title,
+        description: gap.description,
+        recommendationType: recommendation.recommendationType,
+        recommendationTitle: recommendation.title,
+        rationale: recommendation.rationale,
+        expectedOutcome: recommendation.expectedOutcome,
+        actionType: candidate.type,
+        actionTitle: candidate.title,
+        actionBrief: candidate.brief,
+        actionStatus: candidate.approvalRequired ? "awaiting_approval" : "queued",
+        priority: candidate.priority,
+        riskLevel: candidate.riskLevel,
+        approvalRequired: candidate.approvalRequired,
+        measurementPlan: candidate.measurementPlan,
+      };
+    });
+
+  return [...seeds, ...templateSeeds];
 }
 
 export function businessOsKindProfile(profile: BusinessOsProfile): Record<string, unknown> {
