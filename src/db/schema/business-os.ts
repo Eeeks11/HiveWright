@@ -82,6 +82,34 @@ export const businessSetupProfiles = pgTable(
   ],
 );
 
+export const businessAuditProfiles = pgTable(
+  "business_audit_profiles",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    hiveId: uuid("hive_id").references(() => hives.id, { onDelete: "cascade" }).notNull(),
+    businessOsProfileId: uuid("business_os_profile_id").references(() => businessOsProfiles.id, { onDelete: "cascade" }).notNull(),
+    auditStatus: varchar("audit_status", { length: 32 }).default("draft").notNull(),
+    auditScope: jsonb("audit_scope").$type<string[]>().default([]).notNull(),
+    evidenceSources: jsonb("evidence_sources").$type<Array<Record<string, unknown>>>().default([]).notNull(),
+    knownUnknowns: jsonb("known_unknowns").$type<string[]>().default([]).notNull(),
+    overallReadinessScore: integer("overall_readiness_score"),
+    overallConfidence: varchar("overall_confidence", { length: 32 }),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("business_audit_profiles_hive_unique").on(table.hiveId),
+    index("business_audit_profiles_profile_idx").on(table.businessOsProfileId),
+    check("business_audit_profiles_status_check", sql`${table.auditStatus} IN ('draft', 'in_progress', 'awaiting_owner_input', 'completed', 'superseded')`),
+    check("business_audit_profiles_scope_array_check", sql`jsonb_typeof(${table.auditScope}) = 'array'`),
+    check("business_audit_profiles_evidence_sources_array_check", sql`jsonb_typeof(${table.evidenceSources}) = 'array'`),
+    check("business_audit_profiles_known_unknowns_array_check", sql`jsonb_typeof(${table.knownUnknowns}) = 'array'`),
+    check("business_audit_profiles_score_check", sql`${table.overallReadinessScore} IS NULL OR (${table.overallReadinessScore} >= 0 AND ${table.overallReadinessScore} <= 100)`),
+    check("business_audit_profiles_confidence_check", sql`${table.overallConfidence} IS NULL OR ${table.overallConfidence} IN ('low', 'medium', 'high')`),
+  ],
+);
+
 export const businessSystemReadiness = pgTable(
   "business_system_readiness",
   {
