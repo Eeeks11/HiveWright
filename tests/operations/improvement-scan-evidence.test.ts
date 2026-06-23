@@ -13,6 +13,17 @@ const ANALYST_TELEMETRY_EVIDENCE = {
 };
 
 describe("improvement scan evidence gate", () => {
+  it("blocks publication when no structured promoted finding evidence can be parsed", () => {
+    const result = validateImprovementScanPublicationEvidence({
+      publicationBuildHash: "build-current",
+      promotedFindings: [],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.blockedFindingIds).toEqual(["missing_structured_evidence"]);
+    expect(result.reasons.join("\n")).toContain("requires at least one structured promoted finding evidence block");
+  });
+
   it("allows route-affecting findings only when evidence is build-matched and authoritative", () => {
     const finding: ImprovementScanPromotedFindingEvidence = {
       findingId: "ready-route-capacity",

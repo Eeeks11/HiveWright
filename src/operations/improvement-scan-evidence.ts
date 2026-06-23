@@ -79,6 +79,10 @@ export function validateImprovementScanPublicationEvidence(
   const blockedFindingIds = new Set<string>();
   const reasons: string[] = [];
 
+  if (input.promotedFindings.length === 0) {
+    block("missing_structured_evidence", "improvement scan publication requires at least one structured promoted finding evidence block");
+  }
+
   for (const finding of input.promotedFindings) {
     const routeAffecting = finding.actions.some((action) => ROUTING_ACTIONS.has(action));
     if (!routeAffecting && finding.actions.length === 0) {

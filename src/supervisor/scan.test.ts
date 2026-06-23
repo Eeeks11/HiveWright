@@ -2245,6 +2245,7 @@ describe.sequential("reference-only terminal dispositions", () => {
     const missingEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3512";
     const unresolvedTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3513";
     const staleEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3514";
+    const noStructuredEvidenceTaskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3515";
     await sql`
       INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
       VALUES
@@ -2268,24 +2269,34 @@ describe.sequential("reference-only terminal dispositions", () => {
           'Scheduled improvement scan says already-routed to issue #108 and includes stale endpoint evidence.',
           'Already-routed to issue #108 with stale build evidence.',
           NOW() - interval '2 hours', NOW() - interval '2 hours'
+        ),
+        (
+          ${noStructuredEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', 'schedule', 'completed',
+          'HiveWright improvement scan: unstructured routed evidence',
+          'Scheduled improvement scan says already-routed to issue #109 but includes no structured promoted finding evidence.',
+          'Already-routed to issue #109 with only prose evidence.',
+          NOW() - interval '2 hours', NOW() - interval '2 hours'
         )
     `;
     await sql`
       INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
       VALUES
         (${unresolvedTaskId}, ${HIVE_ID}, 'performance-analyst', 'Needs routing before closeout.', 'Unresolved scan output', 'reference_report'),
-        (${staleEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', ${`Already-routed to issue #108.\n${improvementScanEvidenceBlock({ findingId: "stale-routed-108", buildHash: "build-before-refresh" })}`}, 'Stale improvement scan evidence', 'reference_report')
+        (${staleEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', ${`Already-routed to issue #108.\n${improvementScanEvidenceBlock({ findingId: "stale-routed-108", buildHash: "build-before-refresh" })}`}, 'Stale improvement scan evidence', 'reference_report'),
+        (${noStructuredEvidenceTaskId}, ${HIVE_ID}, 'performance-analyst', 'Already-routed to issue #109, but this is prose only and has no improvementScanEvidence JSON block.', 'Unstructured improvement scan evidence', 'reference_report')
     `;
 
     const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID, {
       publicationBuildHash: "build-current",
     });
     expect(reconciled.disposed).toBe(0);
+    expect(reconciled.improvementScansBlockedByEvidenceGate).toBe(2);
 
     const report = await scanHive(sql, HIVE_ID);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${missingEvidenceTaskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${unresolvedTaskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${staleEvidenceTaskId}`)).toBe(true);
+    expect(report.findings.some((f) => f.id === `unsatisfied_completion:${noStructuredEvidenceTaskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `orphan_output:${unresolvedTaskId}`)).toBe(true);
   });
 
