@@ -97,6 +97,8 @@ function renderAnalystTelemetryGuidance(ctx: SessionContext): string | null {
   return [
     "## Analyst Telemetry API",
     "For performance or audit scans, make `/api/analyst-telemetry` the primary runtime/model-routing evidence source for this hive. It is a bounded, sanitized summary intended for analyst workflows.",
+    "For improvement scans, every promoted finding that will publish, reopen/close an issue, or route follow-up work must carry build-matched evidence: runtime buildHash, authenticated endpoint checkedAt timestamp, and the authoritative probe set used for that finding. If the runtime buildHash changes before publication/routing, re-probe the affected endpoint family first and do not use stale evidence to drive issue routing.",
+    "For readiness or routing conclusions, `/api/readiness` is controller-global diagnostic context only; use `/api/analyst-telemetry?hiveId=...` as the primary hive-scoped source.",
     "Use the internal task-scoped auth path instead of unauthenticated probes:",
     "```bash",
     "curl -fsS \"http://localhost:3002/api/analyst-telemetry?hiveId=$HIVEWRIGHT_HIVE_ID\" \\",

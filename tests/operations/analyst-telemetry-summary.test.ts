@@ -443,11 +443,29 @@ describe("analyst telemetry summary", () => {
     expect(summary).toMatchObject({
       checkedAt: "2026-06-03T00:01:00.000Z",
       hiveId: HIVE_ID,
+      improvementScanEvidence: {
+        purpose: "improvement_scan_publication_gate",
+        runtimeBuildHash: "build-a",
+        authoritativeProbeSet: [
+          expect.objectContaining({
+            endpoint: "/api/analyst-telemetry?hiveId=...",
+            checkedAt: "2026-06-03T00:01:00.000Z",
+            buildHash: "build-a",
+            authoritativeFor: ["readiness", "model_routing", "runtime_drift"],
+          }),
+        ],
+        promotedFindingRequirements: {
+          staleBuildPolicy: "reprobe_endpoint_family_before_publication_or_routing",
+          readinessRoutingPrimarySource: "/api/analyst-telemetry?hiveId=...",
+        },
+      },
       runtimeDrift: {
         dispatcherHeartbeat: {
           state: "stale",
           ageMs: 300_000,
           lastHeartbeatAt: "2026-06-03T00:00:00.000Z",
+          version: "0.1.4",
+          buildHash: "build-a",
         },
         routeDrift: {
           status: "drift",
