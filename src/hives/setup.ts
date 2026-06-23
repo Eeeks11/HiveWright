@@ -3,9 +3,11 @@ import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
 import {
   businessOsKindProfile,
+  createExistingBusinessAuditState,
   createNewBusinessSetupState,
   upsertBusinessOsProfile,
   type BusinessOsProfileInput,
+  type ExistingBusinessAuditInput,
   type NewBusinessSetupInput,
 } from "@/business-os/profile";
 import { getConnectorDefinition } from "@/connectors/registry";
@@ -69,6 +71,7 @@ export type HiveSetupRequest = {
     mode?: BusinessOsProfileInput["mode"];
     profile?: Omit<BusinessOsProfileInput, "mode">;
     setup?: NewBusinessSetupInput;
+    audit?: ExistingBusinessAuditInput;
   };
   roleOverrides?: Record<string, RoleOverride>;
   connectors?: ConnectorSetup[];
@@ -650,6 +653,13 @@ export async function runHiveSetup(
               mode: body.businessOs?.mode,
               ...(body.businessOs?.profile ?? {}),
             },
+          );
+        } else if (businessProfile.businessMode === "existing_business") {
+          await createExistingBusinessAuditState(
+            tx,
+            hiveId,
+            businessProfile,
+            body.businessOs?.audit,
           );
         }
       }

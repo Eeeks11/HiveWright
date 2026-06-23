@@ -3,6 +3,7 @@ import type { JSONValue, Sql, TransactionSql } from "postgres";
 export const BUSINESS_MODES = ["new_business", "existing_business"] as const;
 
 export type BusinessMode = typeof BUSINESS_MODES[number];
+export type BusinessSetupSourceKind = "setup" | "audit" | "manual_update" | "loop_measurement";
 
 export type BusinessOsProfileInput = {
   mode?: BusinessMode | string | null;
@@ -32,6 +33,12 @@ export type NewBusinessSetupInput = {
   legalComplianceChecklist?: unknown;
   toolStack?: unknown;
   rolesAndSops?: unknown;
+};
+
+export type ExistingBusinessAuditInput = {
+  scope?: unknown;
+  evidenceSources?: unknown;
+  knownUnknowns?: unknown;
 };
 
 export type BusinessOsProfile = {
@@ -141,6 +148,11 @@ function normalizeTextList(value: unknown): string[] {
 function normalizeObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function normalizeObjectList(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.map(normalizeObject).filter(hasObjectContent);
 }
 
 function hasObjectContent(value: Record<string, unknown>): boolean {
@@ -322,6 +334,181 @@ function gapSeeds(setup: Required<NewBusinessSetupInput>): GapSeed[] {
       riskLevel: "low",
       approvalRequired: false,
       measurementPlan: { metric: "delivery_sop_ready", target: true, reviewCadence: "setup" },
+    },
+  ];
+}
+
+const DEFAULT_AUDIT_SCOPE = [
+  "strategy_governance",
+  "offer_pricing",
+  "marketing_attention",
+  "sales_conversion",
+  "delivery_operations",
+  "finance_admin",
+  "people_roles_sops",
+  "compliance_risk",
+  "software_integrations_data",
+  "ai_governance",
+] as const;
+
+function normalizeAuditInput(input: ExistingBusinessAuditInput | undefined): {
+  scope: string[];
+  evidenceSources: Array<Record<string, unknown>>;
+  knownUnknowns: string[];
+} {
+  const scope = normalizeTextList(input?.scope);
+  const evidenceSources = normalizeObjectList(input?.evidenceSources);
+  const knownUnknowns = normalizeTextList(input?.knownUnknowns);
+  return {
+    scope: scope.length > 0 ? scope : [...DEFAULT_AUDIT_SCOPE],
+    evidenceSources: evidenceSources.length > 0
+      ? evidenceSources
+      : [{ kind: "manual", label: "Owner-provided audit intake", summary: "No connector evidence supplied yet." }],
+    knownUnknowns: knownUnknowns.length > 0 ? knownUnknowns : ["Evidence is manually supplied until connectors or records are reviewed."],
+  };
+}
+
+function auditReadinessSeeds(audit: ReturnType<typeof normalizeAuditInput>): ReadinessSeed[] {
+  const scoped = new Set(audit.scope);
+  const evidenceCount = audit.evidenceSources.length;
+  const baseScore = evidenceCount >= 2 ? 45 : 30;
+  const seed = (systemKey: string, systemLabel: string, summary: string, scoreOffset = 0): ReadinessSeed => ({
+    systemKey,
+    systemLabel,
+    score: Math.max(10, Math.min(75, baseScore + scoreOffset + (scoped.has(systemKey) ? 10 : 0))),
+    maturityLevel: scoped.has(systemKey) ? "ad_hoc" : "missing",
+    confidence: evidenceCount >= 2 ? "medium" : "low",
+    summary,
+  });
+  return [
+    seed("strategy_governance", "Strategy and governance", "Business direction exists, but agent operating boundaries and decision rights need to be explicit.", 0),
+    seed("offer_pricing", "Offer and pricing", "Offer/pricing needs evidence-backed margin, capacity, and conversion assumptions.", 5),
+    seed("marketing_attention", "Marketing attention", "Marketing foundations can be reused, but audit evidence must prove reliable attention generation.", 5),
+    seed("sales_conversion", "Sales conversion", "Sales conversion readiness depends on a measurable funnel and owner-approved customer touchpoints.", 0),
+    seed("delivery_operations", "Delivery and operations", "Delivery needs SOPs, quality controls, and capacity evidence before agents can run improvements.", -5),
+    seed("finance_admin", "Finance and admin", "Finance/admin readiness is limited until bookkeeping/reporting evidence is verified.", -10),
+    seed("people_roles_sops", "People, roles, and SOPs", "Roles and SOPs are weak if the business still depends on owner memory.", -10),
+    seed("compliance_risk", "Compliance and risk", "Compliance/risk controls are checklist-level until verified by source evidence.", -5),
+    seed("software_integrations_data", "Software, integrations, and data", "Connector and data freshness gaps limit autonomous operation.", 0),
+    seed("ai_governance", "AI governance", "Controlled autonomy is usable only with owner approval gates and AI spend budget visibility.", 10),
+  ];
+}
+
+function auditGapSeeds(): GapSeed[] {
+  return [
+    {
+      systemKey: "strategy_governance",
+      gapType: "weak_process",
+      severity: "high",
+      title: "Agent-ready operating model is incomplete",
+      description: "The business needs explicit decision rights, operating cadence, success metrics, and stop conditions before agents can safely improve it.",
+      recommendationType: "operating_loop",
+      recommendationTitle: "Create audit improvement operating model",
+      rationale: "Existing-business mode must turn audit findings into governed operating cycles, not another report.",
+      expectedOutcome: "Owner can see the current state, top risks, and the next safe improvement cycle.",
+      actionType: "owner_task",
+      actionTitle: "Create audit improvement operating model",
+      actionBrief: "Define decision rights, cadence, metrics, owner approval categories, and the first audit improvement loop.",
+      actionStatus: "queued",
+      priority: 95,
+      riskLevel: "medium",
+      approvalRequired: true,
+      measurementPlan: { metric: "operating_model_reviewed", target: true, reviewCadence: "audit" },
+    },
+    {
+      systemKey: "marketing_attention",
+      gapType: "measurement_gap",
+      severity: "medium",
+      title: "Marketing attention evidence needs connection to the audit",
+      description: "Marketing/Sales modules exist, but audit readiness needs visible evidence and measurement links.",
+      recommendationType: "campaign",
+      recommendationTitle: "Map marketing evidence into Business OS audit",
+      rationale: "Reusing Growth OS evidence avoids duplicating modules and makes readiness scores explainable.",
+      expectedOutcome: "Marketing readiness has evidence refs and a measurable next action.",
+      actionType: "manual_check",
+      actionTitle: "Map marketing evidence into the audit scorecard",
+      actionBrief: "Link available marketing profile/campaign/metric evidence into the Business OS audit before recommending public work.",
+      actionStatus: "queued",
+      priority: 85,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "marketing_evidence_refs_linked", target: 3, reviewCadence: "audit" },
+    },
+    {
+      systemKey: "sales_conversion",
+      gapType: "weak_process",
+      severity: "medium",
+      title: "Sales conversion loop needs measurable bottlenecks",
+      description: "The audit should identify conversion bottlenecks before drafting customer-facing actions.",
+      recommendationType: "sales_action",
+      recommendationTitle: "Capture sales funnel bottleneck evidence",
+      rationale: "Agents need a measurable sales bottleneck before suggesting customer-facing improvements.",
+      expectedOutcome: "Sales readiness is tied to a funnel stage, bottleneck, and safe next action.",
+      actionType: "owner_task",
+      actionTitle: "Capture current sales funnel bottlenecks",
+      actionBrief: "Record current lead source, qualification step, conversion event, and bottleneck evidence. Do not contact customers from this action.",
+      actionStatus: "queued",
+      priority: 80,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "sales_bottlenecks_captured", target: true, reviewCadence: "audit" },
+    },
+    {
+      systemKey: "finance_admin",
+      gapType: "missing_data",
+      severity: "high",
+      title: "Finance/admin evidence is not verified",
+      description: "Finance, bookkeeping, and reporting gaps cannot be safely improved until current systems and responsibilities are evidenced.",
+      recommendationType: "finance_admin_action",
+      recommendationTitle: "Verify finance/admin operating evidence",
+      rationale: "Financial actions are sensitive and need owner-reviewed evidence before agents recommend changes.",
+      expectedOutcome: "Finance/admin readiness shows verified systems, reporting cadence, and owner responsibilities.",
+      actionType: "manual_check",
+      actionTitle: "Verify finance/admin evidence before recommendations",
+      actionBrief: "List bookkeeping system, payment flow, reporting cadence, invoice/receipt process, and owner-only financial decision boundaries.",
+      actionStatus: "queued",
+      priority: 78,
+      riskLevel: "medium",
+      approvalRequired: true,
+      measurementPlan: { metric: "finance_admin_evidence_verified", target: true, reviewCadence: "audit" },
+    },
+    {
+      systemKey: "people_roles_sops",
+      gapType: "capacity_gap",
+      severity: "medium",
+      title: "Owner-memory SOPs block safe delegation",
+      description: "Agents and staff cannot reliably operate the business while critical procedures live only in the owner’s head.",
+      recommendationType: "sop",
+      recommendationTitle: "Capture top operational SOPs",
+      rationale: "SOP capture is a safe, high-leverage improvement before higher autonomy.",
+      expectedOutcome: "At least three owner-reviewable SOPs exist for repeatable work.",
+      actionType: "owner_task",
+      actionTitle: "Capture top three repeatable SOPs",
+      actionBrief: "Document the three most repeated operational processes, including owner approval points and quality checks.",
+      actionStatus: "queued",
+      priority: 72,
+      riskLevel: "low",
+      approvalRequired: false,
+      measurementPlan: { metric: "sops_captured", target: 3, reviewCadence: "audit" },
+    },
+    {
+      systemKey: "ai_governance",
+      gapType: "approval_gap",
+      severity: "high",
+      title: "Owner approval required before public/spend/customer actions",
+      description: "The audit can recommend improvements, but public, spend-sensitive, customer-facing, financial, and system-changing actions must remain approval-gated.",
+      recommendationType: "owner_decision",
+      recommendationTitle: "Confirm audit action approval gates",
+      rationale: "Existing-business improvement has real-world blast radius; approval policy must be explicit before execution.",
+      expectedOutcome: "High-risk audit improvements are awaiting approval rather than executing automatically.",
+      actionType: "approval_request",
+      actionTitle: "Request owner approval before high-risk audit improvements",
+      actionBrief: "Prepare exact public/spend/customer-facing/system-change proposals for owner review; do not execute them automatically.",
+      actionStatus: "awaiting_approval",
+      priority: 70,
+      riskLevel: "high",
+      approvalRequired: true,
+      measurementPlan: { metric: "owner_approval_for_high_risk_improvements", target: "approved_or_rejected", approvalCategories: ["public", "spend", "customer_message", "financial", "system_change"] },
     },
   ];
 }
@@ -518,8 +705,25 @@ export async function createNewBusinessSetupState(
   `;
 
   const evidenceRef = { source: "business_setup_profiles", id: setupProfile.id };
+  return createReadinessGapsRecommendationsAndActions(sql, hiveId, businessOsProfile.id, setupProfile.id, "setup", [evidenceRef], readinessSeeds(setup), gapSeeds(setup), "medium").then((result) => ({
+    setupProfileId: setupProfile.id,
+    actionsCreated: result.actionsCreated,
+  }));
+}
+
+async function createReadinessGapsRecommendationsAndActions(
+  sql: JsonSqlExecutor,
+  hiveId: string,
+  businessOsProfileId: string,
+  sourceId: string,
+  sourceKind: BusinessSetupSourceKind,
+  evidenceRefs: Array<Record<string, unknown>>,
+  readiness: ReadinessSeed[],
+  gaps: GapSeed[],
+  defaultGapConfidence: "low" | "medium" | "high",
+): Promise<{ actionsCreated: number }> {
   const readinessBySystem = new Map<string, string>();
-  for (const seed of readinessSeeds(setup)) {
+  for (const seed of readiness) {
     const [row] = await sql<{ id: string }[]>`
       INSERT INTO business_system_readiness (
         hive_id,
@@ -535,15 +739,15 @@ export async function createNewBusinessSetupState(
         summary
       ) VALUES (
         ${hiveId}::uuid,
-        ${businessOsProfile.id}::uuid,
-        ${"setup"},
-        ${setupProfile.id}::uuid,
+        ${businessOsProfileId}::uuid,
+        ${sourceKind},
+        ${sourceId}::uuid,
         ${seed.systemKey},
         ${seed.systemLabel},
         ${seed.score},
         ${seed.maturityLevel},
         ${seed.confidence},
-        ${sql.json(toJsonValue([evidenceRef]))},
+        ${sql.json(toJsonValue(evidenceRefs))},
         ${seed.summary}
       )
       RETURNING id
@@ -552,7 +756,7 @@ export async function createNewBusinessSetupState(
   }
 
   let actionsCreated = 0;
-  for (const seed of gapSeeds(setup)) {
+  for (const seed of gaps) {
     const [gap] = await sql<{ id: string }[]>`
       INSERT INTO business_gaps (
         hive_id,
@@ -567,14 +771,14 @@ export async function createNewBusinessSetupState(
         status
       ) VALUES (
         ${hiveId}::uuid,
-        ${businessOsProfile.id}::uuid,
+        ${businessOsProfileId}::uuid,
         ${readinessBySystem.get(seed.systemKey) ?? null},
         ${seed.gapType},
         ${seed.severity},
         ${seed.title},
         ${seed.description},
-        ${sql.json(toJsonValue([evidenceRef]))},
-        ${"medium"},
+        ${sql.json(toJsonValue(evidenceRefs))},
+        ${defaultGapConfidence},
         ${"open"}
       )
       RETURNING id
@@ -623,7 +827,7 @@ export async function createNewBusinessSetupState(
         measurement_plan
       ) VALUES (
         ${hiveId}::uuid,
-        ${businessOsProfile.id}::uuid,
+        ${businessOsProfileId}::uuid,
         ${recommendation.id}::uuid,
         ${seed.systemKey},
         ${seed.actionType},
@@ -633,7 +837,7 @@ export async function createNewBusinessSetupState(
         ${seed.priority},
         ${seed.riskLevel},
         ${seed.approvalRequired},
-        ${sql.json(toJsonValue([evidenceRef, { source: "business_recommendations", id: recommendation.id }]))},
+        ${sql.json(toJsonValue([...evidenceRefs, { source: "business_recommendations", id: recommendation.id }]))},
         ${seed.expectedOutcome},
         ${sql.json(toJsonValue(seed.measurementPlan))}
       )
@@ -641,5 +845,73 @@ export async function createNewBusinessSetupState(
     actionsCreated += 1;
   }
 
-  return { setupProfileId: setupProfile.id, actionsCreated };
+  return { actionsCreated };
+}
+
+export async function createExistingBusinessAuditState(
+  sql: JsonSqlExecutor,
+  hiveId: string,
+  businessOsProfile: BusinessOsProfile,
+  input: ExistingBusinessAuditInput | undefined,
+): Promise<{ auditProfileId: string; actionsCreated: number }> {
+  if (businessOsProfile.businessMode !== "existing_business") {
+    return { auditProfileId: "", actionsCreated: 0 };
+  }
+
+  const audit = normalizeAuditInput(input);
+  const readiness = auditReadinessSeeds(audit);
+  const overallReadinessScore = Math.round(readiness.reduce((total, row) => total + row.score, 0) / readiness.length);
+  const overallConfidence = audit.evidenceSources.length >= 2 ? "medium" : "low";
+  const [auditProfile] = await sql<{ id: string }[]>`
+    INSERT INTO business_audit_profiles (
+      hive_id,
+      business_os_profile_id,
+      audit_status,
+      audit_scope,
+      evidence_sources,
+      known_unknowns,
+      overall_readiness_score,
+      overall_confidence,
+      completed_at
+    ) VALUES (
+      ${hiveId}::uuid,
+      ${businessOsProfile.id}::uuid,
+      ${"completed"},
+      ${sql.json(toJsonValue(audit.scope))},
+      ${sql.json(toJsonValue(audit.evidenceSources))},
+      ${sql.json(toJsonValue(audit.knownUnknowns))},
+      ${overallReadinessScore},
+      ${overallConfidence},
+      NOW()
+    )
+    ON CONFLICT (hive_id) DO UPDATE SET
+      business_os_profile_id = EXCLUDED.business_os_profile_id,
+      audit_status = EXCLUDED.audit_status,
+      audit_scope = EXCLUDED.audit_scope,
+      evidence_sources = EXCLUDED.evidence_sources,
+      known_unknowns = EXCLUDED.known_unknowns,
+      overall_readiness_score = EXCLUDED.overall_readiness_score,
+      overall_confidence = EXCLUDED.overall_confidence,
+      completed_at = EXCLUDED.completed_at,
+      updated_at = NOW()
+    RETURNING id
+  `;
+
+  const evidenceRefs = [
+    { source: "business_audit_profiles", id: auditProfile.id },
+    ...audit.evidenceSources.map((source, index) => ({ source: "audit_evidence_source", index, label: source.label ?? source.kind ?? "evidence" })),
+  ];
+  const result = await createReadinessGapsRecommendationsAndActions(
+    sql,
+    hiveId,
+    businessOsProfile.id,
+    auditProfile.id,
+    "audit",
+    evidenceRefs,
+    readiness,
+    auditGapSeeds(),
+    overallConfidence,
+  );
+
+  return { auditProfileId: auditProfile.id, actionsCreated: result.actionsCreated };
 }
