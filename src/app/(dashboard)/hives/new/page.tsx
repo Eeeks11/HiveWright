@@ -160,6 +160,20 @@ const PROJECTS_STEP = 6;
 
 type RequestSortingPreset = "balanced" | "direct" | "goals";
 type SafetyPreset = "open" | "owner_review_first" | "locked_down" | "custom";
+type BusinessMode = "new_business" | "existing_business";
+
+const BUSINESS_MODE_OPTIONS: { value: BusinessMode; label: string; description: string }[] = [
+  {
+    value: "new_business",
+    label: "New business — set up a new operating model",
+    description: "Use HiveWright to turn an idea or opportunity into structured setup state, launch gaps, and approval-gated first actions.",
+  },
+  {
+    value: "existing_business",
+    label: "Existing business — audit and improve current operations",
+    description: "Use HiveWright to assess the current business, find operating gaps, and queue governed improvement actions.",
+  },
+];
 
 interface ProjectEntry {
   name: string;
@@ -200,6 +214,7 @@ interface Role {
 
 interface WizardState {
   kind: HiveKind;
+  businessMode: BusinessMode;
   name: string;
   slug: string;
   type: string;
@@ -306,6 +321,7 @@ export default function NewHiveWizard() {
 
   const [state, setState] = useState<WizardState>({
     kind: "business",
+    businessMode: "new_business",
     name: "",
     slug: "",
     type: "digital",
@@ -723,6 +739,16 @@ export default function NewHiveWizard() {
             mission: state.mission,
           },
           roleOverrides: roleOverridesForSubmit(),
+          businessOs: state.kind === "business"
+            ? {
+              mode: state.businessMode,
+              profile: {
+                businessName: state.name,
+                summary: state.description,
+                sourceProfile: { setupWizard: true },
+              },
+            }
+            : undefined,
           connectors: configuredConnectors,
           projects: state.projects
             .filter((project) => project.name || project.slug || project.workspacePath)
@@ -853,6 +879,26 @@ export default function NewHiveWizard() {
                 ))}
               </div>
             </fieldset>
+            {state.kind === "business" && (
+              <fieldset className="space-y-2" aria-label="Business OS mode">
+                <legend className="text-sm font-medium">Business OS mode</legend>
+                <p className="text-xs leading-5 text-zinc-500">
+                  Choose whether this business hive should start by setting up a new operating model or auditing an existing one.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {BUSINESS_MODE_OPTIONS.map((option) => (
+                    <RadioChoice
+                      key={option.value}
+                      name="business-os-mode"
+                      checked={state.businessMode === option.value}
+                      onChange={() => update({ businessMode: option.value })}
+                      title={option.label}
+                      description={option.description}
+                    />
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <div>
               <label htmlFor="hive-name" className="text-sm font-medium">Hive name *</label>
               <input

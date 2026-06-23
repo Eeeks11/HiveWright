@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
+import { businessOsKindProfile, upsertBusinessOsProfile, type BusinessOsProfileInput } from "@/business-os/profile";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { storeCredential } from "@/credentials/manager";
@@ -57,6 +58,10 @@ export type HiveSetupRequest = {
     kind?: HiveKind | string;
     description?: string;
     mission?: string;
+  };
+  businessOs?: {
+    mode?: BusinessOsProfileInput["mode"];
+    profile?: Omit<BusinessOsProfileInput, "mode">;
   };
   roleOverrides?: Record<string, RoleOverride>;
   connectors?: ConnectorSetup[];
@@ -613,6 +618,23 @@ export async function runHiveSetup(
       await seedSafetyPolicies(tx, hiveId, body.safetyPreset ?? "owner_review_first");
       maybeFailSetup("action-policies", options);
 
+      let businessKindProfile: Record<string, unknown> = {};
+      if (hiveKind === "business") {
+        const businessProfile = await upsertBusinessOsProfile(tx, hiveId, {
+          mode: body.businessOs?.mode,
+          ...(body.businessOs?.profile ?? {}),
+          businessName: body.businessOs?.profile?.businessName ?? (hiveRow.name as string),
+          summary: body.businessOs?.profile?.summary ?? ((description as string | null | undefined) ?? null),
+          sourceProfile: {
+            ...(typeof body.businessOs?.profile?.sourceProfile === "object" && body.businessOs.profile.sourceProfile !== null && !Array.isArray(body.businessOs.profile.sourceProfile)
+              ? body.businessOs.profile.sourceProfile as Record<string, unknown>
+              : {}),
+            setupWizard: true,
+          },
+        });
+        businessKindProfile = businessOsKindProfile(businessProfile);
+      }
+
       const initialGoal = body.initialGoal?.trim() || defaultInitialGoalForHiveKind(hiveKind, hiveRow.name as string);
       const defaultOperatingProfile = deriveOperatingProfileDefaults({
         hiveId,
@@ -623,7 +645,13 @@ export async function runHiveSetup(
         initialGoal,
         safetyPreset: body.safetyPreset ?? "owner_review_first",
       });
-      await upsertOperatingProfile(tx, hiveId, defaultOperatingProfile);
+      await upsertOperatingProfile(tx, hiveId, {
+        ...defaultOperatingProfile,
+        kindProfile: {
+          ...defaultOperatingProfile.kindProfile,
+          ...businessKindProfile,
+        },
+      });
 
       const installedConnectors: InstalledConnectorSetupResult[] = [];
       for (const connector of connectors) {
