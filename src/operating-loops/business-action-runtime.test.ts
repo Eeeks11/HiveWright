@@ -1,9 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testSql as sql, truncateAll } from "../../tests/_lib/test-db";
+
+vi.mock("@/app/api/_lib/auth", () => ({
+  requireApiUser: vi.fn().mockResolvedValue({
+    user: { id: "owner:test", email: "owner@example.com", isSystemOwner: true },
+  }),
+}));
+
+import { POST as respondToDecision } from "@/app/api/decisions/[id]/respond/route";
 import {
   convertRecommendationToBusinessAction,
   recordBusinessActionMeasurement,
-  resolveBusinessActionApproval,
   startApprovedBusinessAction,
   type BusinessActionMeasurement,
 } from "./business-action-runtime";
@@ -85,6 +92,14 @@ async function insertRecommendation(input: {
   return recommendation.id;
 }
 
+function ownerDecisionRequest(hiveId: string, body: Record<string, unknown>) {
+  return new Request("http://localhost/api/decisions/decision/respond", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hiveId, ...body }),
+  });
+}
+
 describe("Business OS action-loop runtime", () => {
   beforeEach(async () => {
     await truncateAll(sql);
@@ -150,12 +165,25 @@ describe("Business OS action-loop runtime", () => {
       measurement: { metricName: "qualified follow-up replies", baseline: 1, target: 4 },
     });
 
-    const approved = await resolveBusinessActionApproval(sql, {
+    const approvalResponse = await respondToDecision(ownerDecisionRequest(hiveId, {
+      response: "approved",
+      selectedOptionKey: "approve",
+      comment: "Approved for shadow-mode execution only.",
+    }), { params: Promise.resolve({ id: action.decision_id! }) });
+    const approvalBody = await approvalResponse.json();
+    expect(approvalResponse.status).toBe(200);
+    expect(approvalBody.data.businessActionResult).toMatchObject({
       actionId: action.id,
-      approved: true,
-      resolvedBy: "owner:test",
-      ownerResponse: "Approved for shadow-mode execution only.",
+      status: "approved",
+      approvalStatus: "approved",
     });
+
+    const [approved] = await sql<typeof action[]>`
+      SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+             risk_level, decision_id, measurement_plan
+      FROM business_actions
+      WHERE id = ${action.id}::uuid
+    `;
     expect(approved.status).toBe("approved");
     expect(approved.measurement_plan.approval?.status).toBe("approved");
     expect(approved.measurement_plan.loopStage).toBe("execute");
@@ -195,6 +223,48 @@ describe("Business OS action-loop runtime", () => {
       readiness_score: 58,
       summary: measurement.summary,
     });
+  });
+
+  it("rejects approval-gated Business OS actions through the owner decision route without execution", async () => {
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({ hiveId, riskLevel: "high" });
+
+    const action = await convertRecommendationToBusinessAction(sql, {
+      recommendationId,
+      businessOsProfileId: profileId,
+      systemKey: "sales-conversion",
+    });
+
+    const rejectionResponse = await respondToDecision(ownerDecisionRequest(hiveId, {
+      response: "rejected",
+      selectedOptionKey: "reject",
+      comment: "Revise before any execution.",
+    }), { params: Promise.resolve({ id: action.decision_id! }) });
+    const rejectionBody = await rejectionResponse.json();
+    expect(rejectionResponse.status).toBe(200);
+    expect(rejectionBody.data.businessActionResult).toMatchObject({
+      actionId: action.id,
+      status: "cancelled",
+      approvalStatus: "rejected",
+    });
+
+    const [cancelled] = await sql<typeof action[]>`
+      SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+             risk_level, decision_id, measurement_plan
+      FROM business_actions
+      WHERE id = ${action.id}::uuid
+    `;
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.measurement_plan.approval?.status).toBe("rejected");
+    expect(cancelled.measurement_plan.loopStage).toBe("plan");
+
+    const [decision] = await sql<{ owner_response: string; selected_option_key: string }[]>`
+      SELECT owner_response, selected_option_key
+      FROM decisions
+      WHERE id = ${action.decision_id}::uuid
+    `;
+    expect(decision.selected_option_key).toBe("reject");
+    expect(decision.owner_response).toContain("rejected");
   });
 
   it("queues safe internal recommendations without creating owner approval decisions", async () => {

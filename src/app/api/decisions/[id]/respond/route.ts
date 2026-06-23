@@ -9,6 +9,7 @@ import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
 import { applyApprovedLearningGateFollowup, LEARNING_GATE_FOLLOWUP_DECISION_KIND } from "@/goals/learning-gate-approval";
 import { executeApprovedExternalAction, rejectExternalAction, type ExecuteExternalActionInput, type ExecuteExternalActionResult } from "@/actions/external-actions";
+import type { BusinessActionMeasurementPlan, BusinessActionRuntimeRow, BusinessActionStatus } from "@/operating-loops/business-action-runtime";
 
 const DIRECT_TASK_QA_CAP_ACTIONS = [
   "retry_with_different_role",
@@ -22,6 +23,7 @@ const QUALITY_FEEDBACK_RESPONSES = ["quality_feedback", "dismiss_quality_feedbac
 type QualityFeedbackResponse = (typeof QUALITY_FEEDBACK_RESPONSES)[number];
 const MAX_RESPONSE_COMMENT_LENGTH = 2000;
 const EXTERNAL_ACTION_APPROVAL_DECISION_KIND = "external_action_approval";
+const BUSINESS_OS_ACTION_APPROVAL_DECISION_KIND = "business_os_action_approval";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const RELEASE_SCAN_MODEL_PROPOSAL_KINDS = new Set([
@@ -150,10 +152,18 @@ function responseForExternalActionOption(option: NamedDecisionOption): ValidResp
   return null;
 }
 
+const responseForApprovalOption = responseForExternalActionOption;
+
 function externalActionRequestIdFromMetadata(routeMetadata: unknown): string | null {
   if (!isRecord(routeMetadata)) return null;
   const requestId = stringField(routeMetadata, ["externalActionRequestId", "external_action_request_id"]);
   return requestId && UUID_RE.test(requestId) ? requestId : null;
+}
+
+function businessActionIdFromMetadata(routeMetadata: unknown): string | null {
+  if (!isRecord(routeMetadata)) return null;
+  const actionId = stringField(routeMetadata, ["actionId", "action_id", "businessActionId", "business_action_id"]);
+  return actionId && UUID_RE.test(actionId) ? actionId : null;
 }
 
 async function validateExternalActionDecisionLink(
@@ -178,6 +188,139 @@ async function validateExternalActionDecisionLink(
     return jsonError("External action approval decision references an external action request that was not found for this hive", 400);
   }
   return requestId;
+}
+
+async function validateBusinessActionDecisionLink(
+  decisionId: string,
+  hiveId: string,
+  routeMetadata: unknown,
+): Promise<string | Response> {
+  const actionId = businessActionIdFromMetadata(routeMetadata);
+  if (!actionId) {
+    return jsonError("Business OS action approval decision is missing a valid business action id", 400);
+  }
+
+  const [action] = await sql<{ id: string }[]>`
+    SELECT id
+    FROM business_actions
+    WHERE id = ${actionId}::uuid
+      AND hive_id = ${hiveId}::uuid
+      AND decision_id = ${decisionId}::uuid
+    LIMIT 1
+  `;
+  if (!action) {
+    return jsonError("Business OS action approval decision references a business action that was not found for this hive", 400);
+  }
+  return actionId;
+}
+
+type BusinessActionApprovalResult = {
+  actionId: string;
+  status: BusinessActionStatus;
+  approvalStatus: "approved" | "rejected";
+};
+
+function businessActionStatusAfterOwnerDecision(
+  currentStatus: BusinessActionStatus,
+  approved: boolean,
+): BusinessActionStatus {
+  if (approved) {
+    return currentStatus === "awaiting_approval" ? "approved" : currentStatus;
+  }
+  return ["awaiting_approval", "approved", "queued"].includes(currentStatus)
+    ? "cancelled"
+    : currentStatus;
+}
+
+function businessActionMeasurementPlanAfterOwnerDecision(
+  action: Pick<BusinessActionRuntimeRow, "decision_id" | "measurement_plan">,
+  approved: boolean,
+): BusinessActionMeasurementPlan {
+  return {
+    ...action.measurement_plan,
+    loopStage: approved ? "execute" : action.measurement_plan.loopStage,
+    approval: {
+      required: true,
+      decisionId: action.decision_id,
+      status: approved ? "approved" : "rejected",
+    },
+  };
+}
+
+async function applyBusinessActionApprovalDecision(
+  input: {
+    decisionId: string;
+    hiveId: string;
+    actionId: string;
+    approved: boolean;
+    ownerResponse: string;
+    selectedOptionKey: string;
+    selectedOptionLabel: string | null;
+    resolvedBy: string;
+  },
+): Promise<{ decision: DecisionRowForModelProposal; result: BusinessActionApprovalResult }> {
+  return sql.begin(async (tx) => {
+    const [action] = await tx<BusinessActionRuntimeRow[]>`
+      SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+             risk_level, decision_id, measurement_plan
+      FROM business_actions
+      WHERE id = ${input.actionId}::uuid
+        AND hive_id = ${input.hiveId}::uuid
+        AND decision_id = ${input.decisionId}::uuid
+      FOR UPDATE
+    `;
+    if (!action) throw new Error(`business action ${input.actionId} not found for decision ${input.decisionId}`);
+    if (!action.approval_required) throw new Error(`business action ${input.actionId} is not approval-gated`);
+
+    const nextActionStatus = businessActionStatusAfterOwnerDecision(action.status, input.approved);
+    const measurementPlan = businessActionMeasurementPlanAfterOwnerDecision(action, input.approved);
+
+    const [decision] = await tx<DecisionRowForModelProposal[]>`
+      UPDATE decisions
+      SET status = 'resolved',
+          owner_response = ${input.ownerResponse},
+          selected_option_key = ${input.selectedOptionKey},
+          selected_option_label = ${input.selectedOptionLabel},
+          resolved_at = COALESCE(resolved_at, NOW()),
+          resolved_by = COALESCE(resolved_by, ${input.resolvedBy})
+      WHERE id = ${input.decisionId}::uuid
+        AND hive_id = ${input.hiveId}::uuid
+        AND kind = ${BUSINESS_OS_ACTION_APPROVAL_DECISION_KIND}
+        AND (
+          status <> 'resolved'
+          OR selected_option_key = ${input.selectedOptionKey}
+          OR owner_response = ${input.approved ? "approved" : "rejected"}
+          OR owner_response LIKE ${`${input.approved ? "approved" : "rejected"}:%`}
+        )
+      RETURNING id, hive_id, goal_id, title, context, recommendation, options, route_metadata,
+                priority, status, kind, owner_response,
+                selected_option_key, selected_option_label, created_at, resolved_at,
+                task_id, is_qa_fixture
+    `;
+    if (!decision) throw new Error(`business action approval decision ${input.decisionId} could not be resolved idempotently`);
+
+    const [updatedAction] = await tx<BusinessActionRuntimeRow[]>`
+      UPDATE business_actions
+      SET status = ${nextActionStatus},
+          measurement_plan = ${tx.json(measurementPlan as Parameters<typeof tx.json>[0])},
+          updated_at = NOW()
+      WHERE id = ${input.actionId}::uuid
+        AND hive_id = ${input.hiveId}::uuid
+        AND decision_id = ${input.decisionId}::uuid
+      RETURNING id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+                risk_level, decision_id, measurement_plan
+    `;
+    if (!updatedAction) throw new Error(`business action ${input.actionId} could not be updated`);
+
+    return {
+      decision,
+      result: {
+        actionId: updatedAction.id,
+        status: updatedAction.status,
+        approvalStatus: input.approved ? "approved" : "rejected",
+      },
+    };
+  });
 }
 
 function isSalesManualQueueAction(routeMetadata: unknown): boolean {
@@ -708,8 +851,9 @@ export async function POST(
         }
       }
       response = response ?? selectedOption.response ?? (
-        decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND
-          ? responseForExternalActionOption(selectedOption)
+        decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND ||
+          decisionForAuth.kind === BUSINESS_OS_ACTION_APPROVAL_DECISION_KIND
+          ? responseForApprovalOption(selectedOption)
           : null
       ) ?? "approved";
     }
@@ -724,14 +868,17 @@ export async function POST(
       );
     }
 
-    if (decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND) {
+    if (
+      decisionForAuth.kind === EXTERNAL_ACTION_APPROVAL_DECISION_KIND ||
+      decisionForAuth.kind === BUSINESS_OS_ACTION_APPROVAL_DECISION_KIND
+    ) {
       if (!requestedOptionKey || !selectedOption) {
-        return jsonError("External action decisions require selectedOptionKey 'approve' or 'reject'", 400);
+        return jsonError("Approval decisions require selectedOptionKey 'approve' or 'reject'", 400);
       }
-      const optionResponse = responseForExternalActionOption(selectedOption);
+      const optionResponse = responseForApprovalOption(selectedOption);
       if (response !== optionResponse) {
         return jsonError(
-          `External action response must match selectedOptionKey '${selectedOption.key}'`,
+          `Approval response must match selectedOptionKey '${selectedOption.key}'`,
           400,
         );
       }
@@ -754,6 +901,17 @@ export async function POST(
       );
       if (validated instanceof Response) return validated;
       externalActionRequestId = validated;
+    }
+
+    let businessActionId: string | null = null;
+    if (decisionForAuth.kind === BUSINESS_OS_ACTION_APPROVAL_DECISION_KIND) {
+      const validated = await validateBusinessActionDecisionLink(
+        id,
+        decisionForAuth.hive_id,
+        decisionForAuth.route_metadata,
+      );
+      if (validated instanceof Response) return validated;
+      businessActionId = validated;
     }
 
     const optionLabel = selectedOption?.label ??
@@ -811,6 +969,41 @@ export async function POST(
       const sameRecordedResponse =
         (response === "approved" && recordedApproval) ||
         (response === "rejected" && recordedRejection);
+      if (existingDecision && businessActionId && sameRecordedResponse) {
+        const { result: businessActionResult } = await applyBusinessActionApprovalDecision({
+          decisionId: id,
+          hiveId: decisionForAuth.hive_id,
+          actionId: businessActionId,
+          approved: response === "approved",
+          ownerResponse,
+          selectedOptionKey: selectedOption?.key ?? requestedOptionKey ?? (response === "approved" ? "approve" : "reject"),
+          selectedOptionLabel: optionLabel,
+          resolvedBy: user.id,
+        });
+        return jsonOk({
+          id: existingDecision.id,
+          hiveId: existingDecision.hive_id,
+          goalId: existingDecision.goal_id,
+          taskId: existingDecision.task_id,
+          title: existingDecision.title,
+          context: existingDecision.context,
+          recommendation: existingDecision.recommendation,
+          options: existingDecision.options,
+          kind: existingDecision.kind,
+          routeMetadata: existingDecision.route_metadata,
+          priority: existingDecision.priority,
+          status: existingDecision.status,
+          ownerResponse: existingDecision.owner_response,
+          selectedOptionKey: existingDecision.selected_option_key,
+          selectedOptionLabel: existingDecision.selected_option_label,
+          createdAt: existingDecision.created_at,
+          resolvedAt: existingDecision.resolved_at,
+          queuedTaskId: null,
+          learningGateApproval: null,
+          externalActionResult: null,
+          businessActionResult,
+        });
+      }
       if (existingDecision && externalActionRequestId && sameRecordedResponse) {
         const externalActionResult = response === "approved"
           ? isSalesManualQueueAction(existingDecision.route_metadata)
@@ -860,6 +1053,7 @@ export async function POST(
           queuedTaskId: null,
           learningGateApproval: null,
           externalActionResult,
+          businessActionResult: null,
         });
       }
       if (response === "approved" && recordedApproval && existingDecision) {
@@ -886,6 +1080,7 @@ export async function POST(
             queuedTaskId,
             learningGateApproval: null,
             externalActionResult: null,
+            businessActionResult: null,
           });
         }
       }
@@ -897,6 +1092,7 @@ export async function POST(
 
     let rows;
     let learningGateApproval = null;
+    let businessActionResult: BusinessActionApprovalResult | null = null;
     if (response === "discussed") {
       // Insert discussion message — do NOT resolve the decision
       const [message] = await sql<{ id: string }[]>`
@@ -916,6 +1112,19 @@ export async function POST(
                   selected_option_key, selected_option_label, created_at, resolved_at,
                   task_id, is_qa_fixture
       `;
+    } else if (businessActionId && (response === "approved" || response === "rejected")) {
+      const txResult = await applyBusinessActionApprovalDecision({
+        decisionId: id,
+        hiveId: decisionForAuth.hive_id,
+        actionId: businessActionId,
+        approved: response === "approved",
+        ownerResponse,
+        selectedOptionKey: selectedOption?.key ?? requestedOptionKey ?? (response === "approved" ? "approve" : "reject"),
+        selectedOptionLabel: optionLabel,
+        resolvedBy: user.id,
+      });
+      rows = [txResult.decision];
+      businessActionResult = txResult.result;
     } else if (response === "approved" && decisionForAuth.kind === LEARNING_GATE_FOLLOWUP_DECISION_KIND) {
       const txResult = await sql.begin(async (tx) => {
         const updatedRows = await tx`
@@ -1116,6 +1325,7 @@ export async function POST(
         queuedTaskId,
         learningGateApproval,
         externalActionResult,
+        businessActionResult,
       },
     });
 
@@ -1140,6 +1350,7 @@ export async function POST(
       queuedTaskId,
       learningGateApproval,
       externalActionResult,
+      businessActionResult,
     });
   } catch {
     return jsonError("Failed to respond to decision", 500);
