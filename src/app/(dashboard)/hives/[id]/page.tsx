@@ -64,6 +64,8 @@ type BusinessOsOwnerDashboard = {
   };
   systemMaturity: {
     averageReadinessScore: number | null;
+    readinessEvidenceState: "measured" | "unknown";
+    readinessEvidenceMessage: string;
     atRiskSystems: string[];
     systems: Array<{
       key: string;
@@ -558,9 +560,7 @@ export default function HiveDetailPage() {
               <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.systemMaturity.averageReadinessScore ?? "—"}</p>
               <p className="text-xs text-zinc-500">average readiness</p>
               <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
-                {businessOsDashboard.systemMaturity.atRiskSystems.length
-                  ? `Weak systems: ${businessOsDashboard.systemMaturity.atRiskSystems.slice(0, 3).join(", ")}`
-                  : "No systems below the readiness threshold."}
+                {businessOsDashboard.systemMaturity.readinessEvidenceMessage}
               </p>
             </div>
           </div>

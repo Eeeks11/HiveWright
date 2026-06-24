@@ -96,6 +96,8 @@ export type AgentActivityRow = {
 
 export type BusinessOsOwnerDashboard = ReturnType<typeof deriveBusinessOsOwnerDashboard>;
 
+export type BusinessOsReadinessEvidenceState = "measured" | "unknown";
+
 const TERMINAL_ACTION_STATUSES = new Set(["completed", "cancelled", "failed"]);
 const ACTIVE_ACTION_STATUSES = new Set(["draft", "queued", "awaiting_approval", "approved", "running", "blocked"]);
 const WEAK_MATURITY_LEVELS = new Set(["missing", "ad_hoc"]);
@@ -192,6 +194,12 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
   const readinessAverage = input.readiness.length
     ? Math.round(input.readiness.reduce((sum, row) => sum + row.readinessScore, 0) / input.readiness.length)
     : null;
+  const readinessEvidenceState: BusinessOsReadinessEvidenceState = input.readiness.length > 0 ? "measured" : "unknown";
+  const readinessEvidenceMessage = readinessEvidenceState === "unknown"
+    ? "Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS."
+    : atRiskSystems.length > 0
+      ? `Weak systems: ${atRiskSystems.slice(0, 3).join(", ")}`
+      : "Measured systems are currently above the readiness threshold.";
   const maturityCounts = input.readiness.reduce<Record<string, number>>((counts, row) => {
     const key = row.maturityLevel ?? "unknown";
     counts[key] = (counts[key] ?? 0) + 1;
@@ -229,7 +237,9 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       : "No approval-required Business OS actions are waiting right now.",
     atRiskSystems.length > 0
       ? `Check weak systems first: ${atRiskSystems.slice(0, 3).join(", ")}.`
-      : "No weak systems are currently below the readiness threshold.",
+      : readinessEvidenceState === "unknown"
+        ? "Confirm readiness evidence before treating this Business OS as healthy."
+        : "Measured systems are currently above the readiness threshold.",
     input.auditProfile?.knownUnknowns.length
       ? `Resolve known unknowns: ${input.auditProfile.knownUnknowns.slice(0, 2).join("; ")}.`
       : "Known unknowns are clear or not yet recorded.",
@@ -252,6 +262,8 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
     },
     systemMaturity: {
       averageReadinessScore: readinessAverage,
+      readinessEvidenceState,
+      readinessEvidenceMessage,
       maturityCounts,
       atRiskSystems,
       systems: input.readiness

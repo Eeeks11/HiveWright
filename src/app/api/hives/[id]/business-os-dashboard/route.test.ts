@@ -97,6 +97,45 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
     expect(body.data.agentActivity[0]).toMatchObject({ hasEvidence: true });
   });
 
+  it("returns unknown readiness evidence when a profile has no audit/readiness rows", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([{
+        id: "profile-1",
+        business_mode: "existing_business",
+        business_name: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit has not started.",
+        owner_goals: ["Show unknown readiness honestly"],
+        approval_policy: {},
+        ai_spend_budget: {},
+        autonomy_policy: {},
+        updated_at: "2026-06-24T01:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard`), {
+      params: Promise.resolve({ id: hiveId }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.auditScorecard).toMatchObject({ status: "not_started", score: null });
+    expect(body.data.systemMaturity).toMatchObject({
+      averageReadinessScore: null,
+      readinessEvidenceState: "unknown",
+      readinessEvidenceMessage: "Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS.",
+      atRiskSystems: [],
+    });
+    expect(body.data.ownerNextReviewChecklist).toContain("Confirm readiness evidence before treating this Business OS as healthy.");
+    expect(body.data.ownerNextReviewChecklist).not.toContain("No weak systems are currently below the readiness threshold.");
+  });
+
   it("enforces hive access for non-owner callers", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },

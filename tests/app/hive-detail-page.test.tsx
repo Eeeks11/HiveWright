@@ -24,9 +24,11 @@ function renderWithQueryClient(ui: React.ReactElement) {
 
 describe("HiveDetailPage", () => {
   let originalFetch: typeof globalThis.fetch;
+  let businessOsDashboardResponse: unknown | null;
 
   beforeEach(() => {
     originalFetch = globalThis.fetch;
+    businessOsDashboardResponse = null;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
@@ -50,6 +52,11 @@ describe("HiveDetailPage", () => {
 
       if (url === "/api/hives/hive-1/targets") {
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      }
+
+      if (url === "/api/hives/hive-1/business-os-dashboard") {
+        if (!businessOsDashboardResponse) return new Response("not found", { status: 404 });
+        return jsonResponse({ data: businessOsDashboardResponse });
       }
 
       if (url === "/api/connectors?hiveId=hive-1") {
@@ -102,7 +109,66 @@ describe("HiveDetailPage", () => {
     expect(screen.getByRole("button", { name: "Sync Discord operations" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Disable Discord operations" })).toBeTruthy();
   });
+
+  it("shows missing readiness evidence instead of saying no systems are below threshold", async () => {
+    businessOsDashboardResponse = businessOsDashboardFixture({
+      systemMaturity: {
+        averageReadinessScore: null,
+        readinessEvidenceState: "unknown",
+        readinessEvidenceMessage: "Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS.",
+        atRiskSystems: [],
+        systems: [],
+      },
+    });
+
+    renderWithQueryClient(<HiveDetailPage />);
+
+    expect(await screen.findByText("Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS.")).toBeTruthy();
+    expect(screen.queryByText("No systems below the readiness threshold.")).toBeNull();
+  });
 });
+
+function businessOsDashboardFixture(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    headline: "Alpha Hive Business OS — audit command view",
+    summary: "Business OS dashboard fixture.",
+    mode: "existing_business",
+    stage: "operating",
+    ownerGoals: [],
+    setupProgress: {
+      label: "Existing-business audit progress",
+      completedSteps: 1,
+      totalSteps: 6,
+      percent: 17,
+      nextStep: "Finish the audit baseline and evidence sources before execution.",
+    },
+    auditScorecard: {
+      status: "not_started",
+      score: null,
+      confidence: null,
+      scope: [],
+      evidence: [],
+      knownUnknowns: [],
+    },
+    systemMaturity: {
+      averageReadinessScore: 80,
+      readinessEvidenceState: "measured",
+      readinessEvidenceMessage: "Measured systems are currently above the readiness threshold.",
+      atRiskSystems: [],
+      systems: [],
+    },
+    priorityActions: [],
+    approvalsRequired: [],
+    openGaps: [],
+    agentActivity: [],
+    changedSinceLastReview: [],
+    governance: {
+      aiSpendBudgetLabel: "AI spend budget configured",
+    },
+    ownerNextReviewChecklist: [],
+    ...overrides,
+  };
+}
 
 function connectorFixture() {
   return {

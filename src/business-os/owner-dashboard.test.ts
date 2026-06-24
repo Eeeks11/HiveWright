@@ -67,4 +67,38 @@ describe("deriveBusinessOsOwnerDashboard", () => {
     ]);
     expect(dashboard.ownerNextReviewChecklist).toContain("Review 1 approval-required action before it can move into execution.");
   });
+
+  it("treats empty readiness rows as unknown evidence instead of a healthy state", () => {
+    const dashboard = deriveBusinessOsOwnerDashboard({
+      profile: {
+        id: "profile-1",
+        businessMode: "existing_business",
+        businessName: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit has not produced readiness rows yet.",
+        ownerGoals: ["Expose weak systems honestly"],
+        approvalPolicy: {},
+        aiSpendBudget: {},
+        autonomyPolicy: {},
+      },
+      setupProfile: null,
+      auditProfile: null,
+      readiness: [],
+      gaps: [],
+      recommendations: [],
+      actions: [],
+      agentActivity: [],
+    });
+
+    expect(dashboard.auditScorecard).toMatchObject({ status: "not_started", score: null });
+    expect(dashboard.systemMaturity).toMatchObject({
+      averageReadinessScore: null,
+      readinessEvidenceState: "unknown",
+      readinessEvidenceMessage: "Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS.",
+      atRiskSystems: [],
+      systems: [],
+    });
+    expect(dashboard.ownerNextReviewChecklist).toContain("Confirm readiness evidence before treating this Business OS as healthy.");
+    expect(dashboard.ownerNextReviewChecklist).not.toContain("No weak systems are currently below the readiness threshold.");
+  });
 });
