@@ -41,6 +41,89 @@ interface Hive {
   createdAt: string;
 }
 
+type BusinessOsOwnerDashboard = {
+  headline: string;
+  summary: string | null;
+  mode: "new_business" | "existing_business";
+  stage: string | null;
+  ownerGoals: string[];
+  setupProgress: {
+    label: string;
+    completedSteps: number;
+    totalSteps: number;
+    percent: number;
+    nextStep: string;
+  };
+  auditScorecard: {
+    status: string;
+    score: number | null;
+    confidence: string | null;
+    scope: string[];
+    evidence: string[];
+    knownUnknowns: string[];
+  };
+  systemMaturity: {
+    averageReadinessScore: number | null;
+    atRiskSystems: string[];
+    systems: Array<{
+      key: string;
+      label: string;
+      score: number;
+      maturity: string | null;
+      confidence: string | null;
+      summary: string | null;
+      evidence: string[];
+    }>;
+  };
+  priorityActions: Array<{
+    title: string;
+    brief: string;
+    status: string;
+    priority: number;
+    riskLevel: string | null;
+    approvalRequired: boolean;
+    expectedOutcome: string | null;
+    measurementMetric: string | null;
+    evidence: string[];
+  }>;
+  approvalsRequired: Array<{
+    title: string;
+    brief: string;
+    status: string;
+    priority: number;
+    riskLevel: string | null;
+    expectedOutcome: string | null;
+    evidence: string[];
+  }>;
+  openGaps: Array<{
+    title: string;
+    severity: string | null;
+    status: string;
+    systemKey: string | null;
+    confidence: string | null;
+    evidence: string[];
+  }>;
+  agentActivity: Array<{
+    title: string;
+    summary: string | null;
+    status: string;
+    role: string | null;
+    evidenceUrl: string | null;
+    hasEvidence: boolean;
+    updatedAt: string | null;
+  }>;
+  changedSinceLastReview: Array<{
+    type: string;
+    label: string;
+    detail: string;
+    changedAt: string | null;
+  }>;
+  governance: {
+    aiSpendBudgetLabel: string;
+  };
+  ownerNextReviewChecklist: string[];
+};
+
 type TargetStatus = "open" | "achieved" | "abandoned";
 
 interface Target {
@@ -60,6 +143,7 @@ export default function HiveDetailPage() {
   const target = useResolvedHiveTarget(id);
 
   const [hive, setHive] = useState<Hive | null>(null);
+  const [businessOsDashboard, setBusinessOsDashboard] = useState<BusinessOsOwnerDashboard | null>(null);
   const [targets, setTargets] = useState<Target[]>([]);
   const [contextPreview, setContextPreview] = useState<string>("");
   const [showPreview, setShowPreview] = useState(false);
@@ -79,6 +163,7 @@ export default function HiveDetailPage() {
     if (target.isResolvingTarget) return;
     if (target.isUnresolvedTarget || !target.effectiveHiveId) {
       setHive(null);
+      setBusinessOsDashboard(null);
       setTargets([]);
       setLoadError("Hive target not found");
       return;
@@ -94,13 +179,21 @@ export default function HiveDetailPage() {
     };
 
     try {
-      const [hiveRes, targetsRes] = await Promise.all([
+      const readOptionalBusinessOsDashboard = async () => {
+        const res = await fetch(`/api/hives/${id}/business-os-dashboard`);
+        if (res.status === 404) return null;
+        return readJson(res);
+      };
+      const [hiveRes, targetsRes, businessOsRes] = await Promise.all([
         fetch(`/api/hives/${id}`).then(readJson),
         fetch(`/api/hives/${id}/targets`).then(readJson),
+        readOptionalBusinessOsDashboard(),
       ]);
       setHive(hiveRes.data ?? null);
       setTargets(targetsRes.data || []);
+      setBusinessOsDashboard(businessOsRes?.data ?? null);
     } catch (error) {
+      setBusinessOsDashboard(null);
       setLoadError(error instanceof Error ? error.message : "Failed to load hive");
     }
   }, [id, target.effectiveHiveId, target.isResolvingTarget, target.isUnresolvedTarget]);
@@ -387,7 +480,7 @@ export default function HiveDetailPage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
       <div className="hive-honey-glow space-y-2">
         <input
@@ -429,6 +522,115 @@ export default function HiveDetailPage() {
       </section>
 
       <HiveScoreboard hiveId={id} hiveKind={hive.kind ?? "business"} />
+
+      {businessOsDashboard && (
+        <section className="space-y-5 rounded-lg border border-blue-200 bg-blue-50/40 p-6 dark:border-blue-900/40 dark:bg-blue-950/10">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Business OS command view</p>
+                <h2 className="text-xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.headline}</h2>
+              </div>
+              <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-800 shadow-sm dark:bg-blue-950 dark:text-blue-100">
+                {businessOsDashboard.governance.aiSpendBudgetLabel}
+              </div>
+            </div>
+            {businessOsDashboard.summary && (
+              <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">{businessOsDashboard.summary}</p>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Setup progress</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.setupProgress.percent}%</p>
+              <p className="text-xs text-zinc-500">{businessOsDashboard.setupProgress.completedSteps}/{businessOsDashboard.setupProgress.totalSteps} sections complete</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">{businessOsDashboard.setupProgress.nextStep}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Audit scorecard</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.auditScorecard.score ?? "—"}</p>
+              <p className="text-xs text-zinc-500">{businessOsDashboard.auditScorecard.status.replaceAll("_", " ")} · {businessOsDashboard.auditScorecard.confidence ?? "unknown"} confidence</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">Scope: {businessOsDashboard.auditScorecard.scope.length ? businessOsDashboard.auditScorecard.scope.join(", ") : "not recorded"}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">System maturity</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.systemMaturity.averageReadinessScore ?? "—"}</p>
+              <p className="text-xs text-zinc-500">average readiness</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
+                {businessOsDashboard.systemMaturity.atRiskSystems.length
+                  ? `Weak systems: ${businessOsDashboard.systemMaturity.atRiskSystems.slice(0, 3).join(", ")}`
+                  : "No systems below the readiness threshold."}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Approvals required</h3>
+              {businessOsDashboard.approvalsRequired.length === 0 && <p className="text-sm text-zinc-500">No approval-required Business OS actions are waiting.</p>}
+              {businessOsDashboard.approvalsRequired.map((action) => (
+                <div key={action.title} className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/20">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium text-amber-950 dark:text-amber-100">{action.title}</p>
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{action.status.replaceAll("_", " ")}</span>
+                  </div>
+                  <p className="mt-1 text-zinc-700 dark:text-zinc-300">{action.brief}</p>
+                  {action.expectedOutcome && <p className="mt-1 text-xs text-zinc-500">Outcome: {action.expectedOutcome}</p>}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Priority actions</h3>
+              {businessOsDashboard.priorityActions.length === 0 && <p className="text-sm text-zinc-500">No active Business OS actions yet.</p>}
+              {businessOsDashboard.priorityActions.map((action) => (
+                <div key={action.title} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium">{action.title}</p>
+                    <span className="text-xs text-zinc-500">P{action.priority}</span>
+                  </div>
+                  <p className="mt-1 text-zinc-600 dark:text-zinc-400">{action.brief}</p>
+                  <p className="mt-1 text-xs text-zinc-500">{action.status.replaceAll("_", " ")} · {action.riskLevel ?? "unknown"} risk{action.approvalRequired ? " · owner approval" : ""}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Agent activity and evidence</h3>
+              {businessOsDashboard.agentActivity.length === 0 && <p className="text-sm text-zinc-500">No recent agent activity is linked to this Business OS yet.</p>}
+              {businessOsDashboard.agentActivity.map((activity) => (
+                <div key={`${activity.title}-${activity.updatedAt ?? ""}`} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <p className="font-medium">{activity.title}</p>
+                  <p className="text-xs text-zinc-500">{activity.role ?? "agent"} · {activity.status.replaceAll("_", " ")}</p>
+                  {activity.summary && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{activity.summary}</p>}
+                  {activity.evidenceUrl && <a href={activity.evidenceUrl} className="mt-1 inline-block text-xs text-blue-700 hover:underline dark:text-blue-300">Open evidence</a>}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Changed since last review</h3>
+              {businessOsDashboard.changedSinceLastReview.length === 0 && <p className="text-sm text-zinc-500">No recent Business OS changes found.</p>}
+              {businessOsDashboard.changedSinceLastReview.map((change) => (
+                <div key={`${change.type}-${change.label}-${change.changedAt ?? ""}`} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <p className="font-medium">{change.label}</p>
+                  <p className="text-zinc-600 dark:text-zinc-400">{change.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <h3 className="font-medium text-blue-950 dark:text-blue-50">Owner next review checklist</h3>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+              {businessOsDashboard.ownerNextReviewChecklist.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        </section>
+      )}
 
       <section className="space-y-4 rounded-lg border p-6">
         <div>
