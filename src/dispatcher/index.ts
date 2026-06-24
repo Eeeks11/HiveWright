@@ -93,6 +93,7 @@ import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 import { ensureRuntimeGuardDecision } from "../decisions/runtime-guard";
 import { failTaskWithRuntimeReplan } from "./runtime-replan";
 import { sendNotification } from "../notifications/sender";
+import { runStaleDecisionEscalations } from "./decision-escalation";
 import { pruneStaleGoalSupervisors } from "../openclaw/goal-supervisor-cleanup";
 import { buildGoalCreatedNotificationMessage } from "./goal-notification";
 import {
@@ -2340,27 +2341,13 @@ export class Dispatcher {
 
   private async checkDecisionEscalation() {
     try {
-      const stale = await this.sql`
-        SELECT d.id, d.hive_id, d.title, d.context, d.priority
-        FROM decisions d
-        WHERE d.priority = 'urgent'
-          AND d.status = 'pending'
-          AND d.created_at < NOW() - INTERVAL '4 hours'
-          AND NOT EXISTS (
-            SELECT 1 FROM decision_messages dm
-            WHERE dm.decision_id = d.id
-            AND dm.created_at > NOW() - INTERVAL '4 hours'
-          )
-      `;
-      for (const d of stale) {
-        await sendNotification(this.sql, {
-          hiveId: d.hive_id as string,
-          title: `ESCALATION: ${d.title}`,
-          message: `This urgent decision has been pending for over 4 hours: ${d.context}`,
-          priority: "urgent",
-          source: "dispatcher",
-        });
-        console.log(`[dispatcher] Escalated stale decision: ${d.id}`);
+      const escalated = await runStaleDecisionEscalations(this.sql);
+      for (const result of escalated) {
+        console.log(
+          `[dispatcher] Escalated stale decision: ${result.decisionId} ` +
+          `(message=${result.messageId}, sent=${result.notification.sent}, ` +
+          `skipped=${result.notification.skipped}, errors=${result.notification.errors})`,
+        );
       }
     } catch (err) {
       console.error("[dispatcher] Decision escalation check failed:", err);
