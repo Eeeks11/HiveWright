@@ -18,10 +18,13 @@ export async function GET(request?: Request) {
   if (hiveId && !HIVE_ID_RE.test(hiveId)) return jsonError("hiveId must be a valid UUID", 400);
 
   try {
+    const activeSetupRuntimeSourcesPromise = hiveId
+      ? listActiveSetupRuntimeSources(sql, { hiveId })
+      : Promise.resolve([]);
     const [diagnostics, setupRuntimeReadiness, activeSetupRuntimeSources] = await Promise.all([
       collectHiveWrightDiagnostics(),
       collectSetupRuntimeReadiness(),
-      listActiveSetupRuntimeSources(sql, hiveId ? { hiveId } : undefined),
+      activeSetupRuntimeSourcesPromise,
     ]);
     return jsonOk({
       ...diagnostics,
