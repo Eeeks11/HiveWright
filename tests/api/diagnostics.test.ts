@@ -90,6 +90,7 @@ describe("GET /api/diagnostics", () => {
         source: "ollama",
         label: "Ollama",
         status: "missing",
+        policy: "optional_runtime",
         detail: "Ollama command is not installed on this server.",
         nextStep: "Install/start Ollama on the HiveWright server, then run setup health again.",
       },
@@ -127,9 +128,11 @@ describe("GET /api/diagnostics", () => {
     expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot, {
       activeSources: [],
     });
+    expect(setupReadinessMock.listActiveSetupRuntimeSources).not.toHaveBeenCalled();
   });
 
-  it("passes active configured local runtime sources into setup-readiness warnings", async () => {
+  it("passes hive-scoped active configured runtime sources into setup-readiness warnings", async () => {
+    const hiveId = "11111111-1111-4111-8111-111111111111";
     const setupSnapshot = {
       checkedAt: "2026-05-24T08:15:01.000Z",
       runtimes: {
@@ -173,12 +176,12 @@ describe("GET /api/diagnostics", () => {
     setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReturnValue(warningSources);
     const { GET } = await import("../../src/app/api/diagnostics/route");
 
-    const response = await GET();
+    const response = await GET(new Request(`http://localhost/api/diagnostics?hiveId=${hiveId}`));
     const body = await response.json();
 
     expect(response.status).toBe(200);
     expect(body.data.setupReadiness.warningSources).toEqual(warningSources);
-    expect(setupReadinessMock.listActiveSetupRuntimeSources).toHaveBeenCalledTimes(1);
+    expect(setupReadinessMock.listActiveSetupRuntimeSources).toHaveBeenCalledWith(expect.any(Function), { hiveId });
     expect(setupReadinessMock.listSetupRuntimeReadinessWarnings).toHaveBeenCalledWith(setupSnapshot, {
       activeSources: ["ollama"],
     });
