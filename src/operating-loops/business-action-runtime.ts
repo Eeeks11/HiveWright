@@ -120,7 +120,8 @@ const SPEND_ACTION_RE = /\b(pay|spend|purchase|buy|budget|ad spend|refund|discou
 const EXTERNAL_MESSAGE_RE = /\b(send|email|message|sms|call|dm|reply|outreach|follow[- ]?up|contact|book)\b/i;
 const CUSTOMER_VENDOR_RE = /\b(customer|client|lead|prospect|vendor|supplier|partner|contractor)\b/i;
 const COMMITMENT_OR_DESTRUCTIVE_RE = /\b(cancel|delete|remove|terminate|commit|sign|contract|change pricing|go live|launch)\b/i;
-const LEGAL_FINANCE_COMPLIANCE_RE = /\b(legal|compliance|tax|finance|financial|payroll|accounting|privacy|policy|terms)\b/i;
+const LEGAL_FINANCE_COMPLIANCE_RE =
+  /\b(legal|compliance|tax|finance|financial|payroll|accounting|privacy|policy|terms|bas|gst|payg|ato|xero|myob|quickbooks|bookkeep(?:ing|er)?|invoice|invoicing|receipt|superannuation|super|wages?|salary|salaries|bank(?:ing)?|reconcile|reconciliation|lodg(?:e|ed|ing|ement)|lodgement)\b/i;
 
 type SqlJsonValue = Parameters<Sql["json"]>[0];
 
