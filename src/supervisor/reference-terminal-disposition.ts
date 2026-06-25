@@ -8,7 +8,7 @@ import type {
   TerminalStatus,
 } from "@/closeout/registry";
 import { resolveTerminalDispositionCompatibility } from "@/closeout/registry";
-import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
+import { resolveHiveWrightBuildProvenance } from "@/diagnostics/build-provenance";
 import {
   validateImprovementScanPublicationEvidence,
   type ImprovementScanEndpointEvidence,
@@ -162,7 +162,13 @@ export function isGovernedImprovementScanTerminalCandidateText(input: {
 export async function reconcileReferenceOnlyTerminalDispositions(
   sql: Sql,
   hiveId: string,
-  input: { now?: Date; limit?: number; publicationBuildHash?: string | null } = {},
+  input: {
+    now?: Date;
+    limit?: number;
+    publicationBuildHash?: string | null;
+    env?: NodeJS.ProcessEnv;
+    repoRoot?: string;
+  } = {},
 ): Promise<ReferenceOnlyTerminalDispositionResult> {
   const now = input.now ?? new Date();
   const candidates = await loadReferenceOnlyCandidates(sql, hiveId, input.limit ?? 100);
@@ -183,7 +189,11 @@ export async function reconcileReferenceOnlyTerminalDispositions(
       workProductText: task.work_product_text,
     })) {
       if (currentPublicationBuildHash === undefined) {
-        currentPublicationBuildHash = (await loadDispatcherHeartbeatStatus(sql, { now })).buildHash;
+        currentPublicationBuildHash = resolveHiveWrightBuildProvenance({
+          env: input.env,
+          now,
+          repoRoot: input.repoRoot,
+        }).buildHash;
       }
       const evidenceGate = validateImprovementScanPublicationEvidence({
         publicationBuildHash: currentPublicationBuildHash,
