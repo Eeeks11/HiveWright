@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getHiveWrightHealthSnapshot } from "@/diagnostics/checks";
 import {
   buildAnalystModelRoutingSummary,
   buildAnalystTelemetrySummary,
@@ -524,10 +525,14 @@ describe("analyst telemetry summary", () => {
 
   it("combines runtime drift and model routing counts for one hive", async () => {
     const sql = vi.fn();
+    const now = new Date("2026-06-03T00:01:00.000Z");
+    const env = { NODE_ENV: "test", HIVEWRIGHT_BUILD_HASH: "live-runtime-build" } as NodeJS.ProcessEnv;
+    const health = getHiveWrightHealthSnapshot({ env, now });
     const summary = await buildAnalystTelemetrySummary({
       sql: sql as never,
       hiveId: HIVE_ID,
-      now: new Date("2026-06-03T00:01:00.000Z"),
+      now,
+      env,
       loadHeartbeat: async () => heartbeat("stale"),
       loadRoutingView: async (_sql, hiveId) => {
         expect(hiveId).toBe(HIVE_ID);
@@ -535,17 +540,22 @@ describe("analyst telemetry summary", () => {
       },
     });
 
+    expect(health.buildHash).toBe("live-runtime-build");
+    expect(summary.improvementScanEvidence.runtimeBuildHash).toBe(health.buildHash);
+    expect(summary.improvementScanEvidence.authoritativeProbeSet.every((probe) => probe.buildHash === health.buildHash)).toBe(true);
+    expect(summary.improvementScanEvidence.runtimeBuildHash).not.toBe(heartbeat("stale").buildHash);
+
     expect(summary).toMatchObject({
       checkedAt: "2026-06-03T00:01:00.000Z",
       hiveId: HIVE_ID,
       improvementScanEvidence: {
         purpose: "improvement_scan_publication_gate",
-        runtimeBuildHash: "build-a",
+        runtimeBuildHash: "live-runtime-build",
         authoritativeProbeSet: [
           expect.objectContaining({
             endpoint: "/api/analyst-telemetry?hiveId=...",
             checkedAt: "2026-06-03T00:01:00.000Z",
-            buildHash: "build-a",
+            buildHash: "live-runtime-build",
             authoritativeFor: ["readiness", "model_routing", "runtime_drift"],
           }),
         ],
@@ -561,6 +571,9 @@ describe("analyst telemetry summary", () => {
           lastHeartbeatAt: "2026-06-03T00:00:00.000Z",
           version: "0.1.4",
           buildHash: "build-a",
+          buildHashScope: "dispatcher_heartbeat",
+          buildHashStatus: "differs_from_current_runtime",
+          currentRuntimeBuildHash: "live-runtime-build",
         },
         routeDrift: {
           status: "drift",

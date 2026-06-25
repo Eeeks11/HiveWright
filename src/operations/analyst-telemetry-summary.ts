@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { loadDispatcherHeartbeatStatus, type DispatcherHeartbeatRecord } from "@/dispatcher/heartbeat";
+import { resolveHiveWrightBuildProvenance } from "@/diagnostics/build-provenance";
 import { loadModelRoutingView, type ModelRoutingView } from "@/model-routing/registry";
 import { buildRuntimeRouteDriftReport, type RuntimeRouteDriftReport } from "./runtime-drift-report";
 import {
@@ -70,8 +71,21 @@ export interface RetainedExcludedRouteClassSummary {
   owningWorkflow: string;
 }
 
+export type DispatcherHeartbeatBuildHashStatus =
+  | "matches_current_runtime"
+  | "differs_from_current_runtime"
+  | "current_runtime_build_hash_missing"
+  | "dispatcher_heartbeat_build_hash_missing";
+
+export interface AnalystDispatcherHeartbeatSummary
+  extends Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt" | "version" | "buildHash"> {
+  buildHashScope: "dispatcher_heartbeat";
+  buildHashStatus: DispatcherHeartbeatBuildHashStatus;
+  currentRuntimeBuildHash: string | null;
+}
+
 export interface AnalystRuntimeDriftSummary {
-  dispatcherHeartbeat: Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt" | "version" | "buildHash">;
+  dispatcherHeartbeat: AnalystDispatcherHeartbeatSummary;
   routeDrift: RuntimeRouteDriftReport;
 }
 
@@ -88,6 +102,8 @@ export interface BuildAnalystTelemetrySummaryInput {
   sql: Sql;
   hiveId: string;
   now?: Date;
+  env?: NodeJS.ProcessEnv;
+  repoRoot?: string;
   loadHeartbeat?: (sql: Sql, input: { now: Date }) => Promise<DispatcherHeartbeatRecord>;
   loadRoutingView?: (sql: Sql, hiveId: string) => Promise<ModelRoutingView>;
 }
@@ -100,9 +116,15 @@ export async function buildAnalystTelemetrySummary(
   const routingView = await (input.loadRoutingView ?? loadModelRoutingView)(input.sql, input.hiveId);
   const routeDrift = buildRuntimeRouteDriftReport(routingView, heartbeat);
   const modelRouting = buildAnalystModelRoutingSummary(routingView);
+  const checkedAt = now.toISOString();
+  const runtimeBuildHash = resolveHiveWrightBuildProvenance({
+    env: input.env,
+    now,
+    repoRoot: input.repoRoot,
+  }).buildHash;
 
   return {
-    checkedAt: now.toISOString(),
+    checkedAt,
     hiveId: input.hiveId,
     runtimeDrift: {
       dispatcherHeartbeat: {
@@ -111,24 +133,38 @@ export async function buildAnalystTelemetrySummary(
         lastHeartbeatAt: heartbeat.lastHeartbeatAt,
         version: heartbeat.version,
         buildHash: heartbeat.buildHash,
+        buildHashScope: "dispatcher_heartbeat",
+        buildHashStatus: classifyDispatcherHeartbeatBuildHash(heartbeat.buildHash, runtimeBuildHash),
+        currentRuntimeBuildHash: runtimeBuildHash,
       },
       routeDrift,
     },
     modelRouting,
     improvementScanEvidence: buildImprovementScanEvidenceContract({
-      runtimeBuildHash: heartbeat.buildHash,
-      checkedAt: now.toISOString(),
+      runtimeBuildHash,
+      checkedAt,
       authoritativeProbeSet: [
         {
           endpoint: "/api/analyst-telemetry?hiveId=...",
-          checkedAt: now.toISOString(),
-          buildHash: heartbeat.buildHash,
+          checkedAt,
+          buildHash: runtimeBuildHash,
           authoritativeFor: ["readiness", "model_routing", "runtime_drift"],
         },
       ],
     }),
     notices: buildAnalystTelemetryNotices(routeDrift, modelRouting),
   };
+}
+
+function classifyDispatcherHeartbeatBuildHash(
+  dispatcherBuildHash: string | null,
+  runtimeBuildHash: string | null,
+): DispatcherHeartbeatBuildHashStatus {
+  if (!runtimeBuildHash) return "current_runtime_build_hash_missing";
+  if (!dispatcherBuildHash) return "dispatcher_heartbeat_build_hash_missing";
+  return dispatcherBuildHash === runtimeBuildHash
+    ? "matches_current_runtime"
+    : "differs_from_current_runtime";
 }
 
 export function buildAnalystModelRoutingSummary(
