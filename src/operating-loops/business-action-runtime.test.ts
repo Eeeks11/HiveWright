@@ -139,14 +139,24 @@ describe("Business OS action-loop runtime", () => {
       },
     });
 
-    const [decision] = await sql<{ kind: string; status: string; context: string }[]>`
-      SELECT kind, status, context
+    expect(action.measurement_plan.governance).toMatchObject({
+      approvalRequired: true,
+      riskCategories: expect.arrayContaining(["medium_business_risk", "external_message", "customer_or_vendor_touchpoint"]),
+      escalation: { required: true, priority: "normal" },
+    });
+    expect(action.measurement_plan.governance.evidenceRequirements.join(" ")).toContain("Record the owner approval decision");
+    expect(action.measurement_plan.governance.rollbackRequirement).toContain("rollback/undo path");
+
+    const [decision] = await sql<{ kind: string; status: string; context: string; route_metadata: { governance?: { riskCategories?: string[] } } }[]>`
+      SELECT kind, status, context, route_metadata
       FROM decisions
       WHERE id = ${action.decision_id}::uuid
     `;
     expect(decision.kind).toBe("business_os_action_approval");
     expect(decision.status).toBe("pending");
-    expect(decision.context).toContain("No public, spend-sensitive, external, customer/vendor");
+    expect(decision.context).toContain("No public, spend-sensitive, external-message");
+    expect(decision.context).toContain("Rollback requirement:");
+    expect(decision.route_metadata.governance?.riskCategories).toEqual(expect.arrayContaining(["external_message"]));
 
     const [recommendation] = await sql<{ status: string }[]>`
       SELECT status FROM business_recommendations WHERE id = ${recommendationId}::uuid
@@ -267,6 +277,130 @@ describe("Business OS action-loop runtime", () => {
     expect(decision.owner_response).toContain("rejected");
   });
 
+  it("gates public, spend-sensitive, and external-message recommendations before execution", async () => {
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({
+      hiveId,
+      title: "Publish a discount offer and email customers",
+      rationale: "Spend $250 on ads, post the offer publicly, and send customer outreach messages.",
+      expectedOutcome: "More customer bookings from the public offer",
+      riskLevel: "low",
+      requiresOwnerApproval: false,
+    });
+
+    const action = await convertRecommendationToBusinessAction(sql, {
+      recommendationId,
+      businessOsProfileId: profileId,
+      systemKey: "marketing",
+      actionType: "campaign_launch",
+    });
+
+    expect(action.status).toBe("awaiting_approval");
+    expect(action.approval_required).toBe(true);
+    expect(action.measurement_plan.governance.riskCategories).toEqual(expect.arrayContaining([
+      "public_action",
+      "spend_sensitive",
+      "external_message",
+      "customer_or_vendor_touchpoint",
+    ]));
+    expect(action.measurement_plan.governance.approvalGates.map((gate) => gate.category)).toEqual(expect.arrayContaining([
+      "public_action",
+      "spend_sensitive",
+      "external_message",
+    ]));
+    expect(action.measurement_plan.governance.evidenceRequirements.join(" ")).toContain("rollback/undo status");
+
+    const [decision] = await sql<{ priority: string; context: string }[]>`
+      SELECT priority, context
+      FROM decisions
+      WHERE id = ${action.decision_id}::uuid
+    `;
+    expect(decision.priority).toBe("normal");
+    expect(decision.context).toContain("Approval gates:");
+    expect(decision.context).toContain("Spend, refunds, invoices");
+  });
+
+  it("gates low-risk finance and compliance recommendations before execution", async () => {
+    const { hiveId, profileId } = await insertBusinessHive();
+
+    const cases = [
+      {
+        title: "Prepare GST BAS lodgement in Xero for March quarter",
+        rationale: "Prepare the BAS pack, GST figures, and ATO lodgement checklist from Xero records.",
+        expectedOutcome: "Ready-to-review March quarter compliance pack",
+      },
+      {
+        title: "Reconcile bank transactions in Xero and lodge BAS",
+        rationale: "Reconcile banking transactions, check wages and superannuation entries, then prepare lodgement notes.",
+        expectedOutcome: "Bank reconciliation and BAS draft ready for owner sign-off",
+      },
+    ];
+
+    for (const recommendationInput of cases) {
+      const recommendationId = await insertRecommendation({
+        hiveId,
+        ...recommendationInput,
+        riskLevel: "low",
+        requiresOwnerApproval: false,
+      });
+
+      const action = await convertRecommendationToBusinessAction(sql, {
+        recommendationId,
+        businessOsProfileId: profileId,
+        systemKey: "finance",
+        actionType: "compliance_preparation",
+      });
+
+      expect(action.status).toBe("awaiting_approval");
+      expect(action.approval_required).toBe(true);
+      expect(action.measurement_plan.governance.riskCategories).toEqual(expect.arrayContaining(["legal_finance_or_compliance"]));
+      expect(action.measurement_plan.governance.approvalGates.map((gate) => gate.category)).toEqual(expect.arrayContaining(["legal_finance_or_compliance"]));
+      expect(action.measurement_plan.governance.escalation).toMatchObject({ required: true, priority: "high" });
+
+      const [decision] = await sql<{ priority: string; route_metadata: { governance?: { riskCategories?: string[] } } }[]>`
+        SELECT priority, route_metadata
+        FROM decisions
+        WHERE id = ${action.decision_id}::uuid
+      `;
+      expect(decision.priority).toBe("high");
+      expect(decision.route_metadata.governance?.riskCategories).toEqual(expect.arrayContaining(["legal_finance_or_compliance"]));
+    }
+  });
+
+  it("gates low-risk commitment and destructive recommendations before execution", async () => {
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({
+      hiveId,
+      title: "Remove the old booking form and commit to the new pricing page",
+      rationale: "Delete the legacy form, terminate the old workflow, and sign off on the new live pricing change.",
+      expectedOutcome: "Only the new pricing flow remains active",
+      riskLevel: "low",
+      requiresOwnerApproval: false,
+    });
+
+    const action = await convertRecommendationToBusinessAction(sql, {
+      recommendationId,
+      businessOsProfileId: profileId,
+      systemKey: "operations",
+      actionType: "destructive_change",
+    });
+
+    expect(action.status).toBe("awaiting_approval");
+    expect(action.approval_required).toBe(true);
+    expect(action.measurement_plan.governance.riskCategories).toEqual(expect.arrayContaining(["commitment_or_destructive_change"]));
+    expect(action.measurement_plan.governance.approvalGates.map((gate) => gate.category)).toEqual(expect.arrayContaining(["commitment_or_destructive_change"]));
+    expect(action.measurement_plan.governance.evidenceRequirements.join(" ")).toContain("rollback/undo status");
+
+    const [decision] = await sql<{ priority: string; context: string; route_metadata: { governance?: { riskCategories?: string[] } } }[]>`
+      SELECT priority, context, route_metadata
+      FROM decisions
+      WHERE id = ${action.decision_id}::uuid
+    `;
+    expect(decision.priority).toBe("normal");
+    expect(decision.context).toContain("Commitment-making or destructive changes");
+    expect(decision.route_metadata.governance?.riskCategories).toEqual(expect.arrayContaining(["commitment_or_destructive_change"]));
+  });
+
   it("queues safe internal recommendations without creating owner approval decisions", async () => {
     const { hiveId, profileId } = await insertBusinessHive();
     const recommendationId = await insertRecommendation({
@@ -292,6 +426,11 @@ describe("Business OS action-loop runtime", () => {
       required: false,
       decisionId: null,
       status: "not_required",
+    });
+    expect(action.measurement_plan.governance).toMatchObject({
+      approvalRequired: false,
+      riskCategories: ["internal_low_risk"],
+      escalation: { required: false, priority: "normal", reason: null },
     });
   });
 });

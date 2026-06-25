@@ -25,6 +25,37 @@ export type BusinessActionMeasurement = {
   nextRecommendation?: string | null;
 };
 
+export type BusinessActionRiskCategory =
+  | "internal_low_risk"
+  | "medium_business_risk"
+  | "high_business_risk"
+  | "public_action"
+  | "spend_sensitive"
+  | "external_message"
+  | "customer_or_vendor_touchpoint"
+  | "commitment_or_destructive_change"
+  | "legal_finance_or_compliance";
+
+export type BusinessActionApprovalGate = {
+  category: BusinessActionRiskCategory;
+  required: boolean;
+  reason: string;
+};
+
+export type BusinessActionGovernanceAssessment = {
+  posture: "shadow_mode" | "supervised" | "controlled_autonomy";
+  riskCategories: BusinessActionRiskCategory[];
+  approvalRequired: boolean;
+  approvalGates: BusinessActionApprovalGate[];
+  evidenceRequirements: string[];
+  rollbackRequirement: string;
+  escalation: {
+    required: boolean;
+    priority: "normal" | "high";
+    reason: string | null;
+  };
+};
+
 export type BusinessActionMeasurementPlan = {
   metricName: string;
   target?: number | string | null;
@@ -38,6 +69,7 @@ export type BusinessActionMeasurementPlan = {
     decisionId: string | null;
     status: "not_required" | "awaiting_owner" | "approved" | "rejected";
   };
+  governance: BusinessActionGovernanceAssessment;
 };
 
 export type RecommendationActionInput = {
@@ -83,8 +115,13 @@ type BusinessProfileRow = {
   autonomy_policy: Record<string, unknown>;
 };
 
-const SENSITIVE_ACTION_RE =
-  /\b(send|publish|post|email|message|call|book|cancel|pay|spend|purchase|refund|contract|quote|invoice|discount|customer|vendor|public|external)\b/i;
+const PUBLIC_ACTION_RE = /\b(publish|post|advertise|ad\b|social|website|landing page|public|press|review response)\b/i;
+const SPEND_ACTION_RE = /\b(pay|spend|purchase|buy|budget|ad spend|refund|discount|invoice|quote|subscription|hire|contract)\b/i;
+const EXTERNAL_MESSAGE_RE = /\b(send|email|message|sms|call|dm|reply|outreach|follow[- ]?up|contact|book)\b/i;
+const CUSTOMER_VENDOR_RE = /\b(customer|client|lead|prospect|vendor|supplier|partner|contractor)\b/i;
+const COMMITMENT_OR_DESTRUCTIVE_RE = /\b(cancel|delete|remove|terminate|commit|sign|contract|change pricing|go live|launch)\b/i;
+const LEGAL_FINANCE_COMPLIANCE_RE =
+  /\b(legal|compliance|tax|finance|financial|payroll|accounting|privacy|policy|terms|bas|gst|payg|ato|xero|myob|quickbooks|bookkeep(?:ing|er)?|invoice|invoicing|receipt|superannuation|super|wages?|salary|salaries|bank(?:ing)?|reconcile|reconciliation|lodg(?:e|ed|ing|ement)|lodgement)\b/i;
 
 type SqlJsonValue = Parameters<Sql["json"]>[0];
 
@@ -98,21 +135,93 @@ function requireSingleRow<T>(rows: T[], label: string): T {
   return row;
 }
 
-function isHighRisk(riskLevel: BusinessActionRiskLevel | null): boolean {
-  return riskLevel === "medium" || riskLevel === "high";
+function addCategory(categories: Set<BusinessActionRiskCategory>, category: BusinessActionRiskCategory, matches: boolean): void {
+  if (matches) categories.add(category);
 }
 
-function actionNeedsOwnerApproval(recommendation: RecommendationRow): boolean {
-  return (
-    recommendation.requires_owner_approval ||
-    isHighRisk(recommendation.risk_level) ||
-    SENSITIVE_ACTION_RE.test(`${recommendation.title}\n${recommendation.rationale}\n${recommendation.expected_outcome ?? ""}`)
-  );
+function readPolicyPosture(policy: Record<string, unknown>): BusinessActionGovernanceAssessment["posture"] {
+  return policy.posture === "controlled_autonomy" || policy.posture === "shadow_mode" || policy.posture === "supervised"
+    ? policy.posture
+    : "supervised";
+}
+
+function assessBusinessActionGovernance(
+  recommendation: RecommendationRow,
+  profile: Pick<BusinessProfileRow, "approval_policy" | "autonomy_policy">,
+): BusinessActionGovernanceAssessment {
+  const text = `${recommendation.title}\n${recommendation.rationale}\n${recommendation.expected_outcome ?? ""}`;
+  const categories = new Set<BusinessActionRiskCategory>();
+
+  if (recommendation.risk_level === "high") categories.add("high_business_risk");
+  if (recommendation.risk_level === "medium") categories.add("medium_business_risk");
+  addCategory(categories, "public_action", PUBLIC_ACTION_RE.test(text));
+  addCategory(categories, "spend_sensitive", SPEND_ACTION_RE.test(text));
+  addCategory(categories, "external_message", EXTERNAL_MESSAGE_RE.test(text));
+  addCategory(categories, "customer_or_vendor_touchpoint", CUSTOMER_VENDOR_RE.test(text));
+  addCategory(categories, "commitment_or_destructive_change", COMMITMENT_OR_DESTRUCTIVE_RE.test(text));
+  addCategory(categories, "legal_finance_or_compliance", LEGAL_FINANCE_COMPLIANCE_RE.test(text));
+  if (categories.size === 0) categories.add("internal_low_risk");
+
+  const riskCategories = Array.from(categories);
+  const categoryReasons: Record<Exclude<BusinessActionRiskCategory, "internal_low_risk">, string> = {
+    medium_business_risk: "Medium-risk business change needs owner review before execution.",
+    high_business_risk: "High-risk business change needs owner review before execution.",
+    public_action: "Public-facing work must be approved before anything is published or changed live.",
+    spend_sensitive: "Spend, refunds, invoices, quotes, purchases, or budget changes need owner approval.",
+    external_message: "External messages, calls, bookings, and outreach need owner approval before sending.",
+    customer_or_vendor_touchpoint: "Customer, vendor, partner, or contractor touchpoints need owner approval.",
+    commitment_or_destructive_change: "Commitment-making or destructive changes need owner approval and rollback evidence.",
+    legal_finance_or_compliance: "Legal, finance, tax, payroll, privacy, or compliance work needs owner approval.",
+  };
+
+  const approvalGates = riskCategories
+    .filter((category): category is Exclude<BusinessActionRiskCategory, "internal_low_risk"> => category !== "internal_low_risk")
+    .map((category) => ({ category, required: true, reason: categoryReasons[category] }));
+
+  const approvalRequired = recommendation.requires_owner_approval || approvalGates.length > 0;
+  if (recommendation.requires_owner_approval && !approvalGates.some((gate) => gate.category === "medium_business_risk" || gate.category === "high_business_risk")) {
+    approvalGates.push({
+      category: recommendation.risk_level === "high" ? "high_business_risk" : "medium_business_risk",
+      required: true,
+      reason: "Recommendation explicitly requested owner approval.",
+    });
+  }
+
+  const evidenceRequirements = approvalRequired
+    ? [
+        "Describe the exact action to execute and the owner-visible business outcome it is meant to improve.",
+        "Attach evidence that the action stays inside the approved controlled-autonomy boundary.",
+        "Record the owner approval decision before execution begins.",
+      ]
+    : ["Record private evidence of the internal analysis/result before marking the action complete."];
+
+  if (riskCategories.some((category) => category === "public_action" || category === "external_message" || category === "spend_sensitive" || category === "commitment_or_destructive_change")) {
+    evidenceRequirements.push("Capture post-execution proof and rollback/undo status for audit.");
+  }
+
+  const escalationRequired = approvalRequired || riskCategories.includes("high_business_risk") || riskCategories.includes("legal_finance_or_compliance");
+  const posture = readPolicyPosture(profile.autonomy_policy);
+
+  return {
+    posture,
+    riskCategories,
+    approvalRequired,
+    approvalGates,
+    evidenceRequirements,
+    rollbackRequirement: approvalRequired
+      ? "Define a rollback/undo path, owner-visible evidence, and stop condition before execution. If rollback is not possible, keep the action in owner-supervised mode."
+      : "Rollback not required for private internal analysis; retain evidence and stop if scope becomes external, public, spend-sensitive, or commitment-making.",
+    escalation: {
+      required: escalationRequired,
+      priority: riskCategories.includes("high_business_risk") || riskCategories.includes("legal_finance_or_compliance") ? "high" : "normal",
+      reason: escalationRequired ? approvalGates.map((gate) => gate.reason).join(" ") : null,
+    },
+  };
 }
 
 function buildMeasurementPlan(
   input: RecommendationActionInput,
-  approvalRequired: boolean,
+  governance: BusinessActionGovernanceAssessment,
 ): BusinessActionMeasurementPlan {
   return {
     metricName: input.measurement?.metricName ?? "owner-visible business outcome movement",
@@ -123,10 +232,11 @@ function buildMeasurementPlan(
     loopStage: "plan",
     measurements: [],
     approval: {
-      required: approvalRequired,
+      required: governance.approvalRequired,
       decisionId: null,
-      status: approvalRequired ? "awaiting_owner" : "not_required",
+      status: governance.approvalRequired ? "awaiting_owner" : "not_required",
     },
+    governance,
   };
 }
 
@@ -160,9 +270,9 @@ export async function convertRecommendationToBusinessAction(
       "business OS profile",
     );
 
-    const approvalRequired = actionNeedsOwnerApproval(recommendation);
-    const status: BusinessActionStatus = approvalRequired ? "awaiting_approval" : "queued";
-    const measurementPlan = buildMeasurementPlan(input, approvalRequired);
+    const governance = assessBusinessActionGovernance(recommendation, profile);
+    const status: BusinessActionStatus = governance.approvalRequired ? "awaiting_approval" : "queued";
+    const measurementPlan = buildMeasurementPlan(input, governance);
 
     const [action] = await tx<BusinessActionRuntimeRow[]>`
       INSERT INTO business_actions (
@@ -193,7 +303,7 @@ export async function convertRecommendationToBusinessAction(
         ${status},
         ${input.priority ?? 50},
         ${recommendation.risk_level},
-        ${approvalRequired},
+        ${governance.approvalRequired},
         ${input.assignedRoleSlug ?? null},
         ${tx.json(toSqlJson([{ kind: "business_recommendation", id: recommendation.id }]))},
         ${recommendation.expected_outcome},
@@ -209,7 +319,7 @@ export async function convertRecommendationToBusinessAction(
       WHERE id = ${recommendation.id}::uuid
     `;
 
-    if (!approvalRequired) return action;
+    if (!governance.approvalRequired) return action;
 
     const [decision] = await tx<{ id: string }[]>`
       INSERT INTO decisions (
@@ -231,9 +341,13 @@ export async function convertRecommendationToBusinessAction(
           `${profile.business_name} has a Business OS action ready to execute from a structured recommendation.`,
           `Action brief: ${recommendation.rationale}`,
           `Expected outcome: ${recommendation.expected_outcome ?? "not specified"}`,
-          "No public, spend-sensitive, external, customer/vendor, or commitment-making work should run until this is approved.",
+          `Risk categories: ${governance.riskCategories.join(", ")}`,
+          `Approval gates: ${governance.approvalGates.map((gate) => gate.reason).join(" ")}`,
+          `Evidence required: ${governance.evidenceRequirements.join(" ")}`,
+          `Rollback requirement: ${governance.rollbackRequirement}`,
+          "No public, spend-sensitive, external-message, customer/vendor, or commitment-making work should run until this is approved.",
         ].join("\n\n")},
-        ${"Approve only if this action is within the owner's current controlled-autonomy boundary."},
+        ${"Approve only if this action is within the owner's current controlled-autonomy boundary, has enough evidence, and has a rollback/stop path."},
         ${tx.json(toSqlJson([
           {
             key: "approve",
@@ -248,7 +362,7 @@ export async function convertRecommendationToBusinessAction(
             response: "rejected",
           },
         ]))},
-        ${isHighRisk(recommendation.risk_level) ? "high" : "normal"},
+        ${governance.escalation.priority},
         ${"pending"},
         ${"business_os_action_approval"},
         ${tx.json(toSqlJson({
@@ -257,8 +371,9 @@ export async function convertRecommendationToBusinessAction(
           recommendationId: recommendation.id,
           approvalRequired: true,
           riskLevel: recommendation.risk_level,
+          governance,
         }))},
-        ${"Business OS action loop escalated this action because execution is owner-approval-gated."}
+        ${governance.escalation.reason ?? "Business OS action loop escalated this action because execution is owner-approval-gated."}
       )
       RETURNING id
     `;
