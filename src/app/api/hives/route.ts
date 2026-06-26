@@ -26,9 +26,46 @@ export async function GET(request: Request) {
                  WHEN bop.id IS NULL THEN 'setup_required'
                  WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
                  ELSE 'setup_in_progress'
-               END AS business_os_status
+               END AS business_os_status,
+               readiness.avg_score AS business_os_average_readiness_score,
+               COALESCE(open_gaps.count, 0)::int AS business_os_open_gaps_count,
+               COALESCE(approvals.count, 0)::int AS business_os_approvals_required_count,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'Set up or audit this business'
+                 WHEN next_action.title IS NOT NULL THEN next_action.title
+                 WHEN COALESCE(approvals.count, 0) > 0 THEN 'Review owner approvals'
+                 WHEN COALESCE(open_gaps.count, 0) > 0 THEN 'Review open Business OS gaps'
+                 ELSE 'Open Business OS dashboard'
+               END AS business_os_next_action
         FROM hives h
         LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        LEFT JOIN LATERAL (
+          SELECT ROUND(AVG(readiness_score))::int AS avg_score
+          FROM business_system_readiness
+          WHERE hive_id = h.id
+        ) readiness ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_gaps
+          WHERE hive_id = h.id
+            AND status IN ('open', 'accepted', 'in_progress')
+        ) open_gaps ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND approval_required = true
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+        ) approvals ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT title
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+          ORDER BY priority DESC, updated_at DESC
+          LIMIT 1
+        ) next_action ON TRUE
         ORDER BY h.name ASC
       `
         : await sql`
@@ -40,9 +77,46 @@ export async function GET(request: Request) {
                  WHEN bop.id IS NULL THEN 'setup_required'
                  WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
                  ELSE 'setup_in_progress'
-               END AS business_os_status
+               END AS business_os_status,
+               readiness.avg_score AS business_os_average_readiness_score,
+               COALESCE(open_gaps.count, 0)::int AS business_os_open_gaps_count,
+               COALESCE(approvals.count, 0)::int AS business_os_approvals_required_count,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'Set up or audit this business'
+                 WHEN next_action.title IS NOT NULL THEN next_action.title
+                 WHEN COALESCE(approvals.count, 0) > 0 THEN 'Review owner approvals'
+                 WHEN COALESCE(open_gaps.count, 0) > 0 THEN 'Review open Business OS gaps'
+                 ELSE 'Open Business OS dashboard'
+               END AS business_os_next_action
         FROM hives h
         LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        LEFT JOIN LATERAL (
+          SELECT ROUND(AVG(readiness_score))::int AS avg_score
+          FROM business_system_readiness
+          WHERE hive_id = h.id
+        ) readiness ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_gaps
+          WHERE hive_id = h.id
+            AND status IN ('open', 'accepted', 'in_progress')
+        ) open_gaps ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND approval_required = true
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+        ) approvals ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT title
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+          ORDER BY priority DESC, updated_at DESC
+          LIMIT 1
+        ) next_action ON TRUE
         WHERE h.is_system_fixture = false
         ORDER BY h.name ASC
       `
@@ -56,10 +130,47 @@ export async function GET(request: Request) {
                  WHEN bop.id IS NULL THEN 'setup_required'
                  WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
                  ELSE 'setup_in_progress'
-               END AS business_os_status
+               END AS business_os_status,
+               readiness.avg_score AS business_os_average_readiness_score,
+               COALESCE(open_gaps.count, 0)::int AS business_os_open_gaps_count,
+               COALESCE(approvals.count, 0)::int AS business_os_approvals_required_count,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'Set up or audit this business'
+                 WHEN next_action.title IS NOT NULL THEN next_action.title
+                 WHEN COALESCE(approvals.count, 0) > 0 THEN 'Review owner approvals'
+                 WHEN COALESCE(open_gaps.count, 0) > 0 THEN 'Review open Business OS gaps'
+                 ELSE 'Open Business OS dashboard'
+               END AS business_os_next_action
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
         LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        LEFT JOIN LATERAL (
+          SELECT ROUND(AVG(readiness_score))::int AS avg_score
+          FROM business_system_readiness
+          WHERE hive_id = h.id
+        ) readiness ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_gaps
+          WHERE hive_id = h.id
+            AND status IN ('open', 'accepted', 'in_progress')
+        ) open_gaps ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND approval_required = true
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+        ) approvals ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT title
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+          ORDER BY priority DESC, updated_at DESC
+          LIMIT 1
+        ) next_action ON TRUE
         WHERE hm.user_id = ${authz.user.id}
         ORDER BY h.name ASC
       `
@@ -72,10 +183,47 @@ export async function GET(request: Request) {
                  WHEN bop.id IS NULL THEN 'setup_required'
                  WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
                  ELSE 'setup_in_progress'
-               END AS business_os_status
+               END AS business_os_status,
+               readiness.avg_score AS business_os_average_readiness_score,
+               COALESCE(open_gaps.count, 0)::int AS business_os_open_gaps_count,
+               COALESCE(approvals.count, 0)::int AS business_os_approvals_required_count,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'Set up or audit this business'
+                 WHEN next_action.title IS NOT NULL THEN next_action.title
+                 WHEN COALESCE(approvals.count, 0) > 0 THEN 'Review owner approvals'
+                 WHEN COALESCE(open_gaps.count, 0) > 0 THEN 'Review open Business OS gaps'
+                 ELSE 'Open Business OS dashboard'
+               END AS business_os_next_action
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
         LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        LEFT JOIN LATERAL (
+          SELECT ROUND(AVG(readiness_score))::int AS avg_score
+          FROM business_system_readiness
+          WHERE hive_id = h.id
+        ) readiness ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_gaps
+          WHERE hive_id = h.id
+            AND status IN ('open', 'accepted', 'in_progress')
+        ) open_gaps ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT COUNT(*)::int AS count
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND approval_required = true
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+        ) approvals ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT title
+          FROM business_actions
+          WHERE hive_id = h.id
+            AND status IN ('draft', 'queued', 'awaiting_approval', 'approved', 'running', 'blocked')
+          ORDER BY priority DESC, updated_at DESC
+          LIMIT 1
+        ) next_action ON TRUE
         WHERE hm.user_id = ${authz.user.id}
           AND h.is_system_fixture = false
         ORDER BY h.name ASC
@@ -97,6 +245,14 @@ export async function GET(request: Request) {
         href: r.business_os_profile_id
           ? `/business-os/${r.id}`
           : `/hives/${r.id}/business-os/setup`,
+        readiness: {
+          state: r.business_os_average_readiness_score === null || r.business_os_average_readiness_score === undefined ? "unknown" : "measured",
+          averageScore: r.business_os_average_readiness_score === null || r.business_os_average_readiness_score === undefined ? null : Number(r.business_os_average_readiness_score),
+          label: r.business_os_average_readiness_score === null || r.business_os_average_readiness_score === undefined ? "Not measured" : `${Number(r.business_os_average_readiness_score)}% ready`,
+        },
+        openGapsCount: Number(r.business_os_open_gaps_count ?? 0),
+        approvalsRequiredCount: Number(r.business_os_approvals_required_count ?? 0),
+        nextAction: r.business_os_next_action ?? (r.business_os_profile_id ? "Open Business OS dashboard" : "Set up or audit this business"),
       } : null,
     }));
     return jsonOk(data);
