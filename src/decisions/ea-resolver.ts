@@ -236,33 +236,107 @@ Investigate, act if you can, then emit your structured decision.
 }
 
 const JSON_FENCE_REGEX = /```json\s*\n([\s\S]*?)\n```/g;
+const EA_RESOLVER_ACTIONS = new Set(["auto_resolve", "escalate_to_owner", "needs_more_info"]);
 
 /**
- * Pull the LAST fenced ```json block out of the EA's text and parse it.
- * If the runtime returns a bare JSON object instead of markdown, accept that
- * too and let the same strict schema validation below decide whether it is
- * usable.
+ * Pull the LAST usable JSON decision object out of the EA's text and parse it.
+ * Prefer fenced ```json blocks, accept whole-response JSON, and tolerate the
+ * common CLI shape where the EA writes prose followed by an unfenced JSON
+ * object. Only JSON objects with a known `action` are considered candidates so
+ * raw decision context containing incidental braces is not treated as output.
  * Mirrors parseDoctorDiagnosis — supervisors and doctors share this
  * structured-output convention.
  */
 export function parseEaResolverOutput(
   text: string,
 ): { ok: true; result: EaResolverResult } | { ok: false; reason: string } {
-  let jsonText: string | null = null;
-  let match: RegExpExecArray | null;
-  while ((match = JSON_FENCE_REGEX.exec(text)) !== null) {
-    jsonText = match[1];
-  }
-  if (!jsonText) {
-    const trimmed = text.trim();
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-      jsonText = trimmed;
-    }
-  }
-  if (!jsonText) {
-    return { ok: false, reason: "no fenced ```json``` block or plain JSON object found in EA output" };
+  const candidates = extractEaResolverJsonCandidates(text);
+  if (candidates.length === 0) {
+    return { ok: false, reason: "no EA resolver JSON object with a known action found in output" };
   }
 
+  let lastFailure: { ok: false; reason: string } | null = null;
+  for (const jsonText of [...candidates].reverse()) {
+    const parsed = parseEaResolverJsonObject(jsonText);
+    if (parsed.ok) return parsed;
+    lastFailure = parsed;
+  }
+  return lastFailure ?? { ok: false, reason: "no EA resolver JSON object with a known action found in output" };
+}
+
+function extractEaResolverJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let match: RegExpExecArray | null;
+  JSON_FENCE_REGEX.lastIndex = 0;
+  while ((match = JSON_FENCE_REGEX.exec(text)) !== null) {
+    if (jsonCandidateHasKnownAction(match[1])) candidates.push(match[1]);
+  }
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}") && jsonCandidateHasKnownAction(trimmed)) {
+    candidates.push(trimmed);
+  }
+
+  for (const candidate of extractJsonObjectsFromText(text)) {
+    if (jsonCandidateHasKnownAction(candidate)) candidates.push(candidate);
+  }
+
+  return candidates;
+}
+
+function extractJsonObjectsFromText(text: string): string[] {
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        objects.push(text.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return objects;
+}
+
+function jsonCandidateHasKnownAction(jsonText: string): boolean {
+  try {
+    const obj = JSON.parse(jsonText) as { action?: unknown };
+    return !!obj && typeof obj === "object" && typeof obj.action === "string" && EA_RESOLVER_ACTIONS.has(obj.action);
+  } catch {
+    return false;
+  }
+}
+
+function parseEaResolverJsonObject(
+  jsonText: string,
+): { ok: true; result: EaResolverResult } | { ok: false; reason: string } {
   let obj: unknown;
   try {
     obj = JSON.parse(jsonText);
@@ -620,18 +694,42 @@ export async function applyEaResolution(
 /**
  * Forcibly move a decision out of `ea_review` after MAX_EA_ATTEMPTS
  * exhausted retries (malformed output / EA crashes / repeated needs_more_info).
- * The owner sees the original title/context untouched + a banner noting
- * that the EA could not handle it.
+ * Do not dump raw system/technical decision text into the owner's queue: show
+ * a stable, owner-friendly explanation and preserve the raw row details in
+ * `ea_reasoning` for support/debug drill-in.
  */
 export async function forceEscalateAfterEaFailure(
   sql: Sql,
   decisionId: string,
   reason: string,
 ): Promise<void> {
+  const [snapshot] = await sql<DecisionGuardSnapshot[]>`
+    SELECT title, context, recommendation, options
+    FROM decisions
+    WHERE id = ${decisionId}
+  `;
+  const rawSummary = snapshot
+    ? ` Original decision snapshot: ${JSON.stringify({
+        title: snapshot.title ?? null,
+        context: snapshot.context ?? null,
+        recommendation: snapshot.recommendation ?? null,
+        options: snapshot.options ?? null,
+      }).slice(0, 4_000)}`
+    : "";
+
   await sql`
     UPDATE decisions
     SET status = 'pending',
-        ea_reasoning = ${`EA could not autonomously resolve this after ${MAX_EA_ATTEMPTS} attempts: ${reason}`},
+        title = 'Decision needs manual review',
+        context = ${
+          `HiveWright tried to have the Executive Assistant resolve this decision automatically, ` +
+          `but it could not safely parse or complete the EA result after ${MAX_EA_ATTEMPTS} attempts. ` +
+          `The raw technical details are retained in the support/debug notes instead of being shown as the owner-facing request.`
+        },
+        recommendation = 'Review the decision details or ask support to inspect the preserved EA reasoning before choosing a path.',
+        priority = 'normal',
+        options = NULL,
+        ea_reasoning = ${`EA could not autonomously resolve this after ${MAX_EA_ATTEMPTS} attempts: ${reason}.${rawSummary}`},
         ea_decided_at = NOW()
     WHERE id = ${decisionId}
   `;

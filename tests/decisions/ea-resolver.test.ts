@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyEaResolution,
   buildResolverPrompt,
+  forceEscalateAfterEaFailure,
   decisionRequiresOwnerApproval,
   decisionTextRequiresOwnerApproval,
   parseEaResolverOutput,
@@ -32,12 +33,45 @@ describe("parseEaResolverOutput", () => {
     }
   });
 
-  it("still rejects prose when no parseable JSON object is present", () => {
+  it("accepts prose followed by an unfenced JSON decision object", () => {
+    const result = parseEaResolverOutput(
+      [
+        "I checked the task and cancelled the stale duplicate.",
+        JSON.stringify({
+          action: "auto_resolve",
+          reasoning: "The stale duplicate task was cancelled, so no owner action is needed.",
+        }),
+      ].join("\n\n"),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.action).toBe("auto_resolve");
+      expect(result.result.reasoning).toContain("stale duplicate");
+    }
+  });
+
+  it("uses the last usable JSON decision object and ignores earlier incidental JSON", () => {
+    const result = parseEaResolverOutput(
+      [
+        'Raw tool data: {"status":"ok","action":"not_a_resolver_action"}',
+        JSON.stringify({
+          action: "needs_more_info",
+          reasoning: "The API was unavailable; retry the EA pass with fresh context.",
+        }),
+      ].join("\n"),
+    );
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.result.action).toBe("needs_more_info");
+  });
+
+  it("still rejects prose when no parseable EA resolver JSON object is present", () => {
     const result = parseEaResolverOutput("I checked this and it should be dismissed.");
 
     expect(result).toEqual({
       ok: false,
-      reason: "no fenced ```json``` block or plain JSON object found in EA output",
+      reason: "no EA resolver JSON object with a known action found in output",
     });
   });
 
@@ -663,5 +697,60 @@ describe.sequential("applyEaResolution owner-approval guard", () => {
     `;
     expect(row.status).toBe("resolved");
     expect(row.resolved_by).toBe("ea-resolver");
+  });
+});
+
+
+describe.sequential("forceEscalateAfterEaFailure", () => {
+  const HIVE_ID = "99999999-9999-9999-9999-999999999999";
+
+  beforeEach(async () => {
+    await truncateAll(sql);
+    await sql`
+      INSERT INTO hives (id, slug, name, type)
+      VALUES (${HIVE_ID}, 'ea-resolver-force-escalation', 'EA Resolver Force Escalation', 'digital')
+    `;
+  });
+
+  it("shows owner-friendly fallback copy while preserving raw technical details in EA reasoning", async () => {
+    const [decision] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, title, context, recommendation, status, priority, options)
+      VALUES (
+        ${HIVE_ID},
+        'Internal JSON parse failure: task_execution_capsules FK 23503',
+        'Raw stack trace and UUID dump that should not be owner-visible.',
+        'Ask the owner to debug the FK.',
+        'ea_review',
+        'urgent',
+        ${sql.json([{ key: "debug", label: "Debug FK manually" }])}
+      )
+      RETURNING id
+    `;
+
+    await forceEscalateAfterEaFailure(sql, decision.id, "JSON parse failed: unexpected token");
+
+    const [row] = await sql<{
+      status: string;
+      title: string;
+      context: string;
+      recommendation: string | null;
+      priority: string;
+      options: unknown;
+      ea_reasoning: string | null;
+    }[]>`
+      SELECT status, title, context, recommendation, priority, options, ea_reasoning
+      FROM decisions
+      WHERE id = ${decision.id}
+    `;
+
+    expect(row.status).toBe("pending");
+    expect(row.title).toBe("Decision needs manual review");
+    expect(row.context).toContain("could not safely parse or complete the EA result");
+    expect(row.context).not.toContain("FK 23503");
+    expect(row.recommendation).toContain("Review the decision details");
+    expect(row.priority).toBe("normal");
+    expect(row.options).toBeNull();
+    expect(row.ea_reasoning).toContain("unexpected token");
+    expect(row.ea_reasoning).toContain("Internal JSON parse failure");
   });
 });
