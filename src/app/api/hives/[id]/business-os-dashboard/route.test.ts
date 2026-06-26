@@ -136,6 +136,32 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
     expect(body.data.ownerNextReviewChecklist).not.toContain("No weak systems are currently below the readiness threshold.");
   });
 
+  it("returns a setup/audit CTA for a business hive that has no Business OS profile yet", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: hiveId,
+        name: "Whiston Management",
+        kind: "business",
+        description: "Existing owner-operated business.",
+      }]);
+
+    const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard`), {
+      params: Promise.resolve({ id: hiveId }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data).toMatchObject({
+      status: "setup_required",
+      headline: "Whiston Management Business OS setup required",
+      setupRequired: {
+        label: "Set up or audit this business",
+        href: `/hives/${hiveId}/business-os/setup`,
+      },
+    });
+  });
+
   it("enforces hive access for non-owner callers", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },

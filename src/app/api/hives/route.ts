@@ -18,27 +18,64 @@ export async function GET(request: Request) {
     const rows = authz.user.isSystemOwner
       ? includeSystemFixtures
         ? await sql`
-        SELECT id, slug, name, type, kind, description, workspace_path, is_system_fixture, created_at
-        FROM hives ORDER BY name ASC
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at,
+               bop.id AS business_os_profile_id,
+               bop.business_mode AS business_os_mode,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'setup_required'
+                 WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
+                 ELSE 'setup_in_progress'
+               END AS business_os_status
+        FROM hives h
+        LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        ORDER BY h.name ASC
       `
         : await sql`
-        SELECT id, slug, name, type, kind, description, workspace_path, is_system_fixture, created_at
-        FROM hives
-        WHERE is_system_fixture = false
-        ORDER BY name ASC
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at,
+               bop.id AS business_os_profile_id,
+               bop.business_mode AS business_os_mode,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'setup_required'
+                 WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
+                 ELSE 'setup_in_progress'
+               END AS business_os_status
+        FROM hives h
+        LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
+        WHERE h.is_system_fixture = false
+        ORDER BY h.name ASC
       `
       : includeSystemFixtures
         ? await sql`
-        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at,
+               bop.id AS business_os_profile_id,
+               bop.business_mode AS business_os_mode,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'setup_required'
+                 WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
+                 ELSE 'setup_in_progress'
+               END AS business_os_status
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
+        LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
         WHERE hm.user_id = ${authz.user.id}
         ORDER BY h.name ASC
       `
         : await sql`
-        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at
+        SELECT h.id, h.slug, h.name, h.type, h.kind, h.description, h.workspace_path, h.is_system_fixture, h.created_at,
+               bop.id AS business_os_profile_id,
+               bop.business_mode AS business_os_mode,
+               CASE
+                 WHEN h.kind <> 'business' THEN NULL
+                 WHEN bop.id IS NULL THEN 'setup_required'
+                 WHEN bop.business_mode = 'existing_business' THEN 'audit_in_progress'
+                 ELSE 'setup_in_progress'
+               END AS business_os_status
         FROM hives h
         INNER JOIN hive_memberships hm ON hm.hive_id = h.id
+        LEFT JOIN business_os_profiles bop ON bop.hive_id = h.id
         WHERE hm.user_id = ${authz.user.id}
           AND h.is_system_fixture = false
         ORDER BY h.name ASC
@@ -53,6 +90,14 @@ export async function GET(request: Request) {
       workspacePath: r.workspace_path,
       isSystemFixture: r.is_system_fixture,
       createdAt: r.created_at,
+      businessOs: normalizeHiveKind(r.kind) === "business" ? {
+        status: r.business_os_status ?? (r.business_os_profile_id ? "setup_in_progress" : "setup_required"),
+        mode: r.business_os_mode ?? null,
+        profileId: r.business_os_profile_id ?? null,
+        href: r.business_os_profile_id
+          ? `/business-os/${r.id}`
+          : `/hives/${r.id}/business-os/setup`,
+      } : null,
     }));
     return jsonOk(data);
   } catch {

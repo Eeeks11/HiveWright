@@ -101,4 +101,49 @@ describe("deriveBusinessOsOwnerDashboard", () => {
     expect(dashboard.ownerNextReviewChecklist).toContain("Confirm readiness evidence before treating this Business OS as healthy.");
     expect(dashboard.ownerNextReviewChecklist).not.toContain("No weak systems are currently below the readiness threshold.");
   });
+
+  it("exposes a conversion contract for active Business OS actions", () => {
+    const dashboard = deriveBusinessOsOwnerDashboard({
+      profile: {
+        id: "profile-1",
+        businessMode: "existing_business",
+        businessName: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit.",
+        ownerGoals: ["Convert weak systems into owned action"],
+        approvalPolicy: {},
+        aiSpendBudget: {},
+        autonomyPolicy: {},
+      },
+      setupProfile: null,
+      auditProfile: null,
+      readiness: [],
+      gaps: [],
+      recommendations: [],
+      actions: [{
+        title: "Fix finance evidence cadence",
+        brief: "Turn the finance/admin gap into scheduled owner-visible work.",
+        status: "queued",
+        priority: 80,
+        riskLevel: "medium",
+        approvalRequired: true,
+        expectedOutcome: "Weekly finance evidence is current.",
+        measurementPlan: { metric: "finance_evidence_current", target: "weekly records reviewed" },
+        sourceRefs: [{ label: "audit gap" }],
+      }],
+      agentActivity: [],
+    });
+
+    expect(dashboard.priorityActions[0]).toMatchObject({
+      title: "Fix finance evidence cadence",
+      conversionAffordance: {
+        label: "Convert to governed work",
+        contract: {
+          expectedOutcome: "Weekly finance evidence is current.",
+          measurementMetric: "finance_evidence_current",
+          ownerApprovalRequired: true,
+        },
+      },
+    });
+  });
 });

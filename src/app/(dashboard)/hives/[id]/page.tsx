@@ -42,8 +42,14 @@ interface Hive {
 }
 
 type BusinessOsOwnerDashboard = {
+  status?: "setup_required";
   headline: string;
   summary: string | null;
+  setupRequired?: {
+    label: string;
+    href: string;
+    description?: string;
+  };
   mode: "new_business" | "existing_business";
   stage: string | null;
   ownerGoals: string[];
@@ -527,6 +533,22 @@ export default function HiveDetailPage() {
 
       {businessOsDashboard && (
         <section className="space-y-5 rounded-lg border border-blue-200 bg-blue-50/40 p-6 dark:border-blue-900/40 dark:bg-blue-950/10">
+          {businessOsDashboard.setupRequired ? (
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Business OS setup</p>
+                <h2 className="text-xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.headline}</h2>
+                {businessOsDashboard.summary && <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">{businessOsDashboard.summary}</p>}
+                {businessOsDashboard.setupRequired.description && <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">{businessOsDashboard.setupRequired.description}</p>}
+              </div>
+              <a
+                href={businessOsDashboard.setupRequired.href}
+                className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800"
+              >
+                {businessOsDashboard.setupRequired.label}
+              </a>
+            </div>
+          ) : (<>
           <div className="space-y-2">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
@@ -629,6 +651,7 @@ export default function HiveDetailPage() {
               {businessOsDashboard.ownerNextReviewChecklist.map((item) => <li key={item}>{item}</li>)}
             </ul>
           </div>
+          </>)}
         </section>
       )}
 
