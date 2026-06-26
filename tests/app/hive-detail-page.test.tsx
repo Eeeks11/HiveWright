@@ -126,6 +126,23 @@ describe("HiveDetailPage", () => {
     expect(await screen.findByText("Readiness has not been measured yet. Treat this as missing evidence, not a healthy Business OS.")).toBeTruthy();
     expect(screen.queryByText("No systems below the readiness threshold.")).toBeNull();
   });
+
+  it("shows a Business OS setup/audit CTA when a business hive has no profile yet", async () => {
+    businessOsDashboardResponse = {
+      status: "setup_required",
+      headline: "Alpha Hive Business OS setup required",
+      summary: "Test hive",
+      setupRequired: {
+        label: "Set up or audit this business",
+        href: "/hives/hive-1/business-os/setup",
+      },
+    };
+
+    renderWithQueryClient(<HiveDetailPage />);
+
+    expect(await screen.findByRole("heading", { name: "Alpha Hive Business OS setup required" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Set up or audit this business" }).getAttribute("href")).toBe("/hives/hive-1/business-os/setup");
+  });
 });
 
 function businessOsDashboardFixture(overrides: Partial<Record<string, unknown>> = {}) {

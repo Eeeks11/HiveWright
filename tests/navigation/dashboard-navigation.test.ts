@@ -18,6 +18,7 @@ describe("dashboard navigation model", () => {
 
     expect(groups.map((group) => group.id)).toEqual([
       "dashboard",
+      "business-os",
       "supervision",
       "marketing",
       "sales",
@@ -94,5 +95,17 @@ describe("dashboard navigation model", () => {
     expect(procedures && dashboardNavigationLinkIsActive(procedures, "/setup/workflow-capture")).toBe(true);
     expect(procedures && dashboardNavigationLinkIsActive(procedures, "/setup/sop-importer")).toBe(true);
     expect(work && dashboardNavigationGroupIsActive(work, "/setup/workflow-capture/session-1/review")).toBe(true);
+  });
+
+  it("makes the Business OS command index discoverable from primary navigation", () => {
+    const groups = buildDashboardNavigation({ activeHiveId: "hive-2" });
+    const businessOs = groups.find((group) => group.id === "business-os");
+
+    expect(businessOs).toMatchObject({
+      id: "business-os",
+      label: "Business OS",
+      href: "/business-os",
+    });
+    expect(businessOs && dashboardNavigationGroupIsActive(businessOs, "/business-os/hive-2")).toBe(true);
   });
 });

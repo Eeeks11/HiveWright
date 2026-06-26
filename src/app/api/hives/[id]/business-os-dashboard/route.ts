@@ -129,7 +129,24 @@ export async function GET(
   `;
 
   if (!profile) {
-    return jsonError("Business OS profile not found for hive", 404);
+    const [hive] = await sql<{ id: string; name: string; kind: string; description: string | null }[]>`
+      SELECT id, name, kind, description
+      FROM hives
+      WHERE id = ${id}::uuid
+    `;
+    if (!hive || hive.kind !== "business") {
+      return jsonError("Business OS profile not found for hive", 404);
+    }
+    return jsonOk({
+      status: "setup_required",
+      headline: `${hive.name} Business OS setup required`,
+      summary: hive.description,
+      setupRequired: {
+        label: "Set up or audit this business",
+        href: `/hives/${id}/business-os/setup`,
+        description: "Create a Business OS profile before treating this hive as operationally visible.",
+      },
+    });
   }
 
   const [setupProfile] = await sql<SetupProfileRow[]>`

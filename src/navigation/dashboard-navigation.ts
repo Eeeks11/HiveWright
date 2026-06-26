@@ -80,6 +80,13 @@ export function buildDashboardNavigation({
       links: [],
     },
     {
+      id: "business-os",
+      label: "Business OS",
+      href: "/business-os",
+      isActive: (pathname) => pathname === "/business-os" || pathname.startsWith("/business-os/"),
+      links: [],
+    },
+    {
       id: "supervision",
       label: "Supervision",
       href: "/supervision",

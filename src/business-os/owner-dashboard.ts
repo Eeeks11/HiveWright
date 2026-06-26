@@ -289,6 +289,14 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       expectedOutcome: action.expectedOutcome,
       measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,
       evidence: action.sourceRefs.map(evidenceLabel),
+      conversionAffordance: {
+        label: "Convert to governed work",
+        contract: {
+          expectedOutcome: action.expectedOutcome,
+          measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,
+          ownerApprovalRequired: action.approvalRequired,
+        },
+      },
     })),
     approvalsRequired: approvalsRequired.slice(0, 5).map((action) => ({
       title: action.title,
