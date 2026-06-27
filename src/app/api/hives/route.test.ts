@@ -203,6 +203,14 @@ describe("GET /api/hives", () => {
         mode: null,
         profileId: null,
         href: "/hives/hive-1/business-os/setup",
+        readiness: {
+          state: "unknown",
+          averageScore: null,
+          label: "Not measured",
+        },
+        openGapsCount: 0,
+        approvalsRequiredCount: 0,
+        nextAction: "Set up or audit this business",
       },
     }]);
     expect(mockSql).toHaveBeenCalledTimes(1);

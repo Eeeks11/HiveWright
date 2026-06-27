@@ -35,6 +35,10 @@ describe("GET /api/hives Business OS acceptance status", () => {
         business_os_profile_id: "profile-1",
         business_os_mode: "existing_business",
         business_os_status: "audit_in_progress",
+        business_os_average_readiness_score: 42,
+        business_os_open_gaps_count: 3,
+        business_os_approvals_required_count: 2,
+        business_os_next_action: "Review owner approvals",
       },
       {
         id: "22222222-2222-4222-8222-222222222222",
@@ -49,6 +53,10 @@ describe("GET /api/hives Business OS acceptance status", () => {
         business_os_profile_id: null,
         business_os_mode: null,
         business_os_status: "setup_required",
+        business_os_average_readiness_score: null,
+        business_os_open_gaps_count: 0,
+        business_os_approvals_required_count: 0,
+        business_os_next_action: "Set up or audit this business",
       },
       {
         id: "33333333-3333-4333-8333-333333333333",
@@ -63,6 +71,10 @@ describe("GET /api/hives Business OS acceptance status", () => {
         business_os_profile_id: null,
         business_os_mode: null,
         business_os_status: null,
+        business_os_average_readiness_score: null,
+        business_os_open_gaps_count: 0,
+        business_os_approvals_required_count: 0,
+        business_os_next_action: null,
       },
     ]);
 
@@ -79,6 +91,14 @@ describe("GET /api/hives Business OS acceptance status", () => {
           mode: "existing_business",
           profileId: "profile-1",
           href: "/business-os/11111111-1111-4111-8111-111111111111",
+          readiness: {
+            state: "measured",
+            averageScore: 42,
+            label: "42% ready",
+          },
+          openGapsCount: 3,
+          approvalsRequiredCount: 2,
+          nextAction: "Review owner approvals",
         },
       }),
       expect.objectContaining({
@@ -89,6 +109,14 @@ describe("GET /api/hives Business OS acceptance status", () => {
           mode: null,
           profileId: null,
           href: "/hives/22222222-2222-4222-8222-222222222222/business-os/setup",
+          readiness: {
+            state: "unknown",
+            averageScore: null,
+            label: "Not measured",
+          },
+          openGapsCount: 0,
+          approvalsRequiredCount: 0,
+          nextAction: "Set up or audit this business",
         },
       }),
       expect.objectContaining({
