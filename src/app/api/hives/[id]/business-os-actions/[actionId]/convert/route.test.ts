@@ -9,7 +9,7 @@ vi.mock("../../../../../_lib/auth", () => ({
 }));
 
 vi.mock("@/auth/users", () => ({
-  canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/operating-loops/business-action-runtime", () => ({
@@ -18,7 +18,7 @@ vi.mock("@/operating-loops/business-action-runtime", () => ({
   convertBusinessActionToSopDraft: vi.fn(),
 }));
 
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import {
   convertBusinessActionToAgentTask,
   convertBusinessActionToSchedule,
@@ -28,7 +28,7 @@ import { requireApiUser } from "../../../../../_lib/auth";
 import { sql } from "../../../../../_lib/db";
 import { POST } from "./route";
 
-const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockConvertBusinessActionToAgentTask = convertBusinessActionToAgentTask as unknown as ReturnType<typeof vi.fn>;
 const mockConvertBusinessActionToSchedule = convertBusinessActionToSchedule as unknown as ReturnType<typeof vi.fn>;
 const mockConvertBusinessActionToSopDraft = convertBusinessActionToSopDraft as unknown as ReturnType<typeof vi.fn>;
@@ -53,7 +53,7 @@ describe("POST /api/hives/[id]/business-os-actions/[actionId]/convert", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
     mockSql.mockResolvedValue([{ id: actionId }]);
     mockConvertBusinessActionToAgentTask.mockResolvedValue({
       task: { id: "task-1" },
@@ -79,20 +79,48 @@ describe("POST /api/hives/[id]/business-os-actions/[actionId]/convert", () => {
 
     expect(res.status).toBe(401);
     expect(mockSql).not.toHaveBeenCalled();
-    expect(mockCanAccessHive).not.toHaveBeenCalled();
+    expect(mockCanMutateHive).not.toHaveBeenCalled();
   });
 
-  it("requires hive access for non-owner callers before conversion", async () => {
-    mockCanAccessHive.mockResolvedValueOnce(false);
+  it("requires hive mutation access for non-owner callers before conversion", async () => {
+    mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await POST(postRequest({ conversion: "create_agent_task" }), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toMatch(/hive access required/i);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", hiveId);
+    expect(body.error).toMatch(/hive mutation access required/i);
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", hiveId);
     expect(mockSql).not.toHaveBeenCalled();
     expect(mockConvertBusinessActionToAgentTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects read-only hive viewers that do not have mutation access", async () => {
+    mockCanMutateHive.mockResolvedValueOnce(false);
+
+    const res = await POST(postRequest({ conversion: "create_schedule", cronExpression: "0 9 * * *" }), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/hive mutation access required/i);
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", hiveId);
+    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockConvertBusinessActionToSchedule).not.toHaveBeenCalled();
+  });
+
+  it("preserves system-owner conversion access without membership checks", async () => {
+    mockRequireApiUser.mockResolvedValueOnce({
+      user: { id: "system-owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+
+    const res = await POST(postRequest({ conversion: "create_agent_task" }), params);
+
+    expect(res.status).toBe(201);
+    expect(mockCanMutateHive).not.toHaveBeenCalled();
+    expect(mockConvertBusinessActionToAgentTask).toHaveBeenCalledWith(mockSql, expect.objectContaining({
+      actionId,
+      createdBy: "system-owner-1",
+    }));
   });
 
   it("requires the action to belong to the requested hive", async () => {

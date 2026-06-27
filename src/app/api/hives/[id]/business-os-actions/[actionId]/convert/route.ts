@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import {
   convertBusinessActionToAgentTask,
   convertBusinessActionToSchedule,
@@ -28,8 +28,8 @@ export async function POST(
   if (!UUID_RE.test(actionId)) return jsonError("actionId must be a valid UUID", 400);
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, id);
-    if (!hasAccess) return jsonError("Forbidden: hive access required", 403);
+    const canMutate = await canMutateHive(sql, authz.user.id, id);
+    if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
   }
 
   const [actionScope] = await sql<{ id: string }[]>`
