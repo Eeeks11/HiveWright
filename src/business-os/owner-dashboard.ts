@@ -1,6 +1,7 @@
 export type BusinessMode = "new_business" | "existing_business";
 
 export type BusinessOsOwnerDashboardInput = {
+  hiveId?: string | null;
   profile: {
     id: string;
     businessMode: BusinessMode;
@@ -73,6 +74,7 @@ export type RecommendationRow = {
 };
 
 export type BusinessActionRow = {
+  id?: string | null;
   systemKey?: string | null;
   title: string;
   brief: string;
@@ -401,6 +403,8 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       evidence: action.sourceRefs.map(evidenceLabel),
       conversionAffordance: {
         label: "Convert to governed work",
+        href: action.id && input.hiveId ? `/api/hives/${input.hiveId}/business-os-actions/${action.id}/convert` : null,
+        options: action.approvalRequired ? ["request_owner_approval"] : ["create_agent_task", "create_schedule", "create_sop_draft", "record_measurement"],
         contract: {
           expectedOutcome: action.expectedOutcome,
           measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,

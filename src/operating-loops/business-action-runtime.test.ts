@@ -9,6 +9,9 @@ vi.mock("@/app/api/_lib/auth", () => ({
 
 import { POST as respondToDecision } from "@/app/api/decisions/[id]/respond/route";
 import {
+  convertBusinessActionToAgentTask,
+  convertBusinessActionToSchedule,
+  convertBusinessActionToSopDraft,
   convertRecommendationToBusinessAction,
   recordBusinessActionMeasurement,
   startApprovedBusinessAction,
@@ -98,6 +101,14 @@ function ownerDecisionRequest(hiveId: string, body: Record<string, unknown>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ hiveId, ...body }),
   });
+}
+
+async function insertRole(slug: string): Promise<void> {
+  await sql`
+    INSERT INTO role_templates (slug, name, type, adapter_type)
+    VALUES (${slug}, ${slug.replace(/-/g, " ")}, 'executor', 'auto')
+    ON CONFLICT (slug) DO NOTHING
+  `;
 }
 
 describe("Business OS action-loop runtime", () => {
@@ -399,6 +410,92 @@ describe("Business OS action-loop runtime", () => {
     expect(decision.priority).toBe("normal");
     expect(decision.context).toContain("Commitment-making or destructive changes");
     expect(decision.route_metadata.governance?.riskCategories).toEqual(expect.arrayContaining(["commitment_or_destructive_change"]));
+  });
+
+  it("converts approved Business OS actions into real agent task, schedule, and SOP evidence", async () => {
+    await insertRole("operations-agent");
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({ hiveId, riskLevel: "high" });
+
+    const action = await convertRecommendationToBusinessAction(sql, {
+      recommendationId,
+      businessOsProfileId: profileId,
+      systemKey: "operations",
+      measurement: { metricName: "sop evidence reviewed", baseline: 0, target: 1 },
+    });
+
+    await respondToDecision(ownerDecisionRequest(hiveId, {
+      response: "approved",
+      selectedOptionKey: "approve",
+      comment: "Approved for governed internal execution.",
+    }), { params: Promise.resolve({ id: action.decision_id! }) });
+
+    const taskConversion = await convertBusinessActionToAgentTask(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      createdBy: "business-os:test",
+    });
+    expect(taskConversion.task).toMatchObject({
+      hive_id: hiveId,
+      assigned_to: "operations-agent",
+      created_by: "business-os:test",
+      status: "pending",
+      title: "Business OS action: Draft a customer follow-up offer",
+    });
+    expect(taskConversion.action.status).toBe("running");
+    expect(taskConversion.action.measurement_plan.conversions?.agentTaskId).toBe(taskConversion.task.id);
+
+    const scheduleConversion = await convertBusinessActionToSchedule(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      cronExpression: "0 9 * * 1",
+      createdBy: "business-os:test",
+    });
+    expect(scheduleConversion.schedule).toMatchObject({
+      hive_id: hiveId,
+      cron_expression: "0 9 * * 1",
+      enabled: true,
+      created_by: "business-os:test",
+      origin_type: "business_os_action",
+      origin_key: action.id,
+    });
+    expect(scheduleConversion.schedule.task_template).toMatchObject({
+      assignedTo: "operations-agent",
+      title: "Business OS action: Draft a customer follow-up offer",
+      businessActionId: action.id,
+    });
+    expect(scheduleConversion.action.measurement_plan.conversions?.scheduleId).toBe(scheduleConversion.schedule.id);
+
+    const sopConversion = await convertBusinessActionToSopDraft(sql, {
+      actionId: action.id,
+      roleSlug: "operations-agent",
+      createdBy: "business-os:test",
+      content: "# Follow-up SOP\n\n1. Review evidence.\n2. Prepare owner-safe draft.",
+    });
+    expect(sopConversion.task.status).toBe("completed");
+    expect(sopConversion.workProduct).toMatchObject({
+      hive_id: hiveId,
+      role_slug: "operations-agent",
+      artifact_kind: "sop_draft",
+      review_status: "ready",
+    });
+    expect(sopConversion.action.measurement_plan.conversions?.sopWorkProductId).toBe(sopConversion.workProduct.id);
+  });
+
+  it("keeps sensitive Business OS actions approval-gated before creating real work", async () => {
+    await insertRole("operations-agent");
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({ hiveId, riskLevel: "high" });
+    const action = await convertRecommendationToBusinessAction(sql, { recommendationId, businessOsProfileId: profileId });
+
+    await expect(convertBusinessActionToAgentTask(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      createdBy: "business-os:test",
+    })).rejects.toThrow("requires owner approval before conversion");
+
+    const taskRows = await sql<{ count: string }[]>`SELECT count(*)::text AS count FROM tasks WHERE hive_id = ${hiveId}::uuid`;
+    expect(taskRows[0].count).toBe("0");
   });
 
   it("queues safe internal recommendations without creating owner approval decisions", async () => {

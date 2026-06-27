@@ -219,6 +219,7 @@ describe("deriveBusinessOsOwnerDashboard", () => {
 
   it("exposes a conversion contract for active Business OS actions", () => {
     const dashboard = deriveBusinessOsOwnerDashboard({
+      hiveId: "hive-1",
       profile: {
         id: "profile-1",
         businessMode: "existing_business",
@@ -236,6 +237,7 @@ describe("deriveBusinessOsOwnerDashboard", () => {
       gaps: [],
       recommendations: [],
       actions: [{
+        id: "action-1",
         title: "Fix finance evidence cadence",
         brief: "Turn the finance/admin gap into scheduled owner-visible work.",
         status: "queued",
@@ -253,6 +255,8 @@ describe("deriveBusinessOsOwnerDashboard", () => {
       title: "Fix finance evidence cadence",
       conversionAffordance: {
         label: "Convert to governed work",
+        href: "/api/hives/hive-1/business-os-actions/action-1/convert",
+        options: ["request_owner_approval"],
         contract: {
           expectedOutcome: "Weekly finance evidence is current.",
           measurementMetric: "finance_evidence_current",

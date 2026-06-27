@@ -72,6 +72,7 @@ type RecommendationRow = {
 };
 
 type ActionRow = {
+  id: string;
   system_key: string | null;
   title: string;
   brief: string;
@@ -253,7 +254,7 @@ export async function GET(
     LIMIT 20
   `;
   const actions = await sql<ActionRow[]>`
-    SELECT system_key, title, brief, status, priority, risk_level, approval_required, expected_outcome,
+    SELECT id, system_key, title, brief, status, priority, risk_level, approval_required, expected_outcome,
            measurement_plan, source_refs, created_at, updated_at
     FROM business_actions
     WHERE hive_id = ${id}::uuid
@@ -314,6 +315,7 @@ export async function GET(
   `;
 
   const dashboard = deriveBusinessOsOwnerDashboard({
+    hiveId: id,
     profile: {
       id: profile.id,
       businessMode: profile.business_mode,
@@ -374,6 +376,7 @@ export async function GET(
       updatedAt: row.updated_at,
     })),
     actions: actions.map((row) => ({
+      id: row.id,
       systemKey: row.system_key,
       title: row.title,
       brief: row.brief,
