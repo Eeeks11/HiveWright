@@ -493,7 +493,8 @@ describe("NewHiveWizard", () => {
     fireEvent.change(screen.getByLabelText("Feasibility and risk notes"), { target: { value: "Insurance needs confirmation\nSupplier capacity unknown" } });
     fireEvent.change(screen.getByLabelText("Target customers"), { target: { value: "Time-poor landlords\nHoliday-home owners" } });
     fireEvent.change(screen.getByLabelText("Offer hypotheses"), { target: { value: "Monthly property checkup" } });
-    fireEvent.change(screen.getByLabelText("Business blueprint"), { target: { value: "Offer: monthly checkup\nCustomer: landlords\nPricing: from $199" } });
+    fireEvent.change(screen.getByLabelText("Pricing or margin assumptions"), { target: { value: "$199 per month\n40% gross margin target" } });
+    fireEvent.change(screen.getByLabelText("Business blueprint"), { target: { value: "Promise: inspections without landlord travel\nConstraint: insurance verified before launch" } });
     fireEvent.change(screen.getByLabelText("Marketing channels to test"), { target: { value: "Referral partners\nGoogle Business Profile" } });
     fireEvent.change(screen.getByLabelText("Legal/admin/risk checklist"), { target: { value: "Confirm insurance\nCheck licensing" } });
     fireEvent.change(screen.getByLabelText("Launch readiness criteria"), { target: { value: "Insurance verified\nOffer package approved" } });
@@ -524,8 +525,14 @@ describe("NewHiveWizard", () => {
           feasibilityRisks: ["Insurance needs confirmation", "Supplier capacity unknown"],
           customerSegments: ["Time-poor landlords", "Holiday-home owners"],
           offers: ["Monthly property checkup"],
+          pricingModel: { assumptions: ["$199 per month", "40% gross margin target"] },
           businessBlueprint: {
-            notes: ["Offer: monthly checkup", "Customer: landlords", "Pricing: from $199"],
+            offer: ["Monthly property checkup"],
+            customer: ["Time-poor landlords", "Holiday-home owners"],
+            problem: [],
+            pricing: ["$199 per month", "40% gross margin target"],
+            promise: ["Promise: inspections without landlord travel"],
+            constraints: ["Constraint: insurance verified before launch"],
           },
           marketingModel: { channels: ["Referral partners", "Google Business Profile"] },
           legalComplianceChecklist: ["Confirm insurance", "Check licensing"],

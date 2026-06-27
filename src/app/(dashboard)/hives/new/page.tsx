@@ -800,8 +800,8 @@ export default function NewHiveWizard() {
                   customerSegments: textAreaList(state.newBusinessSetup.customerSegments),
                   problemStatements: textAreaList(state.newBusinessSetup.problemStatements),
                   offers: textAreaList(state.newBusinessSetup.offers),
-                  pricingModel: textAreaNotes("pricing", state.newBusinessSetup.pricingModel),
-                  businessBlueprint: textAreaNotes("notes", state.newBusinessSetup.businessBlueprint),
+                  pricingModel: textAreaNotes("assumptions", state.newBusinessSetup.pricingModel),
+                  businessBlueprint: structuredBusinessBlueprint(state.newBusinessSetup),
                   marketingModel: textAreaNotes("channels", state.newBusinessSetup.marketingModel),
                   salesModel: textAreaNotes("motion", state.newBusinessSetup.salesModel),
                   deliveryModel: textAreaNotes("fulfilment", state.newBusinessSetup.deliveryModel),
@@ -1938,6 +1938,26 @@ function textAreaList(value: string): string[] {
 function textAreaNotes(key: string, value: string): Record<string, unknown> {
   const notes = textAreaList(value);
   return notes.length > 0 ? { [key]: notes } : {};
+}
+
+function structuredBusinessBlueprint(setup: WizardState["newBusinessSetup"]): Record<string, unknown> {
+  const blueprintLines = textAreaList(setup.businessBlueprint);
+  const lineMatches = (patterns: RegExp[]) => blueprintLines.filter((line) => patterns.some((pattern) => pattern.test(line)));
+  const categorized = new Set([
+    ...lineMatches([/^promise\s*:/i]),
+    ...lineMatches([/^constraint\s*:/i, /^risk\s*:/i, /^limit/i]),
+  ]);
+  const notes = blueprintLines.filter((line) => !categorized.has(line));
+
+  return {
+    offer: textAreaList(setup.offers),
+    customer: textAreaList(setup.customerSegments),
+    problem: textAreaList(setup.problemStatements),
+    pricing: textAreaList(setup.pricingModel),
+    promise: lineMatches([/^promise\s*:/i]),
+    constraints: lineMatches([/^constraint\s*:/i, /^risk\s*:/i, /^limit/i]),
+    ...(notes.length > 0 ? { notes } : {}),
+  };
 }
 
 function requestSortingLabel(preset: RequestSortingPreset): string {
