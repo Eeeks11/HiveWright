@@ -188,6 +188,9 @@ export async function GET(
   const url = new URL(request.url);
   const since = url.searchParams.get("since");
   const diagnosticVariantParam = url.searchParams.get("diagnosticExport");
+  if (diagnosticVariantParam === "internal" && !authz.user.isSystemOwner) {
+    return jsonError("Forbidden: internal diagnostic export requires system owner access", 403);
+  }
   const diagnosticVariant: DiagnosticVariant | null = diagnosticVariantParam === "client_safe" || diagnosticVariantParam === "internal"
     ? diagnosticVariantParam
     : null;

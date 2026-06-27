@@ -347,4 +347,19 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
     expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "member-1", hiveId);
     expect(mocks.sql).not.toHaveBeenCalled();
   });
+
+  it("rejects internal diagnostic export requests from non-owner hive members", async () => {
+    mocks.requireApiUser.mockResolvedValueOnce({
+      user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
+    });
+    mocks.canAccessHive.mockResolvedValueOnce(true);
+
+    const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard?diagnosticExport=internal`), {
+      params: Promise.resolve({ id: hiveId }),
+    });
+
+    expect(res.status).toBe(403);
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "member-1", hiveId);
+    expect(mocks.sql).not.toHaveBeenCalled();
+  });
 });
