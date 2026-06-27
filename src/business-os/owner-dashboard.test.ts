@@ -266,7 +266,7 @@ describe("deriveBusinessOsOwnerDashboard", () => {
     });
   });
 
-  it("exposes real conversion options for approved approval-required actions", () => {
+  it("only advertises convert-route supported options for approved approval-required actions", () => {
     const dashboard = deriveBusinessOsOwnerDashboard({
       hiveId: "hive-1",
       profile: {
@@ -304,7 +304,6 @@ describe("deriveBusinessOsOwnerDashboard", () => {
       "create_agent_task",
       "create_schedule",
       "create_sop_draft",
-      "record_measurement",
     ]);
   });
 

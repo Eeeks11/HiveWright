@@ -140,7 +140,7 @@ const IDEAL_OPERATING_MODEL_MODULES: Array<{ key: BusinessOsModuleKey; label: st
 const TERMINAL_ACTION_STATUSES = new Set(["completed", "cancelled", "failed"]);
 const ACTIVE_ACTION_STATUSES = new Set(["draft", "queued", "awaiting_approval", "approved", "running", "blocked"]);
 const CONVERTIBLE_APPROVAL_REQUIRED_ACTION_STATUSES = new Set(["approved", "running"]);
-const CONVERSION_OPTIONS = ["create_agent_task", "create_schedule", "create_sop_draft", "record_measurement"];
+const CONVERSION_OPTIONS = ["create_agent_task", "create_schedule", "create_sop_draft"];
 const WEAK_MATURITY_LEVELS = new Set(["missing", "ad_hoc"]);
 
 function asTime(value: string | Date | null | undefined): number {
