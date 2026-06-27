@@ -64,10 +64,16 @@ function buildNewBusinessRequest(slug: string): HiveSetupRequest {
       },
       setup: {
         idea: "A weekend maintenance service for busy property owners",
+        feasibilityRisks: ["Owner availability is limited", "Insurance needs confirmation"],
         customerSegments: ["Time-poor property owners"],
         problemStatements: ["Small maintenance jobs do not get handled quickly"],
         offers: ["Monthly maintenance checkup"],
         pricingModel: { model: "subscription", startingPriceCents: 19900 },
+        businessBlueprint: {
+          offer: "Monthly maintenance checkup",
+          customer: "Time-poor property owners",
+          pricing: "Subscription from $199",
+        },
         marketingModel: { channels: ["local referral partners", "Google Business Profile"] },
         salesModel: { motion: "owner-led consult call" },
         deliveryModel: { fulfilment: "scheduled local service visits" },
@@ -75,6 +81,10 @@ function buildNewBusinessRequest(slug: string): HiveSetupRequest {
         legalComplianceChecklist: ["Confirm licensing and insurance requirements"],
         toolStack: ["booking calendar", "invoicing", "CRM"],
         rolesAndSops: ["intake SOP", "site visit checklist"],
+        launchReadiness: ["Insurance confirmed", "Offer package approved", "Finance/admin checklist complete"],
+        launchRoadmap: ["Validate customer/problem", "Package the first offer", "Draft launch assets"],
+        launchActions: ["Publish first public offer", "Start paid local ads"],
+        initialLoops: ["Weekly launch readiness review", "Lead follow-up loop"],
       },
     },
     safetyPreset: "owner_review_first",
@@ -208,8 +218,9 @@ describe("Business OS profile foundation", () => {
       customer_segments: string[];
       offers: string[];
       pricing_model: Record<string, unknown>;
+      brand_positioning: Record<string, unknown>;
     }[]>`
-      SELECT idea, customer_segments, offers, pricing_model
+      SELECT idea, customer_segments, offers, pricing_model, brand_positioning
       FROM business_setup_profiles
       WHERE hive_id = ${result.id}::uuid
     `;
@@ -219,6 +230,18 @@ describe("Business OS profile foundation", () => {
       customer_segments: ["Time-poor property owners"],
       offers: ["Monthly maintenance checkup"],
       pricing_model: { model: "subscription", startingPriceCents: 19900 },
+      brand_positioning: {
+        feasibilityRisks: ["Owner availability is limited", "Insurance needs confirmation"],
+        businessBlueprint: {
+          offer: "Monthly maintenance checkup",
+          customer: "Time-poor property owners",
+          pricing: "Subscription from $199",
+        },
+        launchReadiness: ["Insurance confirmed", "Offer package approved", "Finance/admin checklist complete"],
+        launchRoadmap: ["Validate customer/problem", "Package the first offer", "Draft launch assets"],
+        launchActions: ["Publish first public offer", "Start paid local ads"],
+        initialLoops: ["Weekly launch readiness review", "Lead follow-up loop"],
+      },
     });
 
     const readinessRows = await sql<{ system_key: string; source_kind: string; readiness_score: number; confidence: string }[]>`

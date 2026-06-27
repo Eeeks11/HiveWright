@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 import { generateHiveAddress } from "@/hives/address";
@@ -217,10 +217,12 @@ interface WizardState {
   businessMode: BusinessMode;
   newBusinessSetup: {
     idea: string;
+    feasibilityRisks: string;
     customerSegments: string;
     problemStatements: string;
     offers: string;
     pricingModel: string;
+    businessBlueprint: string;
     marketingModel: string;
     salesModel: string;
     deliveryModel: string;
@@ -228,6 +230,10 @@ interface WizardState {
     legalComplianceChecklist: string;
     toolStack: string;
     rolesAndSops: string;
+    launchReadiness: string;
+    launchRoadmap: string;
+    launchActions: string;
+    initialLoops: string;
   };
   name: string;
   slug: string;
@@ -338,10 +344,12 @@ export default function NewHiveWizard() {
     businessMode: "new_business",
     newBusinessSetup: {
       idea: "",
+      feasibilityRisks: "",
       customerSegments: "",
       problemStatements: "",
       offers: "",
       pricingModel: "",
+      businessBlueprint: "",
       marketingModel: "",
       salesModel: "",
       deliveryModel: "",
@@ -349,6 +357,10 @@ export default function NewHiveWizard() {
       legalComplianceChecklist: "",
       toolStack: "",
       rolesAndSops: "",
+      launchReadiness: "",
+      launchRoadmap: "",
+      launchActions: "",
+      initialLoops: "",
     },
     name: "",
     slug: "",
@@ -784,10 +796,12 @@ export default function NewHiveWizard() {
               setup: state.businessMode === "new_business"
                 ? {
                   idea: state.newBusinessSetup.idea || state.description || state.mission,
+                  feasibilityRisks: textAreaList(state.newBusinessSetup.feasibilityRisks),
                   customerSegments: textAreaList(state.newBusinessSetup.customerSegments),
                   problemStatements: textAreaList(state.newBusinessSetup.problemStatements),
                   offers: textAreaList(state.newBusinessSetup.offers),
                   pricingModel: textAreaNotes("pricing", state.newBusinessSetup.pricingModel),
+                  businessBlueprint: textAreaNotes("notes", state.newBusinessSetup.businessBlueprint),
                   marketingModel: textAreaNotes("channels", state.newBusinessSetup.marketingModel),
                   salesModel: textAreaNotes("motion", state.newBusinessSetup.salesModel),
                   deliveryModel: textAreaNotes("fulfilment", state.newBusinessSetup.deliveryModel),
@@ -795,6 +809,10 @@ export default function NewHiveWizard() {
                   legalComplianceChecklist: textAreaList(state.newBusinessSetup.legalComplianceChecklist),
                   toolStack: textAreaList(state.newBusinessSetup.toolStack),
                   rolesAndSops: textAreaList(state.newBusinessSetup.rolesAndSops),
+                  launchReadiness: textAreaList(state.newBusinessSetup.launchReadiness),
+                  launchRoadmap: textAreaList(state.newBusinessSetup.launchRoadmap),
+                  launchActions: textAreaList(state.newBusinessSetup.launchActions),
+                  initialLoops: textAreaList(state.newBusinessSetup.initialLoops),
                 }
                 : undefined,
             }
@@ -957,96 +975,158 @@ export default function NewHiveWizard() {
                     Capture enough context for HiveWright to create structured setup state, launch readiness, gaps, and an approval-gated action queue. You can leave unknowns blank and refine them later.
                   </p>
                 </div>
-                <div>
-                  <label htmlFor="new-business-idea" className="text-sm font-medium">Business idea or opportunity</label>
-                  <textarea
-                    id="new-business-idea"
-                    value={state.newBusinessSetup.idea}
-                    onChange={(e) => updateNewBusinessSetup({ idea: e.target.value })}
-                    rows={2}
-                    placeholder="What are you trying to launch?"
-                    className="mt-1 w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
-                  />
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
+                <NewBusinessStage title="1. Idea capture" description="Name the opportunity, first customer, problem, and offer assumptions.">
+                  <div>
+                    <label htmlFor="new-business-idea" className="text-sm font-medium">Business idea or opportunity</label>
+                    <textarea
+                      id="new-business-idea"
+                      value={state.newBusinessSetup.idea}
+                      onChange={(e) => updateNewBusinessSetup({ idea: e.target.value })}
+                      rows={2}
+                      placeholder="What are you trying to launch?"
+                      className="mt-1 w-full rounded-md border px-3 py-2 text-sm dark:bg-zinc-800"
+                    />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <NewBusinessTextarea
+                      id="new-business-customers"
+                      label="Target customers"
+                      value={state.newBusinessSetup.customerSegments}
+                      onChange={(value) => updateNewBusinessSetup({ customerSegments: value })}
+                      placeholder="One segment per line"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-problems"
+                      label="Customer problems or triggers"
+                      value={state.newBusinessSetup.problemStatements}
+                      onChange={(value) => updateNewBusinessSetup({ problemStatements: value })}
+                      placeholder="What pain/trigger makes them buy?"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-offers"
+                      label="Offer hypotheses"
+                      value={state.newBusinessSetup.offers}
+                      onChange={(value) => updateNewBusinessSetup({ offers: value })}
+                      placeholder="Offer/package ideas"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-pricing"
+                      label="Pricing or margin assumptions"
+                      value={state.newBusinessSetup.pricingModel}
+                      onChange={(value) => updateNewBusinessSetup({ pricingModel: value })}
+                      placeholder="Price, margin, capacity notes"
+                    />
+                  </div>
+                </NewBusinessStage>
+                <NewBusinessStage title="2. Feasibility and risk" description="Capture what could make the idea invalid, unsafe, illegal, or not worth launching.">
                   <NewBusinessTextarea
-                    id="new-business-customers"
-                    label="Target customers"
-                    value={state.newBusinessSetup.customerSegments}
-                    onChange={(value) => updateNewBusinessSetup({ customerSegments: value })}
-                    placeholder="One segment per line"
+                    id="new-business-feasibility-risks"
+                    label="Feasibility and risk notes"
+                    value={state.newBusinessSetup.feasibilityRisks}
+                    onChange={(value) => updateNewBusinessSetup({ feasibilityRisks: value })}
+                    placeholder="Risks, assumptions to prove, constraints, compliance unknowns"
                   />
+                </NewBusinessStage>
+                <NewBusinessStage title="3. Business blueprint" description="Turn the idea into a structured offer/customer/pricing operating blueprint.">
                   <NewBusinessTextarea
-                    id="new-business-problems"
-                    label="Customer problems or triggers"
-                    value={state.newBusinessSetup.problemStatements}
-                    onChange={(value) => updateNewBusinessSetup({ problemStatements: value })}
-                    placeholder="What pain/trigger makes them buy?"
+                    id="new-business-blueprint"
+                    label="Business blueprint"
+                    value={state.newBusinessSetup.businessBlueprint}
+                    onChange={(value) => updateNewBusinessSetup({ businessBlueprint: value })}
+                    placeholder="Offer, customer, problem, price, promise, constraints"
                   />
+                </NewBusinessStage>
+                <NewBusinessStage title="4. Operating setup" description="Define delivery, admin, finance, compliance, and tools before the hive treats work as launch-ready.">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <NewBusinessTextarea
+                      id="new-business-delivery"
+                      label="Delivery and operations"
+                      value={state.newBusinessSetup.deliveryModel}
+                      onChange={(value) => updateNewBusinessSetup({ deliveryModel: value })}
+                      placeholder="Fulfilment, capacity, quality checks"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-admin-finance"
+                      label="Admin and finance baseline"
+                      value={state.newBusinessSetup.adminFinanceModel}
+                      onChange={(value) => updateNewBusinessSetup({ adminFinanceModel: value })}
+                      placeholder="Bookkeeping, payments, admin setup"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-legal"
+                      label="Legal/admin/risk checklist"
+                      value={state.newBusinessSetup.legalComplianceChecklist}
+                      onChange={(value) => updateNewBusinessSetup({ legalComplianceChecklist: value })}
+                      placeholder="Checklist prompts, not legal advice"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-tools"
+                      label="Tools/software stack"
+                      value={state.newBusinessSetup.toolStack}
+                      onChange={(value) => updateNewBusinessSetup({ toolStack: value })}
+                      placeholder="Calendar, CRM, invoicing..."
+                    />
+                  </div>
+                </NewBusinessStage>
+                <NewBusinessStage title="5. Agent setup" description="Tell HiveWright the roles, SOPs, and safe loops agents should prepare first.">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <NewBusinessTextarea
+                      id="new-business-sops"
+                      label="Roles and SOP needs"
+                      value={state.newBusinessSetup.rolesAndSops}
+                      onChange={(value) => updateNewBusinessSetup({ rolesAndSops: value })}
+                      placeholder="SOPs or roles needed before launch"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-initial-loops"
+                      label="Initial operating loops"
+                      value={state.newBusinessSetup.initialLoops}
+                      onChange={(value) => updateNewBusinessSetup({ initialLoops: value })}
+                      placeholder="Weekly launch review, lead follow-up, fulfilment check"
+                    />
+                  </div>
+                </NewBusinessStage>
+                <NewBusinessStage title="6. Launch plan" description="Define readiness gates, roadmap milestones, draft marketing, and draft sales motion.">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <NewBusinessTextarea
+                      id="new-business-launch-readiness"
+                      label="Launch readiness criteria"
+                      value={state.newBusinessSetup.launchReadiness}
+                      onChange={(value) => updateNewBusinessSetup({ launchReadiness: value })}
+                      placeholder="What must be true before public/customer-facing work?"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-launch-roadmap"
+                      label="Launch roadmap"
+                      value={state.newBusinessSetup.launchRoadmap}
+                      onChange={(value) => updateNewBusinessSetup({ launchRoadmap: value })}
+                      placeholder="Validation, setup, assets, launch, review"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-marketing"
+                      label="Marketing channels to test"
+                      value={state.newBusinessSetup.marketingModel}
+                      onChange={(value) => updateNewBusinessSetup({ marketingModel: value })}
+                      placeholder="Draft-only channels"
+                    />
+                    <NewBusinessTextarea
+                      id="new-business-sales"
+                      label="Sales motion"
+                      value={state.newBusinessSetup.salesModel}
+                      onChange={(value) => updateNewBusinessSetup({ salesModel: value })}
+                      placeholder="How first buyers convert"
+                    />
+                  </div>
+                </NewBusinessStage>
+                <NewBusinessStage title="7. Approval-gated launch actions" description="List actions HiveWright may draft or queue, while public/spend/customer actions still wait for approval.">
                   <NewBusinessTextarea
-                    id="new-business-offers"
-                    label="Offer hypotheses"
-                    value={state.newBusinessSetup.offers}
-                    onChange={(value) => updateNewBusinessSetup({ offers: value })}
-                    placeholder="Offer/package ideas"
+                    id="new-business-launch-actions"
+                    label="Approval-gated launch actions"
+                    value={state.newBusinessSetup.launchActions}
+                    onChange={(value) => updateNewBusinessSetup({ launchActions: value })}
+                    placeholder="Publish, send, spend, customer-facing, financial, or system-change actions"
                   />
-                  <NewBusinessTextarea
-                    id="new-business-pricing"
-                    label="Pricing or margin assumptions"
-                    value={state.newBusinessSetup.pricingModel}
-                    onChange={(value) => updateNewBusinessSetup({ pricingModel: value })}
-                    placeholder="Price, margin, capacity notes"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-marketing"
-                    label="Marketing channels to test"
-                    value={state.newBusinessSetup.marketingModel}
-                    onChange={(value) => updateNewBusinessSetup({ marketingModel: value })}
-                    placeholder="Draft-only channels"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-sales"
-                    label="Sales motion"
-                    value={state.newBusinessSetup.salesModel}
-                    onChange={(value) => updateNewBusinessSetup({ salesModel: value })}
-                    placeholder="How first buyers convert"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-delivery"
-                    label="Delivery and operations"
-                    value={state.newBusinessSetup.deliveryModel}
-                    onChange={(value) => updateNewBusinessSetup({ deliveryModel: value })}
-                    placeholder="Fulfilment, capacity, quality checks"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-admin-finance"
-                    label="Admin and finance baseline"
-                    value={state.newBusinessSetup.adminFinanceModel}
-                    onChange={(value) => updateNewBusinessSetup({ adminFinanceModel: value })}
-                    placeholder="Bookkeeping, payments, admin setup"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-legal"
-                    label="Legal/admin/risk checklist"
-                    value={state.newBusinessSetup.legalComplianceChecklist}
-                    onChange={(value) => updateNewBusinessSetup({ legalComplianceChecklist: value })}
-                    placeholder="Checklist prompts, not legal advice"
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-tools"
-                    label="Tools/software stack"
-                    value={state.newBusinessSetup.toolStack}
-                    onChange={(value) => updateNewBusinessSetup({ toolStack: value })}
-                    placeholder="Calendar, CRM, invoicing..."
-                  />
-                  <NewBusinessTextarea
-                    id="new-business-sops"
-                    label="Roles and SOP needs"
-                    value={state.newBusinessSetup.rolesAndSops}
-                    onChange={(value) => updateNewBusinessSetup({ rolesAndSops: value })}
-                    placeholder="SOPs or roles needed before launch"
-                  />
-                </div>
+                </NewBusinessStage>
                 <p className="text-xs leading-5 text-blue-900 dark:text-blue-200">
                   Public launch, ad spend, financial changes, and customer messages stay approval-gated. This intake only creates structured state and queued work.
                 </p>
@@ -1797,6 +1877,26 @@ function RadioChoice({
         <span className="block text-xs leading-5 text-zinc-500">{description}</span>
       </span>
     </label>
+  );
+}
+
+function NewBusinessStage({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-3 rounded-md border border-blue-200 bg-white/70 p-3 dark:border-blue-900 dark:bg-zinc-950/50">
+      <div>
+        <h3 className="text-sm font-semibold text-blue-950 dark:text-blue-100">{title}</h3>
+        <p className="mt-1 text-xs leading-5 text-blue-900 dark:text-blue-200">{description}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 

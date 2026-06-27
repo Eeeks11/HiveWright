@@ -22,10 +22,12 @@ export type BusinessOsProfileInput = {
 
 export type NewBusinessSetupInput = {
   idea?: string | null;
+  feasibilityRisks?: unknown;
   customerSegments?: unknown;
   problemStatements?: unknown;
   offers?: unknown;
   pricingModel?: unknown;
+  businessBlueprint?: unknown;
   brandPositioning?: unknown;
   salesModel?: unknown;
   marketingModel?: unknown;
@@ -34,6 +36,10 @@ export type NewBusinessSetupInput = {
   legalComplianceChecklist?: unknown;
   toolStack?: unknown;
   rolesAndSops?: unknown;
+  launchReadiness?: unknown;
+  launchRoadmap?: unknown;
+  launchActions?: unknown;
+  initialLoops?: unknown;
 };
 
 export type ExistingBusinessAuditInput = {
@@ -184,13 +190,30 @@ function rowToProfile(row: BusinessOsProfileRow): BusinessOsProfile {
 
 function normalizeSetupInput(input: NewBusinessSetupInput | undefined, profile: BusinessOsProfileInput): Required<NewBusinessSetupInput> {
   const idea = trimText(input?.idea) ?? trimText(profile.summary) ?? trimText(profile.businessName) ?? "New business idea to validate";
+  const feasibilityRisks = normalizeTextList(input?.feasibilityRisks);
+  const businessBlueprint = normalizeObject(input?.businessBlueprint);
+  const launchReadiness = normalizeTextList(input?.launchReadiness);
+  const launchRoadmap = normalizeTextList(input?.launchRoadmap);
+  const launchActions = normalizeTextList(input?.launchActions);
+  const initialLoops = normalizeTextList(input?.initialLoops);
+  const brandPositioning = {
+    ...normalizeObject(input?.brandPositioning),
+    ...(feasibilityRisks.length > 0 ? { feasibilityRisks } : {}),
+    ...(hasObjectContent(businessBlueprint) ? { businessBlueprint } : {}),
+    ...(launchReadiness.length > 0 ? { launchReadiness } : {}),
+    ...(launchRoadmap.length > 0 ? { launchRoadmap } : {}),
+    ...(launchActions.length > 0 ? { launchActions } : {}),
+    ...(initialLoops.length > 0 ? { initialLoops } : {}),
+  };
   return {
     idea,
+    feasibilityRisks,
     customerSegments: normalizeTextList(input?.customerSegments),
     problemStatements: normalizeTextList(input?.problemStatements),
     offers: normalizeTextList(input?.offers),
     pricingModel: normalizeObject(input?.pricingModel),
-    brandPositioning: normalizeObject(input?.brandPositioning),
+    businessBlueprint,
+    brandPositioning,
     salesModel: normalizeObject(input?.salesModel),
     marketingModel: normalizeObject(input?.marketingModel),
     deliveryModel: normalizeObject(input?.deliveryModel),
@@ -198,6 +221,10 @@ function normalizeSetupInput(input: NewBusinessSetupInput | undefined, profile: 
     legalComplianceChecklist: normalizeTextList(input?.legalComplianceChecklist),
     toolStack: normalizeTextList(input?.toolStack),
     rolesAndSops: normalizeTextList(input?.rolesAndSops),
+    launchReadiness,
+    launchRoadmap,
+    launchActions,
+    initialLoops,
   } satisfies Required<NewBusinessSetupInput> & { idea: string };
 }
 
