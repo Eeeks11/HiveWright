@@ -32,8 +32,8 @@ function whistonDashboard() {
       knownUnknowns: ["No verified bookkeeping cadence supplied", "No current CRM/source-of-lead evidence supplied"],
     },
     readiness: [
-      { systemKey: "finance_admin", systemLabel: "Finance/admin", readinessScore: 25, maturityLevel: "missing", confidence: "medium", evidenceRefs: [{ label: "No finance records connected" }], summary: "Bookkeeping and admin cadence are not yet evidenced." },
-      { systemKey: "revenue_sales", systemLabel: "Revenue / Sales", readinessScore: 35, maturityLevel: "ad_hoc", confidence: "low", evidenceRefs: [{ label: "Manual pipeline notes" }], summary: "Sales follow-up exists but is not measurable." },
+      { systemKey: "finance_admin", systemLabel: "Finance/admin", readinessScore: 25, maturityLevel: "missing", confidence: "medium", evidenceRefs: [{ label: "No finance records connected" }, { label: "Internal runtime readiness evidence" }], summary: "Bookkeeping and admin cadence are not yet evidenced." },
+      { systemKey: "revenue_sales", systemLabel: "Revenue / Sales", readinessScore: 35, maturityLevel: "ad_hoc", confidence: "low", evidenceRefs: [{ label: "Manual pipeline notes" }, { label: "/deliverables/internal-readiness-work-product" }], summary: "Sales follow-up exists but is not measurable." },
       { systemKey: "ai_governance", systemLabel: "AI governance", readinessScore: 70, maturityLevel: "defined", confidence: "medium", evidenceRefs: [{ label: "Owner approval policy" }], summary: "Sensitive work remains approval gated." },
     ],
     gaps: [
@@ -45,8 +45,8 @@ function whistonDashboard() {
       { title: "Create revenue engine measurement baseline", rationale: "Demand and conversion need one visible loop.", expectedOutcome: "Lead source, follow-up and conversion are tracked.", riskLevel: "medium", requiresOwnerApproval: true, status: "proposed" },
     ],
     actions: [
-      { title: "Complete finance/admin setup checklist", brief: "Confirm bookkeeping, billing, receipt and reporting cadence.", status: "queued", priority: 95, riskLevel: "medium", approvalRequired: true, expectedOutcome: "Admin baseline is safe for delegated work.", measurementPlan: { metric: "finance_admin_checklist_completed" }, sourceRefs: [{ label: "Business OS audit" }], systemKey: "finance_admin" },
-      { title: "Map lead intake and follow-up", brief: "Record source, next step and owner-approved follow-up path.", status: "queued", priority: 86, riskLevel: "medium", approvalRequired: true, expectedOutcome: "Revenue engine has a measurable starting loop.", measurementPlan: { metric: "lead_follow_up_current" }, sourceRefs: [{ label: "Sales audit" }], systemKey: "revenue_sales" },
+      { title: "Complete finance/admin setup checklist", brief: "Confirm bookkeeping, billing, receipt and reporting cadence.", status: "queued", priority: 95, riskLevel: "medium", approvalRequired: true, expectedOutcome: "Admin baseline is safe for delegated work.", measurementPlan: { metric: "finance_admin_checklist_completed" }, sourceRefs: [{ label: "Business OS audit" }, { label: "Internal runtime action evidence" }], systemKey: "finance_admin" },
+      { title: "Map lead intake and follow-up", brief: "Record source, next step and owner-approved follow-up path.", status: "queued", priority: 86, riskLevel: "medium", approvalRequired: true, expectedOutcome: "Revenue engine has a measurable starting loop.", measurementPlan: { metric: "lead_follow_up_current" }, sourceRefs: [{ label: "Sales audit" }, { label: "/api/hives/hive-1/business-os-actions/action-1/convert" }], systemKey: "revenue_sales" },
     ],
     agentActivity: [
       { title: "Internal dogfood audit task", summary: "Generated scorecards from runtime evidence.", status: "completed", role: "hivewright-gpu", evidenceUrl: "/deliverables/internal-work-product", updatedAt: "2026-06-28T00:00:00.000Z" },
@@ -102,6 +102,10 @@ describe("Business OS diagnostic export package", () => {
     expect(serialized).not.toContain("hivewright-gpu");
     expect(serialized).not.toContain("/deliverables/internal-work-product");
     expect(serialized).not.toContain("Internal runtime task evidence");
+    expect(serialized).not.toContain("Internal runtime action evidence");
+    expect(serialized).not.toContain("Internal runtime readiness evidence");
+    expect(serialized).not.toContain("/api/hives/hive-1/business-os-actions/action-1/convert");
+    expect(serialized).not.toContain("/deliverables/internal-readiness-work-product");
     expect(serialized).not.toContain("internalUrl");
   });
 

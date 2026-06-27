@@ -163,13 +163,20 @@ function inferSystemKey(action: DashboardAction, dashboard: Dashboard): string |
   return dashboard.systemMaturity.systems[0]?.key ?? null;
 }
 
+function isClientSafeEvidenceLabel(label: string): boolean {
+  return !/internal|runtime|task|hivewright-[\w-]+/i.test(label)
+    && !/(^|\s)\/(api|deliverables|tasks?|work-products?)\b/i.test(label)
+    && !/https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|[^\s/]*\.local)(?:\b|[:/])/i.test(label);
+}
+
 function buildEvidence(dashboard: Dashboard, clientSafe: boolean) {
-  const auditEvidence = clientSafe
-    ? dashboard.auditScorecard.evidence.filter((label) => !/internal|runtime|task/i.test(label))
-    : dashboard.auditScorecard.evidence;
-  const actionEvidence = dashboard.priorityActions.flatMap((action) => action.evidence);
-  const systemEvidence = dashboard.systemMaturity.systems.flatMap((system) => system.evidence);
-  return unique([...auditEvidence, ...actionEvidence, ...systemEvidence]).slice(0, 12);
+  const allEvidence = [
+    ...dashboard.auditScorecard.evidence,
+    ...dashboard.priorityActions.flatMap((action) => action.evidence),
+    ...dashboard.systemMaturity.systems.flatMap((system) => system.evidence),
+  ];
+  const evidence = clientSafe ? allEvidence.filter(isClientSafeEvidenceLabel) : allEvidence;
+  return unique(evidence).slice(0, 12);
 }
 
 export function buildBusinessOsDiagnosticExport(input: BusinessOsDiagnosticExportInput) {
