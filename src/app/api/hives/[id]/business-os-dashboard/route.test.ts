@@ -79,6 +79,18 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
         role: "hivewright-developer",
         evidence_url: "/deliverables/work-product-1",
         updated_at: "2026-06-24T05:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        campaign_count: 2,
+        metric_count: 1,
+        connected_systems: ["Google Analytics 4"],
+        latest_activity_at: "2026-06-24T05:30:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        funnel_count: 1,
+        action_plan_count: 1,
+        connected_systems: ["CRM"],
+        latest_activity_at: "2026-06-24T05:45:00.000Z",
       }]);
 
     const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard`), {
@@ -95,6 +107,72 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
     });
     expect(body.data.systemMaturity.atRiskSystems).toEqual(["Finance/admin"]);
     expect(body.data.agentActivity[0]).toMatchObject({ hasEvidence: true });
+    expect(body.data.operatingModelMap.modules.find((module: { key: string }) => module.key === "revenue_marketing")).toMatchObject({
+      href: `/marketing?hiveId=${hiveId}`,
+      connectedSystems: ["Google Analytics 4"],
+      summary: "2 campaigns, 1 metric snapshot.",
+    });
+    expect(body.data.operatingModelMap.modules.find((module: { key: string }) => module.key === "revenue_sales")).toMatchObject({
+      href: `/sales?hiveId=${hiveId}`,
+      connectedSystems: ["CRM"],
+      summary: "1 funnel, 1 action plan.",
+    });
+  });
+
+  it("marks empty Marketing and Sales module snapshots as missing evidence", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([{
+        id: "profile-1",
+        business_mode: "existing_business",
+        business_name: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit has not started.",
+        owner_goals: ["Show missing revenue systems honestly"],
+        approval_policy: {},
+        ai_spend_budget: {},
+        autonomy_policy: {},
+        updated_at: "2026-06-24T01:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        campaign_count: 0,
+        metric_count: 0,
+        connected_systems: [],
+        latest_activity_at: null,
+      }])
+      .mockResolvedValueOnce([{
+        funnel_count: 0,
+        action_plan_count: 0,
+        connected_systems: [],
+        latest_activity_at: null,
+      }]);
+
+    const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard`), {
+      params: Promise.resolve({ id: hiveId }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.operatingModelMap.modules.find((module: { key: string }) => module.key === "revenue_marketing")).toMatchObject({
+      href: `/marketing?hiveId=${hiveId}`,
+      summary: null,
+      evidenceState: "missing",
+      evidence: [],
+      connectedSystems: [],
+    });
+    expect(body.data.operatingModelMap.modules.find((module: { key: string }) => module.key === "revenue_sales")).toMatchObject({
+      href: `/sales?hiveId=${hiveId}`,
+      summary: null,
+      evidenceState: "missing",
+      evidence: [],
+      connectedSystems: [],
+    });
   });
 
   it("returns unknown readiness evidence when a profile has no audit/readiness rows", async () => {
@@ -111,6 +189,8 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
         autonomy_policy: {},
         updated_at: "2026-06-24T01:00:00.000Z",
       }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])

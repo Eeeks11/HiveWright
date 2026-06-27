@@ -68,6 +68,26 @@ type BusinessOsOwnerDashboard = {
     evidence: string[];
     knownUnknowns: string[];
   };
+  operatingModelMap: {
+    overallScore: number | null;
+    nextReviewAt: string | null;
+    modules: Array<{
+      key: string;
+      label: string;
+      domain: string;
+      href: string | null;
+      score: number | null;
+      maturity: string | null;
+      confidence: string | null;
+      summary: string | null;
+      evidenceState: "measured" | "partial" | "missing";
+      evidence: string[];
+      gaps: string[];
+      actions: string[];
+      connectedSystems: string[];
+      nextReviewAt: string | null;
+    }>;
+  };
   systemMaturity: {
     averageReadinessScore: number | null;
     readinessEvidenceState: "measured" | "unknown";
@@ -588,6 +608,44 @@ export default function HiveDetailPage() {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-medium text-blue-950 dark:text-blue-50">Business Operating Model map</h3>
+                  <p className="text-xs text-zinc-500">Ideal Business OS modules, evidence, gaps, actions, systems, and next review.</p>
+                </div>
+                <div className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-100">
+                  Score {businessOsDashboard.operatingModelMap.overallScore ?? "—"}
+                </div>
+              </div>
+              {businessOsDashboard.operatingModelMap.nextReviewAt && (
+                <p className="text-xs text-zinc-500">Next review: {new Date(businessOsDashboard.operatingModelMap.nextReviewAt).toLocaleString()}</p>
+              )}
+              <div className="grid gap-3 md:grid-cols-2">
+                {businessOsDashboard.operatingModelMap.modules.map((module) => (
+                  <div key={module.key} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-zinc-900 dark:text-zinc-100">{module.label}</p>
+                        <p className="text-xs text-zinc-500">{module.domain}</p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${module.evidenceState === "measured" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-200" : module.evidenceState === "partial" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"}`}>
+                        {module.evidenceState}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Score {module.score ?? "—"} · {module.maturity ?? "unmeasured"}{module.confidence ? ` · ${module.confidence} confidence` : ""}
+                    </p>
+                    {module.summary && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{module.summary}</p>}
+                    {module.connectedSystems.length > 0 && <p className="mt-1 text-xs text-zinc-500">Systems: {module.connectedSystems.join(", ")}</p>}
+                    {module.gaps.length > 0 && <p className="mt-1 text-xs text-red-600 dark:text-red-300">Gaps: {module.gaps.slice(0, 2).join("; ")}</p>}
+                    {module.actions.length > 0 && <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">Actions: {module.actions.slice(0, 2).join("; ")}</p>}
+                    {module.href && <a href={module.href} className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline dark:text-blue-300">Open module</a>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
               <h3 className="font-medium text-blue-950 dark:text-blue-50">Approvals required</h3>
               {businessOsDashboard.approvalsRequired.length === 0 && <p className="text-sm text-zinc-500">No approval-required Business OS actions are waiting.</p>}

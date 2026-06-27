@@ -68,6 +68,121 @@ describe("deriveBusinessOsOwnerDashboard", () => {
     expect(dashboard.ownerNextReviewChecklist).toContain("Review 1 approval-required action before it can move into execution.");
   });
 
+  it("builds the ideal operating model map with Marketing and Sales linked as Business OS modules", () => {
+    const dashboard = deriveBusinessOsOwnerDashboard({
+      profile: {
+        id: "profile-1",
+        businessMode: "existing_business",
+        businessName: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit.",
+        ownerGoals: ["Run the business through one map"],
+        approvalPolicy: {},
+        aiSpendBudget: { capCents: 10000, window: "monthly" },
+        autonomyPolicy: {},
+      },
+      setupProfile: null,
+      auditProfile: null,
+      readiness: [
+        { systemKey: "revenue_marketing", systemLabel: "Revenue / Marketing", readinessScore: 55, maturityLevel: "defined", confidence: "medium", evidenceRefs: [{ label: "Campaign metrics" }], summary: "Marketing cadence exists.", updatedAt: "2026-06-24T03:00:00.000Z" },
+        { systemKey: "revenue_sales", systemLabel: "Revenue / Sales", readinessScore: 30, maturityLevel: "ad_hoc", confidence: "low", evidenceRefs: [], summary: "Sales funnel has leaks.", updatedAt: "2026-06-24T04:00:00.000Z" },
+      ],
+      gaps: [
+        { title: "Sales follow-up is inconsistent", severity: "high", status: "open", systemKey: "revenue_sales", confidence: "medium", evidenceRefs: [{ label: "sales audit" }] },
+      ],
+      recommendations: [],
+      actions: [
+        { title: "Fix sales follow-up cadence", brief: "Create one owner-approved conversion fix.", status: "queued", priority: 80, riskLevel: "medium", approvalRequired: true, expectedOutcome: "Sales leak is measurable.", measurementPlan: { metric: "lead_response_time" }, sourceRefs: [{ label: "sales plan" }], systemKey: "revenue_sales", createdAt: "2026-06-24T05:00:00.000Z" },
+      ],
+      agentActivity: [],
+      moduleSnapshots: [
+        {
+          key: "revenue_marketing",
+          href: "/marketing?hiveId=hive-1",
+          summary: "2 campaigns, 1 current metric snapshot.",
+          connectedSystems: ["Google Analytics 4"],
+          evidenceRefs: [{ label: "Marketing dashboard" }],
+          nextReviewAt: "2026-07-01T00:00:00.000Z",
+        },
+        {
+          key: "revenue_sales",
+          href: "/sales?hiveId=hive-1",
+          summary: "1 funnel and 1 action plan.",
+          connectedSystems: ["CRM"],
+          evidenceRefs: [{ label: "Sales dashboard" }],
+          nextReviewAt: "2026-06-30T00:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(dashboard.operatingModelMap.modules.map((module) => module.key)).toEqual([
+      "foundation",
+      "revenue_marketing",
+      "revenue_sales",
+      "ops_delivery",
+      "finance_admin",
+      "people_sops",
+      "customer_success_reviews",
+      "compliance_risk",
+      "software_integrations_data",
+      "ai_governance",
+    ]);
+    expect(dashboard.operatingModelMap.overallScore).toBe(9);
+    expect(dashboard.operatingModelMap.nextReviewAt).toBe("2026-06-30T00:00:00.000Z");
+    expect(dashboard.operatingModelMap.modules.find((module) => module.key === "revenue_marketing")).toMatchObject({
+      label: "Revenue / Marketing",
+      href: "/marketing?hiveId=hive-1",
+      score: 55,
+      maturity: "defined",
+      evidenceState: "measured",
+      connectedSystems: ["Google Analytics 4"],
+    });
+    expect(dashboard.operatingModelMap.modules.find((module) => module.key === "revenue_sales")).toMatchObject({
+      href: "/sales?hiveId=hive-1",
+      score: 30,
+      maturity: "ad_hoc",
+      evidenceState: "partial",
+      gaps: ["Sales follow-up is inconsistent"],
+      actions: ["Fix sales follow-up cadence"],
+      connectedSystems: ["CRM"],
+    });
+    expect(dashboard.operatingModelMap.modules.find((module) => module.key === "ai_governance")).toMatchObject({
+      evidenceState: "missing",
+      score: null,
+      gaps: [],
+      actions: [],
+      connectedSystems: [],
+    });
+  });
+
+  it("counts missing operating-model modules against the owner-facing overall score", () => {
+    const dashboard = deriveBusinessOsOwnerDashboard({
+      profile: {
+        id: "profile-1",
+        businessMode: "existing_business",
+        businessName: "Whiston Management",
+        stage: "operating",
+        summary: "Only one system has been measured.",
+        ownerGoals: ["Expose underbuilt systems quickly"],
+        approvalPolicy: {},
+        aiSpendBudget: {},
+        autonomyPolicy: {},
+      },
+      setupProfile: null,
+      auditProfile: null,
+      readiness: [
+        { systemKey: "ai_governance", systemLabel: "AI governance", readinessScore: 100, maturityLevel: "managed", confidence: "high", evidenceRefs: [{ label: "approval policy" }], summary: "Governance is measured." },
+      ],
+      gaps: [],
+      recommendations: [],
+      actions: [],
+      agentActivity: [],
+    });
+
+    expect(dashboard.operatingModelMap.overallScore).toBe(10);
+    expect(dashboard.operatingModelMap.modules.filter((module) => module.evidenceState === "missing")).toHaveLength(9);
+  });
+
   it("treats empty readiness rows as unknown evidence instead of a healthy state", () => {
     const dashboard = deriveBusinessOsOwnerDashboard({
       profile: {

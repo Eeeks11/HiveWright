@@ -1,4 +1,4 @@
-import { deriveBusinessOsOwnerDashboard } from "@/business-os/owner-dashboard";
+import { deriveBusinessOsOwnerDashboard, type BusinessOsModuleSnapshot } from "@/business-os/owner-dashboard";
 import { canAccessHive } from "@/auth/users";
 import { requireApiUser } from "../../../_lib/auth";
 import { sql } from "../../../_lib/db";
@@ -72,6 +72,7 @@ type RecommendationRow = {
 };
 
 type ActionRow = {
+  system_key: string | null;
   title: string;
   brief: string;
   status: string;
@@ -94,12 +95,76 @@ type ActivityRow = {
   updated_at: Date | string | null;
 };
 
+type MarketingModuleRow = {
+  campaign_count: number | string | null;
+  metric_count: number | string | null;
+  connected_systems: string[] | null;
+  latest_activity_at: Date | string | null;
+};
+
+type SalesModuleRow = {
+  funnel_count: number | string | null;
+  action_plan_count: number | string | null;
+  connected_systems: string[] | null;
+  latest_activity_at: Date | string | null;
+};
+
 function arr<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
 function obj(value: Record<string, unknown> | null | undefined): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function count(value: number | string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function plural(countValue: number, singular: string, pluralLabel = `${singular}s`) {
+  return `${countValue} ${countValue === 1 ? singular : pluralLabel}`;
+}
+
+function moduleReviewAt(value: Date | string | null | undefined, hasModuleData: boolean) {
+  if (!hasModuleData || !value || asTime(value) <= 0) return null;
+  return value;
+}
+
+function asTime(value: string | Date | null | undefined): number {
+  if (!value) return 0;
+  const time = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function buildModuleSnapshots(hiveId: string, marketingRow: MarketingModuleRow | undefined, salesRow: SalesModuleRow | undefined): BusinessOsModuleSnapshot[] {
+  const marketingCampaigns = count(marketingRow?.campaign_count);
+  const marketingMetrics = count(marketingRow?.metric_count);
+  const salesFunnels = count(salesRow?.funnel_count);
+  const salesPlans = count(salesRow?.action_plan_count);
+  const marketingSystems = arr(marketingRow?.connected_systems);
+  const salesSystems = arr(salesRow?.connected_systems);
+  const hasMarketingData = marketingCampaigns > 0 || marketingMetrics > 0 || marketingSystems.length > 0;
+  const hasSalesData = salesFunnels > 0 || salesPlans > 0 || salesSystems.length > 0;
+
+  return [
+    {
+      key: "revenue_marketing",
+      href: `/marketing?hiveId=${hiveId}`,
+      summary: hasMarketingData ? `${plural(marketingCampaigns, "campaign")}, ${plural(marketingMetrics, "metric snapshot")}.` : null,
+      connectedSystems: marketingSystems,
+      evidenceRefs: marketingCampaigns || marketingMetrics ? [{ label: "Marketing dashboard" }] : [],
+      nextReviewAt: moduleReviewAt(marketingRow?.latest_activity_at, hasMarketingData),
+    },
+    {
+      key: "revenue_sales",
+      href: `/sales?hiveId=${hiveId}`,
+      summary: hasSalesData ? `${plural(salesFunnels, "funnel")}, ${plural(salesPlans, "action plan")}.` : null,
+      connectedSystems: salesSystems,
+      evidenceRefs: salesFunnels || salesPlans ? [{ label: "Sales dashboard" }] : [],
+      nextReviewAt: moduleReviewAt(salesRow?.latest_activity_at, hasSalesData),
+    },
+  ];
 }
 
 export async function GET(
@@ -188,7 +253,7 @@ export async function GET(
     LIMIT 20
   `;
   const actions = await sql<ActionRow[]>`
-    SELECT title, brief, status, priority, risk_level, approval_required, expected_outcome,
+    SELECT system_key, title, brief, status, priority, risk_level, approval_required, expected_outcome,
            measurement_plan, source_refs, created_at, updated_at
     FROM business_actions
     WHERE hive_id = ${id}::uuid
@@ -214,6 +279,38 @@ export async function GET(
       AND t.status IN ('completed', 'in_review', 'active', 'blocked')
     ORDER BY t.updated_at DESC
     LIMIT 10
+  `;
+  const [marketingModule] = await sql<MarketingModuleRow[]>`
+    SELECT
+      (SELECT count(*) FROM marketing_campaigns WHERE hive_id = ${id}::uuid) AS campaign_count,
+      (SELECT count(*) FROM marketing_metric_snapshots WHERE hive_id = ${id}::uuid) AS metric_count,
+      COALESCE((
+        SELECT array_agg(display_name ORDER BY display_name)
+        FROM connector_installs
+        WHERE hive_id = ${id}::uuid
+          AND connector_slug IN ('google-analytics-4', 'google-search-console', 'website-forms', 'google-business-profile', 'email-platform', 'google-ads', 'meta-ads')
+      ), ARRAY[]::text[]) AS connected_systems,
+      GREATEST(
+        COALESCE((SELECT max(created_at) FROM marketing_campaigns WHERE hive_id = ${id}::uuid), 'epoch'::timestamp),
+        COALESCE((SELECT max(captured_at) FROM marketing_metric_snapshots WHERE hive_id = ${id}::uuid), 'epoch'::timestamp),
+        COALESCE((SELECT max(last_tested_at) FROM connector_installs WHERE hive_id = ${id}::uuid), 'epoch'::timestamp)
+      ) AS latest_activity_at
+  `;
+  const [salesModule] = await sql<SalesModuleRow[]>`
+    SELECT
+      (SELECT count(*) FROM sales_funnels WHERE hive_id = ${id}::uuid) AS funnel_count,
+      (SELECT count(*) FROM sales_action_plans WHERE hive_id = ${id}::uuid) AS action_plan_count,
+      COALESCE((
+        SELECT array_agg(display_name ORDER BY display_name)
+        FROM connector_installs
+        WHERE hive_id = ${id}::uuid
+          AND connector_slug IN ('website-forms', 'email-platform', 'crm', 'booking', 'phone-call-tracking', 'google-business-profile')
+      ), ARRAY[]::text[]) AS connected_systems,
+      GREATEST(
+        COALESCE((SELECT max(captured_at) FROM sales_funnels WHERE hive_id = ${id}::uuid), 'epoch'::timestamp),
+        COALESCE((SELECT max(created_at) FROM sales_action_plans WHERE hive_id = ${id}::uuid), 'epoch'::timestamp),
+        COALESCE((SELECT max(last_tested_at) FROM connector_installs WHERE hive_id = ${id}::uuid), 'epoch'::timestamp)
+      ) AS latest_activity_at
   `;
 
   const dashboard = deriveBusinessOsOwnerDashboard({
@@ -277,6 +374,7 @@ export async function GET(
       updatedAt: row.updated_at,
     })),
     actions: actions.map((row) => ({
+      systemKey: row.system_key,
       title: row.title,
       brief: row.brief,
       status: row.status,
@@ -297,6 +395,7 @@ export async function GET(
       evidenceUrl: row.evidence_url,
       updatedAt: row.updated_at,
     })),
+    moduleSnapshots: buildModuleSnapshots(id, marketingModule, salesModule),
     since,
   });
 
