@@ -482,6 +482,114 @@ describe("Business OS action-loop runtime", () => {
     expect(sopConversion.action.measurement_plan.conversions?.sopWorkProductId).toBe(sopConversion.workProduct.id);
   });
 
+  it("reuses existing conversion artifacts when a Business OS action conversion is retried", async () => {
+    await insertRole("operations-agent");
+    const { hiveId, profileId } = await insertBusinessHive();
+    const recommendationId = await insertRecommendation({ hiveId, riskLevel: "high" });
+
+    const action = await convertRecommendationToBusinessAction(sql, {
+      recommendationId,
+      businessOsProfileId: profileId,
+      systemKey: "operations",
+      measurement: { metricName: "sop evidence reviewed", baseline: 0, target: 1 },
+    });
+
+    await respondToDecision(ownerDecisionRequest(hiveId, {
+      response: "approved",
+      selectedOptionKey: "approve",
+      comment: "Approved for governed internal execution.",
+    }), { params: Promise.resolve({ id: action.decision_id! }) });
+
+    const firstTaskConversion = await convertBusinessActionToAgentTask(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      createdBy: "business-os:test",
+    });
+    const retriedTaskConversion = await convertBusinessActionToAgentTask(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      createdBy: "business-os:test",
+    });
+
+    expect(retriedTaskConversion.task.id).toBe(firstTaskConversion.task.id);
+    expect(retriedTaskConversion.action.measurement_plan.conversions?.agentTaskId).toBe(firstTaskConversion.task.id);
+
+    const taskRows = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count
+      FROM tasks
+      WHERE hive_id = ${hiveId}::uuid
+        AND title = ${"Business OS action: Draft a customer follow-up offer"}
+    `;
+    expect(taskRows[0].count).toBe("1");
+
+    const firstScheduleConversion = await convertBusinessActionToSchedule(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      cronExpression: "0 9 * * 1",
+      createdBy: "business-os:test",
+    });
+    const retriedScheduleConversion = await convertBusinessActionToSchedule(sql, {
+      actionId: action.id,
+      assignedTo: "operations-agent",
+      cronExpression: "0 12 * * 5",
+      createdBy: "business-os:retry",
+      enabled: false,
+    });
+
+    expect(retriedScheduleConversion.schedule.id).toBe(firstScheduleConversion.schedule.id);
+    expect(retriedScheduleConversion.schedule.cron_expression).toBe("0 9 * * 1");
+    expect(retriedScheduleConversion.action.measurement_plan.conversions?.scheduleId).toBe(firstScheduleConversion.schedule.id);
+
+    const scheduleRows = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count
+      FROM schedules
+      WHERE hive_id = ${hiveId}::uuid
+        AND origin_type = 'business_os_action'
+        AND origin_key = ${action.id}
+    `;
+    expect(scheduleRows[0].count).toBe("1");
+
+    const firstSopConversion = await convertBusinessActionToSopDraft(sql, {
+      actionId: action.id,
+      roleSlug: "operations-agent",
+      createdBy: "business-os:test",
+      content: "# Follow-up SOP\n\n1. Review evidence.",
+      title: "Original SOP draft",
+    });
+    const retriedSopConversion = await convertBusinessActionToSopDraft(sql, {
+      actionId: action.id,
+      roleSlug: "operations-agent",
+      createdBy: "business-os:retry",
+      content: "# Different retry body should not overwrite the existing draft",
+      title: "Retry SOP draft",
+    });
+
+    expect(retriedSopConversion.task.id).toBe(firstSopConversion.task.id);
+    expect(retriedSopConversion.workProduct.id).toBe(firstSopConversion.workProduct.id);
+    expect(retriedSopConversion.workProduct.title).toBe("Original SOP draft");
+    expect(retriedSopConversion.action.measurement_plan.conversions).toMatchObject({
+      agentTaskId: firstTaskConversion.task.id,
+      scheduleId: firstScheduleConversion.schedule.id,
+      sopTaskId: firstSopConversion.task.id,
+      sopWorkProductId: firstSopConversion.workProduct.id,
+    });
+
+    const sopTaskRows = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count
+      FROM tasks
+      WHERE hive_id = ${hiveId}::uuid
+        AND title = ${"SOP draft for Business OS action: Draft a customer follow-up offer"}
+    `;
+    const workProductRows = await sql<{ count: string }[]>`
+      SELECT count(*)::text AS count
+      FROM work_products
+      WHERE hive_id = ${hiveId}::uuid
+        AND metadata->>'businessActionId' = ${action.id}
+    `;
+    expect(sopTaskRows[0].count).toBe("1");
+    expect(workProductRows[0].count).toBe("1");
+  });
+
   it("keeps sensitive Business OS actions approval-gated before creating real work", async () => {
     await insertRole("operations-agent");
     const { hiveId, profileId } = await insertBusinessHive();

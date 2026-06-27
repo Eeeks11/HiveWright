@@ -265,4 +265,47 @@ describe("deriveBusinessOsOwnerDashboard", () => {
       },
     });
   });
+
+  it("exposes real conversion options for approved approval-required actions", () => {
+    const dashboard = deriveBusinessOsOwnerDashboard({
+      hiveId: "hive-1",
+      profile: {
+        id: "profile-1",
+        businessMode: "existing_business",
+        businessName: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit.",
+        ownerGoals: ["Convert approved sensitive work safely"],
+        approvalPolicy: {},
+        aiSpendBudget: {},
+        autonomyPolicy: {},
+      },
+      setupProfile: null,
+      auditProfile: null,
+      readiness: [],
+      gaps: [],
+      recommendations: [],
+      actions: [{
+        id: "action-1",
+        title: "Fix finance evidence cadence",
+        brief: "Owner has approved this sensitive action for governed execution.",
+        status: "approved",
+        priority: 80,
+        riskLevel: "medium",
+        approvalRequired: true,
+        expectedOutcome: "Weekly finance evidence is current.",
+        measurementPlan: { metric: "finance_evidence_current", target: "weekly records reviewed" },
+        sourceRefs: [{ label: "audit gap" }],
+      }],
+      agentActivity: [],
+    });
+
+    expect(dashboard.priorityActions[0].conversionAffordance.options).toEqual([
+      "create_agent_task",
+      "create_schedule",
+      "create_sop_draft",
+      "record_measurement",
+    ]);
+  });
+
 });

@@ -571,6 +571,36 @@ async function updateActionConversion(
   return updatedAction;
 }
 
+async function requireConvertedTask(tx: ActionSql, taskId: string, actionId: string): Promise<BusinessActionTaskRow> {
+  const [task] = await tx<BusinessActionTaskRow[]>`
+    SELECT id, hive_id, assigned_to, created_by, status, title, brief
+    FROM tasks
+    WHERE id = ${taskId}::uuid
+  `;
+  if (!task) throw new Error(`business action ${actionId} references missing converted task ${taskId}`);
+  return task;
+}
+
+async function requireConvertedSchedule(tx: ActionSql, scheduleId: string, actionId: string): Promise<BusinessActionScheduleRow> {
+  const [schedule] = await tx<BusinessActionScheduleRow[]>`
+    SELECT id, hive_id, cron_expression, task_template, enabled, created_by, origin_type, origin_key
+    FROM schedules
+    WHERE id = ${scheduleId}::uuid
+  `;
+  if (!schedule) throw new Error(`business action ${actionId} references missing converted schedule ${scheduleId}`);
+  return schedule;
+}
+
+async function requireConvertedWorkProduct(tx: ActionSql, workProductId: string, actionId: string): Promise<BusinessActionWorkProductRow> {
+  const [workProduct] = await tx<BusinessActionWorkProductRow[]>`
+    SELECT id, task_id, hive_id, role_slug, title, artifact_kind, review_status
+    FROM work_products
+    WHERE id = ${workProductId}::uuid
+  `;
+  if (!workProduct) throw new Error(`business action ${actionId} references missing converted work product ${workProductId}`);
+  return workProduct;
+}
+
 export async function convertBusinessActionToAgentTask(
   sql: Sql,
   input: { actionId: string; assignedTo: string; createdBy: string; priority?: number },
@@ -586,6 +616,13 @@ export async function convertBusinessActionToAgentTask(
       `,
       "business action",
     );
+
+    const existingTaskId = action.measurement_plan.conversions?.agentTaskId;
+    if (existingTaskId) {
+      const task = await requireConvertedTask(tx, existingTaskId, action.id);
+      return { action, task };
+    }
+
     assertActionConvertible(action);
 
     const [task] = await tx<BusinessActionTaskRow[]>`
@@ -622,6 +659,13 @@ export async function convertBusinessActionToSchedule(
       `,
       "business action",
     );
+
+    const existingScheduleId = action.measurement_plan.conversions?.scheduleId;
+    if (existingScheduleId) {
+      const schedule = await requireConvertedSchedule(tx, existingScheduleId, action.id);
+      return { action, schedule };
+    }
+
     assertActionConvertible(action);
 
     const taskTemplate = {
@@ -668,6 +712,20 @@ export async function convertBusinessActionToSopDraft(
       `,
       "business action",
     );
+
+    const existingSopTaskId = action.measurement_plan.conversions?.sopTaskId;
+    const existingSopWorkProductId = action.measurement_plan.conversions?.sopWorkProductId;
+    if (existingSopTaskId && existingSopWorkProductId) {
+      const [task, workProduct] = await Promise.all([
+        requireConvertedTask(tx, existingSopTaskId, action.id),
+        requireConvertedWorkProduct(tx, existingSopWorkProductId, action.id),
+      ]);
+      return { action, task, workProduct };
+    }
+    if (existingSopTaskId || existingSopWorkProductId) {
+      throw new Error(`business action ${action.id} has an incomplete SOP conversion reference`);
+    }
+
     assertActionConvertible(action);
 
     const [task] = await tx<BusinessActionTaskRow[]>`

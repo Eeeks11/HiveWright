@@ -139,6 +139,8 @@ const IDEAL_OPERATING_MODEL_MODULES: Array<{ key: BusinessOsModuleKey; label: st
 
 const TERMINAL_ACTION_STATUSES = new Set(["completed", "cancelled", "failed"]);
 const ACTIVE_ACTION_STATUSES = new Set(["draft", "queued", "awaiting_approval", "approved", "running", "blocked"]);
+const CONVERTIBLE_APPROVAL_REQUIRED_ACTION_STATUSES = new Set(["approved", "running"]);
+const CONVERSION_OPTIONS = ["create_agent_task", "create_schedule", "create_sop_draft", "record_measurement"];
 const WEAK_MATURITY_LEVELS = new Set(["missing", "ad_hoc"]);
 
 function asTime(value: string | Date | null | undefined): number {
@@ -404,7 +406,9 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       conversionAffordance: {
         label: "Convert to governed work",
         href: action.id && input.hiveId ? `/api/hives/${input.hiveId}/business-os-actions/${action.id}/convert` : null,
-        options: action.approvalRequired ? ["request_owner_approval"] : ["create_agent_task", "create_schedule", "create_sop_draft", "record_measurement"],
+        options: action.approvalRequired && !CONVERTIBLE_APPROVAL_REQUIRED_ACTION_STATUSES.has(action.status)
+          ? ["request_owner_approval"]
+          : CONVERSION_OPTIONS,
         contract: {
           expectedOutcome: action.expectedOutcome,
           measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,
