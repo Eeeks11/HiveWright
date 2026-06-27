@@ -1,3 +1,4 @@
+import { buildBusinessOsDiagnosticExport, type DiagnosticVariant } from "@/business-os/diagnostic-export";
 import { deriveBusinessOsOwnerDashboard, type BusinessOsModuleSnapshot } from "@/business-os/owner-dashboard";
 import { canAccessHive } from "@/auth/users";
 import { requireApiUser } from "../../../_lib/auth";
@@ -186,6 +187,10 @@ export async function GET(
 
   const url = new URL(request.url);
   const since = url.searchParams.get("since");
+  const diagnosticVariantParam = url.searchParams.get("diagnosticExport");
+  const diagnosticVariant: DiagnosticVariant | null = diagnosticVariantParam === "client_safe" || diagnosticVariantParam === "internal"
+    ? diagnosticVariantParam
+    : null;
 
   const [profile] = await sql<BusinessProfileRow[]>`
     SELECT id, business_mode, business_name, stage, summary, owner_goals, approval_policy,
@@ -402,5 +407,13 @@ export async function GET(
     since,
   });
 
-  return jsonOk(dashboard);
+  return jsonOk({
+    ...dashboard,
+    ...(diagnosticVariant ? {
+      diagnosticExport: buildBusinessOsDiagnosticExport({
+        dashboard,
+        variant: diagnosticVariant,
+      }),
+    } : {}),
+  });
 }

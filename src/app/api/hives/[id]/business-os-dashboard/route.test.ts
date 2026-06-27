@@ -119,6 +119,97 @@ describe("GET /api/hives/[id]/business-os-dashboard", () => {
     });
   });
 
+  it("can include a client-safe diagnostic export package without internal agent trace", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([{
+        id: "profile-1",
+        business_mode: "existing_business",
+        business_name: "Whiston Management",
+        stage: "operating",
+        summary: "Existing business audit.",
+        owner_goals: ["Show the owner what matters"],
+        approval_policy: { spendActions: "owner_approval_required" },
+        ai_spend_budget: { capCents: 10000, window: "monthly" },
+        autonomy_policy: { posture: "supervised" },
+        updated_at: "2026-06-24T01:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        audit_status: "completed",
+        overall_readiness_score: 38,
+        overall_confidence: "medium",
+        audit_scope: ["finance_admin", "revenue_sales"],
+        evidence_sources: [{ label: "Owner notes" }, { label: "Internal runtime task evidence" }],
+        known_unknowns: ["No verified bookkeeping cadence supplied"],
+        completed_at: "2026-06-24T02:00:00.000Z",
+        updated_at: "2026-06-24T02:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        system_key: "finance_admin",
+        system_label: "Finance/admin",
+        readiness_score: 20,
+        maturity_level: "missing",
+        confidence: "medium",
+        evidence_refs: [{ label: "No finance records connected" }],
+        summary: "Finance/admin is not evidenced.",
+        updated_at: "2026-06-24T03:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: "action-1",
+        system_key: "finance_admin",
+        title: "Complete finance/admin setup checklist",
+        brief: "Confirm bookkeeping and admin cadence.",
+        status: "queued",
+        priority: 95,
+        risk_level: "medium",
+        approval_required: true,
+        expected_outcome: "Admin baseline is safe for delegated work.",
+        measurement_plan: { metric: "finance_admin_checklist_completed" },
+        source_refs: [{ label: "Business OS audit" }],
+        created_at: "2026-06-24T04:00:00.000Z",
+        updated_at: "2026-06-24T04:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([{
+        title: "Internal dogfood audit task",
+        summary: "Generated scorecards from runtime evidence.",
+        status: "completed",
+        role: "hivewright-gpu",
+        evidence_url: "/deliverables/internal-work-product",
+        updated_at: "2026-06-24T05:00:00.000Z",
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const res = await GET(new Request(`http://localhost/api/hives/${hiveId}/business-os-dashboard?diagnosticExport=client_safe`), {
+      params: Promise.resolve({ id: hiveId }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.diagnosticExport).toMatchObject({
+      variant: "client_safe",
+      clientSafe: true,
+      currentState: {
+        businessName: "Whiston Management",
+        overallReadinessScore: 38,
+      },
+      recommendedServicePackage: {
+        slug: "admin-finance-setup",
+      },
+    });
+    expect(body.data.diagnosticExport.priorityRoadmap.next30Days[0]).toMatchObject({
+      title: "Complete finance/admin setup checklist",
+      systemKey: "finance_admin",
+      ownerApprovalRequired: true,
+    });
+    const serialized = JSON.stringify(body.data.diagnosticExport);
+    expect(serialized).not.toContain("hivewright-gpu");
+    expect(serialized).not.toContain("/deliverables/internal-work-product");
+    expect(serialized).not.toContain("Internal runtime task evidence");
+  });
+
   it("marks empty Marketing and Sales module snapshots as missing evidence", async () => {
     mocks.sql
       .mockResolvedValueOnce([{

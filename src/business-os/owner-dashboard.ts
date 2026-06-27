@@ -394,6 +394,7 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
         })),
     },
     priorityActions: activeActions.slice(0, 5).map((action) => ({
+      systemKey: action.systemKey ?? null,
       title: action.title,
       brief: action.brief,
       status: action.status,
