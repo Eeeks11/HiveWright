@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 export type BusinessActionRiskLevel = "low" | "medium" | "high";
 export type BusinessActionStatus =
@@ -70,6 +70,12 @@ export type BusinessActionMeasurementPlan = {
     status: "not_required" | "awaiting_owner" | "approved" | "rejected";
   };
   governance: BusinessActionGovernanceAssessment;
+  conversions?: {
+    agentTaskId?: string;
+    scheduleId?: string;
+    sopTaskId?: string;
+    sopWorkProductId?: string;
+  };
 };
 
 export type RecommendationActionInput = {
@@ -470,6 +476,295 @@ export async function startApprovedBusinessAction(
 
   if (!updatedAction) throw new Error(`business action ${actionId} is not queued or approved`);
   return updatedAction;
+}
+
+type BusinessActionTaskRow = {
+  id: string;
+  hive_id: string;
+  assigned_to: string;
+  created_by: string;
+  status: string;
+  title: string;
+  brief: string;
+};
+
+type BusinessActionScheduleRow = {
+  id: string;
+  hive_id: string;
+  cron_expression: string;
+  task_template: Record<string, unknown>;
+  enabled: boolean;
+  created_by: string;
+  origin_type: string;
+  origin_key: string | null;
+};
+
+type BusinessActionWorkProductRow = {
+  id: string;
+  task_id: string;
+  hive_id: string;
+  role_slug: string;
+  title: string | null;
+  artifact_kind: string | null;
+  review_status: string;
+};
+
+type BusinessActionConversionResult<T extends Record<string, unknown>> = {
+  action: BusinessActionRuntimeRow;
+} & T;
+
+function assertActionConvertible(action: BusinessActionRuntimeRow): void {
+  if (action.approval_required && action.status !== "approved" && action.status !== "running") {
+    throw new Error(`business action ${action.id} requires owner approval before conversion`);
+  }
+  if (!["queued", "approved", "running"].includes(action.status)) {
+    throw new Error(`business action ${action.id} cannot be converted from status ${action.status}`);
+  }
+}
+
+function businessActionTaskTitle(action: Pick<BusinessActionRuntimeRow, "title">): string {
+  return `Business OS action: ${action.title}`;
+}
+
+function businessActionTaskBrief(action: BusinessActionRuntimeRow): string {
+  return [
+    action.brief,
+    "",
+    `Business OS action ID: ${action.id}`,
+    `Expected measurement: ${action.measurement_plan.metricName}`,
+    action.measurement_plan.target !== undefined && action.measurement_plan.target !== null ? `Target: ${action.measurement_plan.target}` : null,
+    action.approval_required ? `Owner approval decision: ${action.decision_id ?? "missing"}` : "Owner approval: not required",
+  ].filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function withConversion(
+  plan: BusinessActionMeasurementPlan,
+  conversion: NonNullable<BusinessActionMeasurementPlan["conversions"]>,
+): BusinessActionMeasurementPlan {
+  return {
+    ...plan,
+    conversions: {
+      ...(plan.conversions ?? {}),
+      ...conversion,
+    },
+  };
+}
+
+type ActionSql = Sql | TransactionSql;
+
+async function updateActionConversion(
+  tx: ActionSql,
+  action: BusinessActionRuntimeRow,
+  conversion: NonNullable<BusinessActionMeasurementPlan["conversions"]>,
+  status: BusinessActionStatus = action.status,
+): Promise<BusinessActionRuntimeRow> {
+  const measurementPlan = withConversion(action.measurement_plan, conversion);
+  const [updatedAction] = await tx<BusinessActionRuntimeRow[]>`
+    UPDATE business_actions
+    SET status = ${status},
+        measurement_plan = ${tx.json(toSqlJson(measurementPlan))},
+        updated_at = now()
+    WHERE id = ${action.id}::uuid
+    RETURNING id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+              risk_level, decision_id, measurement_plan
+  `;
+  return updatedAction;
+}
+
+async function requireConvertedTask(tx: ActionSql, taskId: string, actionId: string): Promise<BusinessActionTaskRow> {
+  const [task] = await tx<BusinessActionTaskRow[]>`
+    SELECT id, hive_id, assigned_to, created_by, status, title, brief
+    FROM tasks
+    WHERE id = ${taskId}::uuid
+  `;
+  if (!task) throw new Error(`business action ${actionId} references missing converted task ${taskId}`);
+  return task;
+}
+
+async function requireConvertedSchedule(tx: ActionSql, scheduleId: string, actionId: string): Promise<BusinessActionScheduleRow> {
+  const [schedule] = await tx<BusinessActionScheduleRow[]>`
+    SELECT id, hive_id, cron_expression, task_template, enabled, created_by, origin_type, origin_key
+    FROM schedules
+    WHERE id = ${scheduleId}::uuid
+  `;
+  if (!schedule) throw new Error(`business action ${actionId} references missing converted schedule ${scheduleId}`);
+  return schedule;
+}
+
+async function requireConvertedWorkProduct(tx: ActionSql, workProductId: string, actionId: string): Promise<BusinessActionWorkProductRow> {
+  const [workProduct] = await tx<BusinessActionWorkProductRow[]>`
+    SELECT id, task_id, hive_id, role_slug, title, artifact_kind, review_status
+    FROM work_products
+    WHERE id = ${workProductId}::uuid
+  `;
+  if (!workProduct) throw new Error(`business action ${actionId} references missing converted work product ${workProductId}`);
+  return workProduct;
+}
+
+export async function convertBusinessActionToAgentTask(
+  sql: Sql,
+  input: { actionId: string; assignedTo: string; createdBy: string; priority?: number },
+): Promise<BusinessActionConversionResult<{ task: BusinessActionTaskRow }>> {
+  return sql.begin(async (tx) => {
+    const action = requireSingleRow(
+      await tx<BusinessActionRuntimeRow[]>`
+        SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+               risk_level, decision_id, measurement_plan
+        FROM business_actions
+        WHERE id = ${input.actionId}::uuid
+        FOR UPDATE
+      `,
+      "business action",
+    );
+
+    const existingTaskId = action.measurement_plan.conversions?.agentTaskId;
+    if (existingTaskId) {
+      const task = await requireConvertedTask(tx, existingTaskId, action.id);
+      return { action, task };
+    }
+
+    assertActionConvertible(action);
+
+    const [task] = await tx<BusinessActionTaskRow[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, priority, title, brief)
+      VALUES (
+        ${action.hive_id}::uuid,
+        ${input.assignedTo},
+        ${input.createdBy},
+        'pending',
+        ${input.priority ?? 5},
+        ${businessActionTaskTitle(action)},
+        ${businessActionTaskBrief(action)}
+      )
+      RETURNING id, hive_id, assigned_to, created_by, status, title, brief
+    `;
+
+    const updatedAction = await updateActionConversion(tx, action, { agentTaskId: task.id }, "running");
+    return { action: updatedAction, task };
+  });
+}
+
+export async function convertBusinessActionToSchedule(
+  sql: Sql,
+  input: { actionId: string; assignedTo: string; cronExpression: string; createdBy: string; priority?: number; enabled?: boolean },
+): Promise<BusinessActionConversionResult<{ schedule: BusinessActionScheduleRow }>> {
+  return sql.begin(async (tx) => {
+    const action = requireSingleRow(
+      await tx<BusinessActionRuntimeRow[]>`
+        SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+               risk_level, decision_id, measurement_plan
+        FROM business_actions
+        WHERE id = ${input.actionId}::uuid
+        FOR UPDATE
+      `,
+      "business action",
+    );
+
+    const existingScheduleId = action.measurement_plan.conversions?.scheduleId;
+    if (existingScheduleId) {
+      const schedule = await requireConvertedSchedule(tx, existingScheduleId, action.id);
+      return { action, schedule };
+    }
+
+    assertActionConvertible(action);
+
+    const taskTemplate = {
+      kind: "business_os_action",
+      businessActionId: action.id,
+      assignedTo: input.assignedTo,
+      title: businessActionTaskTitle(action),
+      brief: businessActionTaskBrief(action),
+      qaRequired: action.approval_required,
+      priority: input.priority ?? 5,
+    };
+
+    const [schedule] = await tx<BusinessActionScheduleRow[]>`
+      INSERT INTO schedules (hive_id, cron_expression, task_template, enabled, created_by, origin_type, origin_key)
+      VALUES (
+        ${action.hive_id}::uuid,
+        ${input.cronExpression},
+        ${tx.json(toSqlJson(taskTemplate))},
+        ${input.enabled ?? true},
+        ${input.createdBy},
+        'business_os_action',
+        ${action.id}
+      )
+      RETURNING id, hive_id, cron_expression, task_template, enabled, created_by, origin_type, origin_key
+    `;
+
+    const updatedAction = await updateActionConversion(tx, action, { scheduleId: schedule.id });
+    return { action: updatedAction, schedule };
+  });
+}
+
+export async function convertBusinessActionToSopDraft(
+  sql: Sql,
+  input: { actionId: string; roleSlug: string; createdBy: string; content: string; title?: string },
+): Promise<BusinessActionConversionResult<{ task: BusinessActionTaskRow; workProduct: BusinessActionWorkProductRow }>> {
+  return sql.begin(async (tx) => {
+    const action = requireSingleRow(
+      await tx<BusinessActionRuntimeRow[]>`
+        SELECT id, hive_id, business_os_profile_id, recommendation_id, title, brief, status, approval_required,
+               risk_level, decision_id, measurement_plan
+        FROM business_actions
+        WHERE id = ${input.actionId}::uuid
+        FOR UPDATE
+      `,
+      "business action",
+    );
+
+    const existingSopTaskId = action.measurement_plan.conversions?.sopTaskId;
+    const existingSopWorkProductId = action.measurement_plan.conversions?.sopWorkProductId;
+    if (existingSopTaskId && existingSopWorkProductId) {
+      const [task, workProduct] = await Promise.all([
+        requireConvertedTask(tx, existingSopTaskId, action.id),
+        requireConvertedWorkProduct(tx, existingSopWorkProductId, action.id),
+      ]);
+      return { action, task, workProduct };
+    }
+    if (existingSopTaskId || existingSopWorkProductId) {
+      throw new Error(`business action ${action.id} has an incomplete SOP conversion reference`);
+    }
+
+    assertActionConvertible(action);
+
+    const [task] = await tx<BusinessActionTaskRow[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at)
+      VALUES (
+        ${action.hive_id}::uuid,
+        ${input.roleSlug},
+        ${input.createdBy},
+        'completed',
+        ${`SOP draft for Business OS action: ${action.title}`},
+        ${businessActionTaskBrief(action)},
+        ${"SOP draft registered as owner-reviewable Business OS evidence."},
+        now()
+      )
+      RETURNING id, hive_id, assigned_to, created_by, status, title, brief
+    `;
+
+    const [workProduct] = await tx<BusinessActionWorkProductRow[]>`
+      INSERT INTO work_products (
+        task_id, hive_id, role_slug, content, summary, title, artifact_kind, review_status, render_mode, metadata
+      )
+      VALUES (
+        ${task.id}::uuid,
+        ${action.hive_id}::uuid,
+        ${input.roleSlug},
+        ${input.content},
+        ${`SOP draft evidence for Business OS action ${action.id}.`},
+        ${input.title ?? `SOP draft: ${action.title}`},
+        'sop_draft',
+        'ready',
+        'markdown',
+        ${tx.json(toSqlJson({ businessActionId: action.id, measurementMetric: action.measurement_plan.metricName }))}
+      )
+      RETURNING id, task_id, hive_id, role_slug, title, artifact_kind, review_status
+    `;
+
+    const updatedAction = await updateActionConversion(tx, action, { sopTaskId: task.id, sopWorkProductId: workProduct.id });
+    return { action: updatedAction, task, workProduct };
+  });
 }
 
 export async function recordBusinessActionMeasurement(

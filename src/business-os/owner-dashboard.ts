@@ -1,6 +1,7 @@
 export type BusinessMode = "new_business" | "existing_business";
 
 export type BusinessOsOwnerDashboardInput = {
+  hiveId?: string | null;
   profile: {
     id: string;
     businessMode: BusinessMode;
@@ -37,6 +38,7 @@ export type BusinessOsOwnerDashboardInput = {
   recommendations: RecommendationRow[];
   actions: BusinessActionRow[];
   agentActivity: AgentActivityRow[];
+  moduleSnapshots?: BusinessOsModuleSnapshot[];
   since?: string | Date | null;
 };
 
@@ -72,6 +74,8 @@ export type RecommendationRow = {
 };
 
 export type BusinessActionRow = {
+  id?: string | null;
+  systemKey?: string | null;
   title: string;
   brief: string;
   status: string;
@@ -94,12 +98,49 @@ export type AgentActivityRow = {
   updatedAt?: string | Date | null;
 };
 
+export type BusinessOsModuleKey =
+  | "foundation"
+  | "revenue_marketing"
+  | "revenue_sales"
+  | "ops_delivery"
+  | "finance_admin"
+  | "people_sops"
+  | "customer_success_reviews"
+  | "compliance_risk"
+  | "software_integrations_data"
+  | "ai_governance";
+
+export type BusinessOsModuleSnapshot = {
+  key: BusinessOsModuleKey;
+  href?: string | null;
+  summary?: string | null;
+  connectedSystems?: string[];
+  evidenceRefs?: Array<Record<string, unknown>>;
+  nextReviewAt?: string | Date | null;
+};
+
 export type BusinessOsOwnerDashboard = ReturnType<typeof deriveBusinessOsOwnerDashboard>;
 
 export type BusinessOsReadinessEvidenceState = "measured" | "unknown";
+export type BusinessOsModuleEvidenceState = "measured" | "partial" | "missing";
+
+const IDEAL_OPERATING_MODEL_MODULES: Array<{ key: BusinessOsModuleKey; label: string; domain: string }> = [
+  { key: "foundation", label: "Foundation", domain: "Business identity, goals, boundaries, operating profile" },
+  { key: "revenue_marketing", label: "Revenue / Marketing", domain: "Attention, demand, campaigns, channel evidence" },
+  { key: "revenue_sales", label: "Revenue / Sales", domain: "Conversion, follow-up, pipeline, offers" },
+  { key: "ops_delivery", label: "Ops / Delivery", domain: "Fulfilment, delivery quality, work throughput" },
+  { key: "finance_admin", label: "Finance / Admin", domain: "Cash, bookkeeping, billing, admin cadence" },
+  { key: "people_sops", label: "People / SOPs", domain: "Roles, process library, delegation readiness" },
+  { key: "customer_success_reviews", label: "Customer Success / Reviews", domain: "Retention, support, reviews, referrals" },
+  { key: "compliance_risk", label: "Compliance / Risk", domain: "Legal, safety, policy, risk controls" },
+  { key: "software_integrations_data", label: "Software / Integrations / Data", domain: "Systems of record, connectors, data freshness" },
+  { key: "ai_governance", label: "AI Governance", domain: "Autonomy limits, approvals, spend controls, evidence" },
+];
 
 const TERMINAL_ACTION_STATUSES = new Set(["completed", "cancelled", "failed"]);
 const ACTIVE_ACTION_STATUSES = new Set(["draft", "queued", "awaiting_approval", "approved", "running", "blocked"]);
+const CONVERTIBLE_APPROVAL_REQUIRED_ACTION_STATUSES = new Set(["approved", "running"]);
+const CONVERSION_OPTIONS = ["create_agent_task", "create_schedule", "create_sop_draft"];
 const WEAK_MATURITY_LEVELS = new Set(["missing", "ad_hoc"]);
 
 function asTime(value: string | Date | null | undefined): number {
@@ -135,6 +176,78 @@ function sortedActiveActions(actions: BusinessActionRow[]) {
   return [...actions]
     .filter((action) => ACTIVE_ACTION_STATUSES.has(action.status) && !TERMINAL_ACTION_STATUSES.has(action.status))
     .sort((a, b) => b.priority - a.priority || asTime(b.updatedAt ?? b.createdAt) - asTime(a.updatedAt ?? a.createdAt));
+}
+
+function moduleEvidenceState(
+  readiness: ReadinessRow | undefined,
+  snapshot: BusinessOsModuleSnapshot | undefined,
+  gaps: GapRow[],
+  actions: BusinessActionRow[],
+): BusinessOsModuleEvidenceState {
+  if ((readiness?.evidenceRefs.length ?? 0) > 0) {
+    return "measured";
+  }
+  if (
+    readiness
+    || snapshot?.summary
+    || (snapshot?.evidenceRefs?.length ?? 0) > 0
+    || (snapshot?.connectedSystems?.length ?? 0) > 0
+    || gaps.length > 0
+    || actions.length > 0
+  ) {
+    return "partial";
+  }
+  return "missing";
+}
+
+function buildOperatingModelMap(input: BusinessOsOwnerDashboardInput) {
+  const snapshotsByKey = new Map((input.moduleSnapshots ?? []).map((snapshot) => [snapshot.key, snapshot]));
+  const readinessByKey = new Map(input.readiness.map((row) => [row.systemKey, row]));
+  const activeActions = sortedActiveActions(input.actions);
+
+  const modules = IDEAL_OPERATING_MODEL_MODULES.map((definition) => {
+    const readiness = readinessByKey.get(definition.key);
+    const snapshot = snapshotsByKey.get(definition.key);
+    const moduleGaps = input.gaps.filter((gap) => gap.systemKey === definition.key && ["open", "accepted", "in_progress"].includes(gap.status));
+    const moduleActions = activeActions.filter((action) => action.systemKey === definition.key);
+    const evidenceRefs = [
+      ...(readiness?.evidenceRefs ?? []),
+      ...(snapshot?.evidenceRefs ?? []),
+      ...moduleGaps.flatMap((gap) => gap.evidenceRefs),
+      ...moduleActions.flatMap((action) => action.sourceRefs),
+    ];
+
+    return {
+      key: definition.key,
+      label: readiness?.systemLabel ?? definition.label,
+      domain: definition.domain,
+      href: snapshot?.href ?? null,
+      score: readiness?.readinessScore ?? null,
+      maturity: readiness?.maturityLevel ?? null,
+      confidence: readiness?.confidence ?? null,
+      summary: snapshot?.summary ?? readiness?.summary ?? null,
+      evidenceState: moduleEvidenceState(readiness, snapshot, moduleGaps, moduleActions),
+      evidence: evidenceRefs.map(evidenceLabel),
+      gaps: moduleGaps.map((gap) => gap.title),
+      actions: moduleActions.map((action) => action.title),
+      connectedSystems: snapshot?.connectedSystems ?? [],
+      nextReviewAt: snapshot?.nextReviewAt ?? null,
+    };
+  });
+
+  const scoredModules = modules.filter((module) => module.score !== null);
+  const nextReviewTimes = modules
+    .map((module) => ({ value: module.nextReviewAt, time: asTime(module.nextReviewAt) }))
+    .filter((item): item is { value: string | Date; time: number } => item.time > 0 && item.value != null)
+    .sort((a, b) => a.time - b.time);
+
+  return {
+    overallScore: scoredModules.length
+      ? Math.round(modules.reduce((sum, module) => sum + (module.score ?? 0), 0) / modules.length)
+      : null,
+    modules,
+    nextReviewAt: nextReviewTimes[0]?.value ?? null,
+  };
 }
 
 function setupProgress(input: BusinessOsOwnerDashboardInput) {
@@ -260,6 +373,7 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       evidence: (input.auditProfile?.evidenceSources ?? []).map(evidenceLabel),
       knownUnknowns: input.auditProfile?.knownUnknowns ?? [],
     },
+    operatingModelMap: buildOperatingModelMap(input),
     systemMaturity: {
       averageReadinessScore: readinessAverage,
       readinessEvidenceState,
@@ -280,6 +394,7 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
         })),
     },
     priorityActions: activeActions.slice(0, 5).map((action) => ({
+      systemKey: action.systemKey ?? null,
       title: action.title,
       brief: action.brief,
       status: action.status,
@@ -291,6 +406,10 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       evidence: action.sourceRefs.map(evidenceLabel),
       conversionAffordance: {
         label: "Convert to governed work",
+        href: action.id && input.hiveId ? `/api/hives/${input.hiveId}/business-os-actions/${action.id}/convert` : null,
+        options: action.approvalRequired && !CONVERTIBLE_APPROVAL_REQUIRED_ACTION_STATUSES.has(action.status)
+          ? ["request_owner_approval"]
+          : CONVERSION_OPTIONS,
         contract: {
           expectedOutcome: action.expectedOutcome,
           measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,

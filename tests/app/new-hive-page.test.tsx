@@ -478,11 +478,29 @@ describe("NewHiveWizard", () => {
 
     await fillRequiredHiveFields();
     expect(screen.getByLabelText("New-business setup intake")).toBeTruthy();
+    for (const stage of [
+      "1. Idea capture",
+      "2. Feasibility and risk",
+      "3. Business blueprint",
+      "4. Operating setup",
+      "5. Agent setup",
+      "6. Launch plan",
+      "7. Approval-gated launch actions",
+    ]) {
+      expect(screen.getByText(stage)).toBeTruthy();
+    }
     fireEvent.change(screen.getByLabelText("Business idea or opportunity"), { target: { value: "Launch a local maintenance service" } });
+    fireEvent.change(screen.getByLabelText("Feasibility and risk notes"), { target: { value: "Insurance needs confirmation\nSupplier capacity unknown" } });
     fireEvent.change(screen.getByLabelText("Target customers"), { target: { value: "Time-poor landlords\nHoliday-home owners" } });
     fireEvent.change(screen.getByLabelText("Offer hypotheses"), { target: { value: "Monthly property checkup" } });
+    fireEvent.change(screen.getByLabelText("Pricing or margin assumptions"), { target: { value: "$199 per month\n40% gross margin target" } });
+    fireEvent.change(screen.getByLabelText("Business blueprint"), { target: { value: "Promise: inspections without landlord travel\nConstraint: insurance verified before launch" } });
     fireEvent.change(screen.getByLabelText("Marketing channels to test"), { target: { value: "Referral partners\nGoogle Business Profile" } });
     fireEvent.change(screen.getByLabelText("Legal/admin/risk checklist"), { target: { value: "Confirm insurance\nCheck licensing" } });
+    fireEvent.change(screen.getByLabelText("Launch readiness criteria"), { target: { value: "Insurance verified\nOffer package approved" } });
+    fireEvent.change(screen.getByLabelText("Launch roadmap"), { target: { value: "Week 1 validation\nWeek 2 offer\nWeek 3 launch assets" } });
+    fireEvent.change(screen.getByLabelText("Approval-gated launch actions"), { target: { value: "Publish Google Business Profile\nSend first outreach email" } });
+    fireEvent.change(screen.getByLabelText("Initial operating loops"), { target: { value: "Weekly launch review\nLead follow-up loop" } });
 
     await advanceFromHiveDetailsToRuntime();
     await advanceFromRuntimeToEa();
@@ -504,10 +522,24 @@ describe("NewHiveWizard", () => {
         mode: "new_business",
         setup: {
           idea: "Launch a local maintenance service",
+          feasibilityRisks: ["Insurance needs confirmation", "Supplier capacity unknown"],
           customerSegments: ["Time-poor landlords", "Holiday-home owners"],
           offers: ["Monthly property checkup"],
+          pricingModel: { assumptions: ["$199 per month", "40% gross margin target"] },
+          businessBlueprint: {
+            offer: ["Monthly property checkup"],
+            customer: ["Time-poor landlords", "Holiday-home owners"],
+            problem: [],
+            pricing: ["$199 per month", "40% gross margin target"],
+            promise: ["Promise: inspections without landlord travel"],
+            constraints: ["Constraint: insurance verified before launch"],
+          },
           marketingModel: { channels: ["Referral partners", "Google Business Profile"] },
           legalComplianceChecklist: ["Confirm insurance", "Check licensing"],
+          launchReadiness: ["Insurance verified", "Offer package approved"],
+          launchRoadmap: ["Week 1 validation", "Week 2 offer", "Week 3 launch assets"],
+          launchActions: ["Publish Google Business Profile", "Send first outreach email"],
+          initialLoops: ["Weekly launch review", "Lead follow-up loop"],
         },
       });
     });
