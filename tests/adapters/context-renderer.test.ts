@@ -191,6 +191,9 @@ describe("renderSessionPrompt", () => {
     expect(prompt).toContain("runtime buildHash");
     expect(prompt).toContain("authenticated endpoint checkedAt timestamp");
     expect(prompt).toContain("If the runtime buildHash changes before publication/routing, re-probe the affected endpoint family first");
+    expect(prompt).toContain("improvementScanEvidence.runtimeBuildHash");
+    expect(prompt).toContain("runtimeDrift.dispatcherHeartbeat.currentRuntimeBuildHash");
+    expect(prompt).toContain("Do not cite `runtimeDrift.dispatcherHeartbeat.buildHash` as the current runtime unless `buildHashStatus` is `matches_current_runtime`");
     expect(prompt).toContain("/api/readiness` is controller-global diagnostic context only");
     expect(prompt).toContain("secondary security signal only");
     expect(prompt).toContain("unexpected analyst telemetry auth failure");

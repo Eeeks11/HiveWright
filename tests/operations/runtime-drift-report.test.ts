@@ -18,7 +18,7 @@ function heartbeat(state: DispatcherHeartbeatRecord["state"]): DispatcherHeartbe
     pid: state === "missing" ? null : 123,
     hostId: state === "missing" ? null : "host-a",
     version: "0.1.4",
-    buildHash: "build-a",
+    buildHash: state === "missing" ? null : "build-a",
     lastHeartbeatAt: state === "missing" ? null : "2026-06-03T00:00:00.000Z",
     ageMs: state === "fresh" ? 1_000 : state === "stale" ? 300_000 : null,
   };
@@ -134,6 +134,20 @@ describe("runtime drift report builder", () => {
     });
   });
 
+  it("uses supplied git SHA as current build hash when no build env is present", () => {
+    expect(buildRuntimeBuildProvenance({
+      repoPath: "/repo",
+      bootTime: new Date("2026-06-03T01:02:03.000Z"),
+      gitSha: "abc123",
+      env: { NODE_ENV: "test" } as unknown as NodeJS.ProcessEnv,
+    })).toEqual({
+      repoPath: "/repo",
+      gitSha: "abc123",
+      buildHash: "abc123",
+      bootTime: "2026-06-03T01:02:03.000Z",
+    });
+  });
+
   it.each(["fresh", "stale", "missing"] as const)("surfaces %s dispatcher heartbeat state", async (state) => {
     const report = await buildRuntimeDriftOperatorReport({
       sql: vi.fn() as never,
@@ -148,6 +162,14 @@ describe("runtime drift report builder", () => {
     });
 
     expect(report.dispatcherHeartbeat.state).toBe(state);
+    expect(report.dispatcherHeartbeat.currentRuntimeBuildHash).toBe("sha");
+    expect(report.dispatcherHeartbeat.buildHashScope).toBe("dispatcher_heartbeat");
+    expect(report.dispatcherHeartbeat.buildHashStatus).toBe(
+      state === "missing" ? "dispatcher_heartbeat_build_hash_missing" : "differs_from_current_runtime",
+    );
+    expect(report.dispatcherHeartbeat.buildHashInterpretation).toContain(
+      state === "missing" ? "did not report a build hash" : "cached dispatcher heartbeat evidence",
+    );
     expect(report.routeDrift.status).toBe(state === "fresh" ? "in_sync" : state === "missing" ? "runtime_unavailable" : "drift");
   });
 
