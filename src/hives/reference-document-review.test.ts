@@ -44,6 +44,23 @@ describe("reference document review extraction", () => {
     ]);
   });
 
+  it("accepts a top-level proposal array for backward compatibility with older extraction responses", () => {
+    const proposals = parseReferenceReviewExtraction(`[{
+      "category": "Procedure",
+      "title": "Check-in procedure",
+      "summary": "Staff verify booking details before issuing keys.",
+      "confidence": 0.7
+    }]`);
+
+    expect(proposals).toEqual([
+      expect.objectContaining({
+        category: "Procedure",
+        title: "Check-in procedure",
+        confidence: 0.7,
+      }),
+    ]);
+  });
+
   it("keeps prompt-injection defense in the extraction prompt", () => {
     const prompt = referenceReviewSystemPrompt();
     expect(prompt).toContain("untrusted source material");
