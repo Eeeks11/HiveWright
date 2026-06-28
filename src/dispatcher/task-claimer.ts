@@ -6,6 +6,10 @@ import {
   markPipelineTaskRunning,
   validatePipelineOutputContract,
 } from "@/pipelines/service";
+import {
+  evaluateDeploymentSensitiveCompletionEvidence,
+  formatDeploymentProofFailure,
+} from "@/software-pipeline/deployment-sensitive-proof";
 import type { ClaimedTask } from "./types";
 import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
 import { validateRoutingPublicationCompletion } from "@/tasks/output-disposition";
@@ -147,10 +151,11 @@ export async function completeTask(
     id: string;
     hive_id: string;
     assigned_to: string;
+    parent_task_id: string | null;
     title: string;
     brief: string | null;
   }[]>`
-    SELECT id, hive_id, assigned_to, title, brief
+    SELECT id, hive_id, assigned_to, parent_task_id, title, brief
     FROM tasks
     WHERE id = ${taskId}
   `;
@@ -192,6 +197,16 @@ export async function completeTask(
     return;
   }
 
+  if (!(task.assigned_to === "qa" && task.parent_task_id)) {
+    const deploymentProof = await evaluateTaskDeploymentProof(sql, taskId, {
+      resultSummary,
+    });
+    if (!deploymentProof.ok) {
+      await blockTask(sql, taskId, formatDeploymentProofFailure(deploymentProof.failures));
+      return;
+    }
+  }
+
   // Clear failure_reason on success so a stale message from a prior watchdog
   // hit / earlier retry doesn't keep showing up on the dashboard for a task
   // that ultimately succeeded. Runtime warnings are explicitly retained as a
@@ -212,6 +227,39 @@ export async function completeTask(
   if (updated.length === 0) return;
 
   await advancePipelineRunFromTask(sql, { taskId, resultSummary });
+}
+
+async function evaluateTaskDeploymentProof(
+  sql: Sql,
+  taskId: string,
+  input: { resultSummary?: string | null; qaFeedback?: string | null; workProductSummary?: string | null; workProductContent?: string | null },
+) {
+  const [task] = await sql<{
+    title: string;
+    brief: string;
+    acceptance_criteria: string | null;
+    project_git_repo: boolean | null;
+  }[]>`
+    SELECT t.title,
+           t.brief,
+           t.acceptance_criteria,
+           COALESCE(p.git_repo, false) AS project_git_repo
+    FROM tasks t
+    LEFT JOIN projects p ON p.id = t.project_id
+    WHERE t.id = ${taskId}
+    LIMIT 1
+  `;
+
+  return evaluateDeploymentSensitiveCompletionEvidence({
+    projectGitRepo: task?.project_git_repo === true,
+    taskTitle: task?.title,
+    taskBrief: task?.brief,
+    acceptanceCriteria: task?.acceptance_criteria,
+    resultSummary: input.resultSummary,
+    qaFeedback: input.qaFeedback,
+    workProductSummary: input.workProductSummary,
+    workProductContent: input.workProductContent,
+  });
 }
 
 export async function blockTask(sql: Sql, taskId: string, reason?: string): Promise<void> {

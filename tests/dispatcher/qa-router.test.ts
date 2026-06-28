@@ -378,6 +378,47 @@ describe("processQaResult", () => {
     expect(JSON.stringify(evidence)).toContain("Second QA failure");
   });
 
+  it("blocks deployment-sensitive QA pass when operational checkout proof is missing", async () => {
+    const previousHash = process.env.HIVEWRIGHT_BUILD_HASH;
+    process.env.HIVEWRIGHT_BUILD_HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try {
+      const [project] = await sql<{ id: string }[]>`
+        INSERT INTO projects (hive_id, slug, name, git_repo)
+        VALUES (${bizId}, 'deploy-sensitive', 'Deploy Sensitive', true)
+        RETURNING id
+      `;
+      const [task] = await sql`
+        INSERT INTO tasks (
+          hive_id, assigned_to, created_by, title, brief, status, qa_required,
+          project_id, result_summary
+        )
+        VALUES (
+          ${bizId},
+          'qa-test-role',
+          'owner',
+          'Deploy runtime fix',
+          'Deploy the fix to the live operational checkout.',
+          'in_review',
+          true,
+          ${project.id},
+          'Expected commit 36cb96c passed QA in the task worktree. npm test passed.'
+        )
+        RETURNING *
+      `;
+
+      await processQaResult(sql, task.id, { passed: true, feedback: "pass" });
+
+      const [updated] = await sql`SELECT status, failure_reason, completed_at FROM tasks WHERE id = ${task.id}`;
+      expect(updated.status).toBe("blocked");
+      expect(updated.completed_at).toBeNull();
+      expect(updated.failure_reason).toContain("Deployment-sensitive completion blocked");
+      expect(updated.failure_reason).toContain("task-worktree QA alone is not live proof");
+    } finally {
+      if (previousHash === undefined) delete process.env.HIVEWRIGHT_BUILD_HASH;
+      else process.env.HIVEWRIGHT_BUILD_HASH = previousHash;
+    }
+  });
+
   it("keeps the goal-task QA cap path on supervisor replan", async () => {
     const [goal] = await sql`
       INSERT INTO goals (hive_id, title, description, status)
