@@ -399,6 +399,7 @@ describe("MobileSupervisionSurface", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
+            hiveId: "hive-1",
             body: "Tighten the intro and keep the scope bounded.",
             createdBy: "owner",
           }),

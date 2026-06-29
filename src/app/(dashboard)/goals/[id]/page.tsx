@@ -163,7 +163,7 @@ export default async function GoalDetailPage({
       <GoalPlanPanel goalId={goal.id} />
 
       {/* Owner feedback thread — persist rework requests on the goal */}
-      <GoalCommentsPanel goalId={goal.id} />
+      <GoalCommentsPanel goalId={goal.id} hiveId={goal.hive_id} />
 
       {/* Supervisor's own thoughts + tool calls, parsed from the codex
           rollout file. Polls every 5 s while the goal is active. */}

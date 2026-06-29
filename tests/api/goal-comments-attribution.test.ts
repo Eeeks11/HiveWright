@@ -37,7 +37,7 @@ function makeRequest(body: Record<string, unknown>, supervisorSession?: string) 
   return new Request("http://localhost/api/goals/x/comments", {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body: JSON.stringify({ hiveId, ...body }),
   });
 }
 
