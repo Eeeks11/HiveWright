@@ -574,6 +574,7 @@ describe("analyst telemetry summary", () => {
           buildHashScope: "dispatcher_heartbeat",
           buildHashStatus: "differs_from_current_runtime",
           currentRuntimeBuildHash: "live-runtime-build",
+          buildHashInterpretation: expect.stringContaining("cached dispatcher heartbeat evidence"),
         },
         routeDrift: {
           status: "drift",
@@ -608,5 +609,6 @@ describe("analyst telemetry summary", () => {
       },
     });
     expect(summary.notices.join("\n")).toContain("Runtime drift status is drift");
+    expect(summary.notices.join("\n")).toContain("dispatcherHeartbeat.buildHash as cached heartbeat evidence");
   });
 });

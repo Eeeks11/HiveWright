@@ -1,11 +1,15 @@
-import { execFileSync } from "node:child_process";
 import type { Sql } from "postgres";
 import { loadDispatcherHeartbeatStatus, type DispatcherHeartbeatRecord } from "@/dispatcher/heartbeat";
+import { resolveHiveWrightBuildProvenance } from "@/diagnostics/build-provenance";
 import { loadModelRoutingView, type ModelRoutingView } from "@/model-routing/registry";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
 import type { ContextProvenance } from "@/adapters/types";
 import { getHiveOperatorVerdict, type HiveOperatorVerdict } from "./operator-verdict";
 import { fetchLatestSupervisorReport, summarizeSupervisorReport, type SupervisorReportSummary } from "@/app/api/supervisor-reports/queries";
+import {
+  attachDispatcherHeartbeatBuildHashMetadata,
+  type DispatcherHeartbeatWithBuildHashMetadata,
+} from "./dispatcher-heartbeat-build-hash";
 
 const MODULE_BOOT_TIME = new Date();
 
@@ -44,7 +48,7 @@ export interface RuntimeDriftOperatorReport {
   checkedAt: string;
   hiveId: string;
   runtime: RuntimeBuildProvenance;
-  dispatcherHeartbeat: DispatcherHeartbeatRecord;
+  dispatcherHeartbeat: DispatcherHeartbeatWithBuildHashMetadata;
   routeDrift: RuntimeRouteDriftReport;
   provenance: ContextProvenance;
   supervisorReport: SupervisorReportSummary | null;
@@ -86,16 +90,18 @@ export async function buildRuntimeDriftOperatorReport(
     ? await (input.loadProvenance ?? readLatestTaskContextProvenance)(input.sql, input.taskId)
     : { status: "unavailable", entries: [], disclaimer: "No taskId was supplied for provenance lookup." };
 
+  const runtime = buildRuntimeBuildProvenance({
+    repoPath,
+    bootTime: input.bootTime ?? MODULE_BOOT_TIME,
+    env: input.env,
+    gitSha: input.gitSha,
+  });
+
   return {
     checkedAt: now.toISOString(),
     hiveId: input.hiveId,
-    runtime: buildRuntimeBuildProvenance({
-      repoPath,
-      bootTime: input.bootTime ?? MODULE_BOOT_TIME,
-      env: input.env,
-      gitSha: input.gitSha,
-    }),
-    dispatcherHeartbeat: heartbeat,
+    runtime,
+    dispatcherHeartbeat: attachDispatcherHeartbeatBuildHashMetadata(heartbeat, runtime.buildHash),
     routeDrift: buildRuntimeRouteDriftReport(routingView, heartbeat),
     provenance,
     supervisorReport,
@@ -115,12 +121,17 @@ export function buildRuntimeBuildProvenance(input: {
   env?: NodeJS.ProcessEnv;
   gitSha?: string | null;
 }): RuntimeBuildProvenance {
-  const env = input.env ?? process.env;
-  const buildHash = env.VERCEL_GIT_COMMIT_SHA ?? env.HIVEWRIGHT_BUILD_HASH ?? null;
+  const provenance = resolveHiveWrightBuildProvenance({
+    env: input.env,
+    now: input.bootTime,
+    repoRoot: input.repoPath,
+    execGit: input.gitSha === undefined,
+  });
+  const gitSha = input.gitSha ?? provenance.gitCommit;
   return {
     repoPath: input.repoPath,
-    gitSha: input.gitSha ?? buildHash ?? readGitSha(input.repoPath),
-    buildHash,
+    gitSha,
+    buildHash: provenance.buildHash ?? gitSha,
     bootTime: input.bootTime.toISOString(),
   };
 }
@@ -236,20 +247,6 @@ function hasFreshHealthyRouteEvidence(model: {
 }): boolean {
   return model.status === "healthy" && model.probeFreshness === "fresh";
 }
-
-function readGitSha(repoPath: string): string | null {
-  try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repoPath,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 2_000,
-    }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 
 function activeRoutePoolCandidates<T extends { enabled?: boolean; canonicalRouteSet?: { membership?: string } }>(
   candidates: T[],

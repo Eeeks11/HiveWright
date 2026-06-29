@@ -7,6 +7,10 @@ import {
   buildImprovementScanEvidenceContract,
   type ImprovementScanEvidenceContract,
 } from "./improvement-scan-evidence";
+import {
+  summarizeDispatcherHeartbeatBuildHash,
+  type DispatcherHeartbeatBuildHashMetadata,
+} from "./dispatcher-heartbeat-build-hash";
 
 export interface AnalystModelRoutingSummary {
   policySource: string;
@@ -71,18 +75,9 @@ export interface RetainedExcludedRouteClassSummary {
   owningWorkflow: string;
 }
 
-export type DispatcherHeartbeatBuildHashStatus =
-  | "matches_current_runtime"
-  | "differs_from_current_runtime"
-  | "current_runtime_build_hash_missing"
-  | "dispatcher_heartbeat_build_hash_missing";
-
 export interface AnalystDispatcherHeartbeatSummary
-  extends Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt" | "version" | "buildHash"> {
-  buildHashScope: "dispatcher_heartbeat";
-  buildHashStatus: DispatcherHeartbeatBuildHashStatus;
-  currentRuntimeBuildHash: string | null;
-}
+  extends Pick<DispatcherHeartbeatRecord, "state" | "ageMs" | "lastHeartbeatAt" | "version" | "buildHash">,
+    DispatcherHeartbeatBuildHashMetadata {}
 
 export interface AnalystRuntimeDriftSummary {
   dispatcherHeartbeat: AnalystDispatcherHeartbeatSummary;
@@ -133,9 +128,7 @@ export async function buildAnalystTelemetrySummary(
         lastHeartbeatAt: heartbeat.lastHeartbeatAt,
         version: heartbeat.version,
         buildHash: heartbeat.buildHash,
-        buildHashScope: "dispatcher_heartbeat",
-        buildHashStatus: classifyDispatcherHeartbeatBuildHash(heartbeat.buildHash, runtimeBuildHash),
-        currentRuntimeBuildHash: runtimeBuildHash,
+        ...summarizeDispatcherHeartbeatBuildHash(heartbeat, runtimeBuildHash),
       },
       routeDrift,
     },
@@ -152,19 +145,8 @@ export async function buildAnalystTelemetrySummary(
         },
       ],
     }),
-    notices: buildAnalystTelemetryNotices(routeDrift, modelRouting),
+    notices: buildAnalystTelemetryNotices(routeDrift, modelRouting, heartbeat, runtimeBuildHash),
   };
-}
-
-function classifyDispatcherHeartbeatBuildHash(
-  dispatcherBuildHash: string | null,
-  runtimeBuildHash: string | null,
-): DispatcherHeartbeatBuildHashStatus {
-  if (!runtimeBuildHash) return "current_runtime_build_hash_missing";
-  if (!dispatcherBuildHash) return "dispatcher_heartbeat_build_hash_missing";
-  return dispatcherBuildHash === runtimeBuildHash
-    ? "matches_current_runtime"
-    : "differs_from_current_runtime";
 }
 
 export function buildAnalystModelRoutingSummary(
@@ -314,8 +296,18 @@ export function buildAnalystModelRoutingSummary(
 function buildAnalystTelemetryNotices(
   routeDrift: RuntimeRouteDriftReport,
   modelRouting: AnalystModelRoutingSummary,
+  heartbeat: Pick<DispatcherHeartbeatRecord, "buildHash">,
+  runtimeBuildHash: string | null,
 ): string[] {
   const notices: string[] = [];
+  const heartbeatBuildHash = summarizeDispatcherHeartbeatBuildHash(heartbeat, runtimeBuildHash);
+  if (heartbeatBuildHash.buildHashStatus === "differs_from_current_runtime") {
+    notices.push("Dispatcher heartbeat build hash differs from the current runtime build; treat dispatcherHeartbeat.buildHash as cached heartbeat evidence and use currentRuntimeBuildHash/improvementScanEvidence.runtimeBuildHash for current deployed runtime identity.");
+  } else if (heartbeatBuildHash.buildHashStatus === "current_runtime_build_hash_missing") {
+    notices.push("Current runtime build hash is unavailable; improvement-scan routing cannot prove build-matched endpoint evidence from this summary.");
+  } else if (heartbeatBuildHash.buildHashStatus === "dispatcher_heartbeat_build_hash_missing") {
+    notices.push("Dispatcher heartbeat build hash is unavailable; currentRuntimeBuildHash remains the authoritative runtime identity for this summary.");
+  }
   if (routeDrift.status !== "in_sync") {
     notices.push(`Runtime drift status is ${routeDrift.status}.`);
   }
