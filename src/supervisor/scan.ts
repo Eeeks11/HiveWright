@@ -561,6 +561,25 @@ const TERMINAL_VERIFICATION_IMPLEMENTATION_PATTERNS = [
   /\bupdate or add focused tests\b/i,
 ];
 
+const CANONICAL_DOWNSTREAM_DISPOSITION_PATTERNS = [
+  /\b(?:issue|github issue|jira|linear)\s*#\d+\b/i,
+  /\b(?:pr|pull request)\s*#\d+\b/i,
+  /\b(?:owner\s+)?decision\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+  /\bno_action_notes\b/i,
+  /\bterminal[_ -]?no[_ -]?action\b/i,
+  /\bno (?:downstream )?action (?:needed|required)\b/i,
+  /\bno follow-up needed\b/i,
+];
+
+const NOVEL_SCAN_RESIDUE_PATTERNS = [
+  /\bnovel (?:technical )?issue\b/i,
+  /\brecurring defect\b/i,
+  /\b(?:bug|defect|regression|outage|incident|failure|drift|bottleneck)\b/i,
+  /\brecommend(?:ation)?\b/i,
+  /\baction needed\b/i,
+  /\bfollow-up\b/i,
+];
+
 function matchesAnyPattern(
   text: string,
   patterns: readonly RegExp[],
@@ -587,6 +606,7 @@ export function isTerminalVerificationTask(input: {
   title: string | null;
   brief: string | null;
   hasWorkProduct: boolean;
+  resultSummary: string | null;
   failureReason: string | null;
 }): boolean {
   return getTerminalVerificationDecision(input).eligible;
@@ -596,6 +616,7 @@ export function getTerminalVerificationDecision(input: {
   title: string | null;
   brief: string | null;
   hasWorkProduct: boolean;
+  resultSummary: string | null;
   failureReason: string | null;
 }): {
   eligible: boolean;
@@ -604,9 +625,12 @@ export function getTerminalVerificationDecision(input: {
   implementationCue: boolean;
   hasWorkProduct: boolean;
   blockedByFailureReason: boolean;
+  canonicalDownstreamDisposition: boolean;
+  novelResidueWithoutDisposition: boolean;
 } {
   const blockedByFailureReason = input.failureReason !== null;
   const text = [input.title ?? "", input.brief ?? ""].join("\n").trim();
+  const resultSummary = input.resultSummary ?? "";
   const verificationLike = TERMINAL_VERIFICATION_INTENT_RE.test(text);
   const proofOnly = matchesAnyPattern(
     text,
@@ -616,17 +640,27 @@ export function getTerminalVerificationDecision(input: {
     text,
     TERMINAL_VERIFICATION_IMPLEMENTATION_PATTERNS,
   );
+  const canonicalDownstreamDisposition = matchesAnyPattern(
+    resultSummary,
+    CANONICAL_DOWNSTREAM_DISPOSITION_PATTERNS,
+  );
+  const novelResidueWithoutDisposition =
+    matchesAnyPattern(resultSummary, NOVEL_SCAN_RESIDUE_PATTERNS)
+    && !canonicalDownstreamDisposition;
   return {
     eligible:
       !blockedByFailureReason
       && verificationLike
       && proofOnly
-      && !implementationCue,
+      && !implementationCue
+      && !novelResidueWithoutDisposition,
     verificationLike,
     proofOnly,
     implementationCue,
     hasWorkProduct: input.hasWorkProduct,
     blockedByFailureReason,
+    canonicalDownstreamDisposition,
+    novelResidueWithoutDisposition,
   };
 }
 
@@ -904,6 +938,7 @@ async function detectUnsatisfiedCompletions(
           title: row.title,
           brief: row.brief,
           hasWorkProduct: row.has_work_product,
+          resultSummary: row.result_summary,
           failureReason: row.failure_reason,
         }),
     )

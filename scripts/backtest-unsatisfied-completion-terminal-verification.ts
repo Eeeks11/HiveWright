@@ -23,6 +23,16 @@ type Example = {
   hasFailureReason: boolean;
 };
 
+function getRowTerminalVerificationDecision(row: UnsatRow) {
+  return getTerminalVerificationDecision({
+    title: row.title,
+    brief: row.brief,
+    hasWorkProduct: row.has_work_product,
+    resultSummary: row.result_summary,
+    failureReason: row.failure_reason,
+  });
+}
+
 const DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgresql://hivewright:placeholder@localhost:5432/hivewrightv2";
@@ -70,12 +80,7 @@ async function main() {
   >();
 
   for (const row of rows) {
-    const decision = getTerminalVerificationDecision({
-      title: row.title,
-      brief: row.brief,
-      hasWorkProduct: row.has_work_product,
-      failureReason: row.failure_reason,
-    });
+    const decision = getRowTerminalVerificationDecision(row);
     const bucket = byRole.get(row.assigned_to) ?? {
       reportInstances: 0,
       distinctTasks: 0,
@@ -91,12 +96,7 @@ async function main() {
   }
 
   for (const row of uniqueTasks.values()) {
-    const decision = getTerminalVerificationDecision({
-      title: row.title,
-      brief: row.brief,
-      hasWorkProduct: row.has_work_product,
-      failureReason: row.failure_reason,
-    });
+    const decision = getRowTerminalVerificationDecision(row);
     const bucket = byRole.get(row.assigned_to);
     if (bucket) {
       bucket.distinctTasks += 1;
@@ -131,21 +131,11 @@ async function main() {
       unsatisfiedCompletionReportInstances: rows.length,
       unsatisfiedCompletionDistinctTasks: uniqueTasks.size,
       suppressedReportInstances,
-      suppressedDistinctTasks: Array.from(uniqueTasks.values()).filter((row) =>
-        getTerminalVerificationDecision({
-          title: row.title,
-          brief: row.brief,
-          hasWorkProduct: row.has_work_product,
-          failureReason: row.failure_reason,
-        }).eligible,
+      suppressedDistinctTasks: Array.from(uniqueTasks.values()).filter(
+        (row) => getRowTerminalVerificationDecision(row).eligible,
       ).length,
-      remainingDistinctTasks: Array.from(uniqueTasks.values()).filter((row) =>
-        !getTerminalVerificationDecision({
-          title: row.title,
-          brief: row.brief,
-          hasWorkProduct: row.has_work_product,
-          failureReason: row.failure_reason,
-        }).eligible,
+      remainingDistinctTasks: Array.from(uniqueTasks.values()).filter(
+        (row) => !getRowTerminalVerificationDecision(row).eligible,
       ).length,
     },
     byRole: Object.fromEntries(
