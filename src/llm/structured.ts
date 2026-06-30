@@ -21,6 +21,7 @@ export interface GenerateStructuredJsonInput {
   request: ChatRequest;
   schema: StructuredJsonSchema;
   maxAttempts?: number;
+  validate?: (value: unknown) => string[] | void;
 }
 
 export interface GenerateStructuredJsonResult<T> {
@@ -42,6 +43,8 @@ export async function generateStructuredJson<T = unknown>(
 
     try {
       const value = parseStructuredJson<T>(response.text, input.schema);
+      const semanticErrors = input.validate?.(value) ?? [];
+      if (semanticErrors.length > 0) throw new Error(semanticErrors.join("; "));
       return { value, attempts: attempt };
     } catch (error) {
       lastError = error instanceof Error ? error.message : "structured output validation failed";

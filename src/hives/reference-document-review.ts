@@ -126,6 +126,7 @@ const REFERENCE_REVIEW_SCHEMA: StructuredJsonSchema = {
       maxItems: REFERENCE_REVIEW_MAX_PROPOSALS,
       items: {
         type: "object",
+        required: ["category", "title", "summary"],
         properties: {
           category: { type: "string" },
           title: { type: "string", minLength: 1 },
@@ -370,6 +371,7 @@ export async function processReferenceDocumentReviewJob(
         },
         schema: REFERENCE_REVIEW_SCHEMA,
         maxAttempts: 2,
+        validate: validateUsableReferenceReviewExtraction,
       });
       proposals = normalizeExtractedProposals(structured.value.proposals);
     }
@@ -516,6 +518,14 @@ export function parseReferenceReviewExtraction(text: string): ExtractedReference
       throw objectError;
     }
   }
+}
+
+function validateUsableReferenceReviewExtraction(value: unknown): string[] {
+  const proposals = value && typeof value === "object" && Array.isArray((value as { proposals?: unknown }).proposals)
+    ? (value as { proposals: unknown[] }).proposals
+    : [];
+  if (normalizeExtractedProposals(proposals).length > 0) return [];
+  return ["proposals must include at least one usable item with category, title, and summary"];
 }
 
 export function referenceReviewSystemPrompt(): string {
