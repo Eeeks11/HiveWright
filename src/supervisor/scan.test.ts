@@ -1042,6 +1042,57 @@ describe.sequential("scanHive - unsatisfied_completion detector", () => {
     expect(unsat).toHaveLength(1);
     expect(unsat[0].ref.taskId).toBe("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee18");
   });
+
+  it("still flags report-only performance-analyst improvement scans when the output contains a novel issue and recommendation without downstream disposition", async () => {
+    await insertCompletedTask("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee19", {
+      assignedTo: "performance-analyst",
+      title: "Audit HiveWright improvement scans",
+      brief:
+        "Audit the completed scan output. Produce a concise implementation checklist with exact file paths. Do not modify application code.",
+      resultSummary:
+        (
+          "Recurring defect: supervisor improvement scans can suppress novel residue. " +
+          "Recommendation: create a follow-up fix task for src/supervisor/scan.ts and add regression coverage. "
+        ).repeat(3),
+    });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const unsat = findings.filter((x) => x.kind === "unsatisfied_completion");
+    expect(unsat).toHaveLength(1);
+    expect(unsat[0].ref.taskId).toBe("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee19");
+  });
+
+  it("does NOT flag report-only performance-analyst improvement scans when the output records an explicit canonical downstream disposition", async () => {
+    await insertCompletedTask("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee1a", {
+      assignedTo: "performance-analyst",
+      title: "Audit HiveWright improvement scans",
+      brief:
+        "Audit the completed scan output. Produce a concise implementation checklist with exact file paths. Do not modify application code.",
+      resultSummary:
+        "Recurring defect documented. Downstream disposition: tracked in issue #107 and owner decision 11111111-2222-3333-4444-555555555555. No action needed from this scan.",
+    });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    expect(
+      findings.filter((x) => x.kind === "unsatisfied_completion"),
+    ).toHaveLength(0);
+  });
+
+  it("still flags report-only Daily AI strategic scans when they recommend follow-up without canonical downstream disposition", async () => {
+    await insertCompletedTask("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee1b", {
+      assignedTo: "intelligence-analyst",
+      title: "Audit Daily AI strategic intelligence scan",
+      brief:
+        "Audit the market scan and produce a concise implementation checklist with exact file paths. Do not modify application code.",
+      resultSummary:
+        (
+          "Recommendation: evaluate governed delegation positioning for Daily AI pricing before vendor lock-in worsens. " +
+          "This strategic intelligence output identifies a new follow-up seam that still needs governed routing. "
+        ).repeat(3),
+    });
+    const { findings } = await scanHive(sql, HIVE_ID);
+    const unsat = findings.filter((x) => x.kind === "unsatisfied_completion");
+    expect(unsat).toHaveLength(1);
+    expect(unsat[0].ref.taskId).toBe("eeeeeeee-eeee-eeee-eeee-eeeeeeeeee1b");
+  });
 });
 
 describe.sequential("scanHive - dormant_goal detector", () => {

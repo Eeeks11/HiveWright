@@ -144,6 +144,7 @@ describe("isTerminalVerificationTask", () => {
         brief:
           "Print the text `smoke test running`, then exit. Do not modify any files or run any other commands.",
         hasWorkProduct: false,
+        resultSummary: null,
         failureReason: null,
       }),
     ).toBe(true);
@@ -156,6 +157,7 @@ describe("isTerminalVerificationTask", () => {
         brief:
           "Audit those handlers and confirm coverage. Produce a concise implementation checklist with exact file paths. Do not modify application code.",
         hasWorkProduct: false,
+        resultSummary: null,
         failureReason: null,
       }),
     ).toBe(true);
@@ -168,6 +170,7 @@ describe("isTerminalVerificationTask", () => {
         brief:
           "If NOT committed: apply the minimal fix in src/provisioning/codex.ts, then commit it and rerun build.",
         hasWorkProduct: false,
+        resultSummary: null,
         failureReason: null,
       }),
     ).toBe(false);
@@ -180,6 +183,7 @@ describe("isTerminalVerificationTask", () => {
         brief:
           "Print the text `smoke test running`, then exit. Do not modify any files or run any other commands.",
         hasWorkProduct: true,
+        resultSummary: "smoke test running",
         failureReason: null,
       }),
     ).toBe(true);
@@ -192,7 +196,50 @@ describe("isTerminalVerificationTask", () => {
         brief:
           "Print the text `smoke test running`, then exit. Do not modify any files or run any other commands.",
         hasWorkProduct: false,
+        resultSummary: null,
         failureReason: "adapter timeout",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not match a report-only improvement scan when the result summary contains a novel issue and recommendation without downstream disposition", () => {
+    expect(
+      isTerminalVerificationTask({
+        title: "Audit HiveWright improvement scans",
+        brief:
+          "Audit the completed scan output. Produce a concise implementation checklist with exact file paths. Do not modify application code.",
+        hasWorkProduct: false,
+        resultSummary:
+          "Recurring defect: supervisor improvement scans can suppress novel residue. Recommendation: create a follow-up fix task for src/supervisor/scan.ts and add regression coverage.",
+        failureReason: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("still matches a report-only improvement scan when the result summary records explicit downstream disposition", () => {
+    expect(
+      isTerminalVerificationTask({
+        title: "Audit HiveWright improvement scans",
+        brief:
+          "Audit the completed scan output. Produce a concise implementation checklist with exact file paths. Do not modify application code.",
+        hasWorkProduct: false,
+        resultSummary:
+          "Recurring defect documented. Downstream disposition: tracked in issue #107 and owner decision 11111111-2222-3333-4444-555555555555. No action needed from this scan.",
+        failureReason: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match report-only Daily AI strategic scans when they recommend follow-up without canonical downstream disposition", () => {
+    expect(
+      isTerminalVerificationTask({
+        title: "Audit Daily AI strategic intelligence scan",
+        brief:
+          "Audit the market scan and produce a concise implementation checklist with exact file paths. Do not modify application code.",
+        hasWorkProduct: false,
+        resultSummary:
+          "Recommendation: evaluate governed delegation positioning for Daily AI pricing before vendor lock-in worsens.",
+        failureReason: null,
       }),
     ).toBe(false);
   });
