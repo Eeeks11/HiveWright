@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Adapter, CodexEmptyOutputDiagnostic, ProbeResult, SessionContext } from "@/adapters/types";
 import { Dispatcher } from "@/dispatcher";
 import { decideProviderFailoverRoute } from "@/dispatcher/provider-failover";
+import { runPreFlightChecks } from "@/dispatcher/pre-flight";
 import { completeTask } from "@/dispatcher/task-claimer";
 import { writeTaskLog } from "@/dispatcher/task-log-writer";
+import { provisionTaskWorkspace } from "@/dispatcher/worktree-manager";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -41,20 +43,38 @@ function healthyProbe(): Promise<ProbeResult> {
 }
 
 vi.mock("@/dispatcher/session-builder", () => ({
-  buildSessionContext: vi.fn(async (_sql: unknown, task: { assignedTo: string } & Record<string, unknown>) => ({
-    task: task as unknown as SessionContext["task"],
-    roleTemplate: { roleMd: null, soulMd: null, toolsMd: null, slug: task.assignedTo, department: null },
-    memoryContext: { roleMemory: [], hiveMemory: [], insights: [], capacity: "0/200" },
-    skills: [],
-    standingInstructions: [],
-    goalContext: null,
-    projectWorkspace: "/workspace/hivewrightv2",
-    model: typeof task.modelOverride === "string" ? task.modelOverride : "openai-codex/gpt-5.5",
-    fallbackModel: null,
-    primaryAdapterType: typeof task.adapterOverride === "string" ? task.adapterOverride : "codex",
-    fallbackAdapterType: null,
-    credentials: {},
-  } satisfies SessionContext)),
+  buildSessionContext: vi.fn(async (_sql: unknown, task: { assignedTo: string; title?: string } & Record<string, unknown>) => {
+    const missingGitRoute = task.title === "Fix HiveWright dashboard source code";
+    const contextTask = {
+      ...task,
+      projectId: missingGitRoute ? null : "project-1",
+    } as unknown as SessionContext["task"];
+    return {
+      task: contextTask,
+      roleTemplate: { roleMd: null, soulMd: null, toolsMd: null, slug: task.assignedTo, department: null },
+      memoryContext: { roleMemory: [], hiveMemory: [], insights: [], capacity: "0/200" },
+      skills: [],
+      standingInstructions: [],
+      goalContext: null,
+      projectWorkspace: missingGitRoute ? "/workspace/hivewrightv2" : "/home/twhis/dev/hivewright",
+      gitBackedProject: !missingGitRoute,
+      baseProjectWorkspace: missingGitRoute ? "/workspace/hivewrightv2" : "/home/twhis/dev/hivewright",
+      workspaceIsolation: missingGitRoute ? null : {
+        status: "active",
+        baseWorkspacePath: "/home/twhis/dev/hivewright",
+        worktreePath: "/home/twhis/dev/hivewright/.claude/worktrees/test-task",
+        branchName: "hw/task/test-task-dev-agent",
+        isolationActive: true,
+        reused: false,
+        reason: null,
+      },
+      model: typeof task.modelOverride === "string" ? task.modelOverride : "openai-codex/gpt-5.5",
+      fallbackModel: null,
+      primaryAdapterType: typeof task.adapterOverride === "string" ? task.adapterOverride : "codex",
+      fallbackAdapterType: null,
+      credentials: {},
+    } satisfies SessionContext;
+  }),
 }));
 
 vi.mock("@/dispatcher/worktree-manager", () => ({
@@ -222,6 +242,7 @@ function readDiagnosticRows(rows: { type: string; chunk: string }[]) {
 
 beforeEach(async () => {
   await truncateAll(sql);
+  vi.clearAllMocks();
   vi.mocked(decideProviderFailoverRoute).mockImplementation((input) => ({
     usedFallback: false,
     adapterType: input.primaryAdapterType,
@@ -234,6 +255,53 @@ beforeEach(async () => {
 });
 
 describe("dispatcher codex runtime diagnostics", () => {
+  it("blocks code-changing tasks without git-backed project routing before worktree provisioning, preflight, adapter execution, or execution-run creation", async () => {
+    const execute = vi.fn(async () => ({
+      success: true,
+      output: "should not run",
+    }));
+    const adapter: Adapter = {
+      supportsPersistence: false,
+      probe: healthyProbe,
+      translate: () => "",
+      execute,
+    };
+    const { dispatcher, close } = createDispatcherWithAdapter(adapter);
+    await close();
+    const task = await seedTask({ title: "Fix HiveWright dashboard source code" });
+    task.brief = "Patch the HiveWright dashboard TypeScript and add Vitest regression coverage.";
+
+    await dispatcher.executeTask(task);
+
+    expect(provisionTaskWorkspace).not.toHaveBeenCalled();
+    expect(runPreFlightChecks).not.toHaveBeenCalled();
+    expect(decideProviderFailoverRoute).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+
+    const [row] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${task.id}
+    `;
+    expect(row.status).toBe("blocked");
+    expect(row.failure_reason).toContain("no approved git-backed project_id");
+    expect(row.failure_reason).toContain("Supervisor/operator");
+    expect(row.failure_reason).toContain("approved Git development workflow");
+
+    const runs = await sql`SELECT id FROM execution_runs WHERE task_id = ${task.id}`;
+    expect(runs).toHaveLength(0);
+
+    const logs = await sql<{ type: string; chunk: string }[]>`
+      SELECT type, chunk
+      FROM task_logs
+      WHERE task_id = ${task.id}
+      ORDER BY id ASC
+    `;
+    expect(logs.some((entry) =>
+      entry.type === "status" &&
+      entry.chunk.includes("no approved git-backed project_id") &&
+      entry.chunk.includes("approved Git development workflow"),
+    )).toBe(true);
+  });
+
   it("blocks before adapter execution when runtime health gate says the route cannot run", async () => {
     vi.mocked(decideProviderFailoverRoute).mockReturnValueOnce({
       usedFallback: false,

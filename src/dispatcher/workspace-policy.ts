@@ -97,7 +97,7 @@ export function evaluateTaskWorkspacePolicy(
   signals.push("code_changing_task");
   if (ctx.gitBackedProject !== true || !ctx.task.projectId) {
     return blocked(
-      "workspace_policy_blocked: Code-changing task has no approved git-backed project_id. Re-queue through an approved Git development workflow instead of letting an agent discover app source from the filesystem.",
+      "workspace_policy_blocked: Code-changing task has no approved git-backed project_id. Supervisor/operator: re-queue through an approved Git development workflow instead of letting an agent discover app source from the filesystem.",
       signals,
     );
   }

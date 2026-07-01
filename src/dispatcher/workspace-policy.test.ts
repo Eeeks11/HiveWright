@@ -122,9 +122,12 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("blocks symlink aliases that resolve into forbidden roots", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "hw-policy-"));
+    const forbiddenTarget = path.join(tmpDir, "forbidden-source");
     const aliasPath = path.join(tmpDir, "legacy-alias");
     try {
-      fs.symlinkSync("/home/trent/hivewrightv2", aliasPath, "dir");
+      fs.mkdirSync(forbiddenTarget, { recursive: true });
+      process.env.HIVEWRIGHT_FORBIDDEN_SOURCE_ROOTS = forbiddenTarget;
+      fs.symlinkSync(forbiddenTarget, aliasPath, "dir");
       const decision = evaluateTaskWorkspacePolicy(ctx({
         projectWorkspace: aliasPath,
         baseProjectWorkspace: aliasPath,

@@ -149,6 +149,14 @@ function parseExitCode(failureReason: string | undefined): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function isMissingGitBackedProjectWorkspacePolicyBlock(
+  workspacePolicy: WorkspacePolicyDecision,
+): boolean {
+  return !workspacePolicy.allowed
+    && workspacePolicy.signals.includes("code_changing_task")
+    && workspacePolicy.reason.includes("no approved git-backed project_id");
+}
+
 export async function applyStructuredDoctorDiagnosis(
   sql: Sql,
   task: StructuredDoctorDiagnosisTask,
@@ -279,10 +287,22 @@ export class Dispatcher {
   private async blockTaskForWorkspacePolicy(
     task: ClaimedTask,
     ctx: SessionContext,
-    workspacePolicy: Extract<WorkspacePolicyDecision, { allowed: false }>,
+    workspacePolicy: WorkspacePolicyDecision,
   ): Promise<void> {
+    if (workspacePolicy.allowed) return;
     const reason = workspacePolicy.reason;
     console.warn(`[dispatcher] ${reason} task=${task.id} signals=${workspacePolicy.signals.join(",")}`);
+    if (isMissingGitBackedProjectWorkspacePolicyBlock(workspacePolicy)) {
+      await writeTaskLog(this.sql, {
+        taskId: task.id,
+        goalId: task.goalId ?? undefined,
+        chunk: reason,
+        type: "status",
+      }).catch(() => {});
+      await blockTask(this.sql, task.id, reason);
+      return;
+    }
+
     const run = await startExecutionRun(this.sql, {
       hiveId: task.hiveId,
       taskId: task.id,
