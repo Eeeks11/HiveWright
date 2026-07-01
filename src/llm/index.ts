@@ -6,6 +6,12 @@ import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
 export * from "./types";
 export { OllamaChatProvider } from "./ollama";
 export { OpenRouterChatProvider } from "./openrouter";
+export {
+  generateStructuredJson,
+  parseStructuredJson,
+  validateStructuredJson,
+  type StructuredJsonSchema,
+} from "./structured";
 
 export interface GetProviderOpts {
   ollamaEndpoint?: string;
