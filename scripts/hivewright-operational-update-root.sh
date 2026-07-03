@@ -248,7 +248,7 @@ apply_update() {
     if [ "$before" = "$upstream" ]; then
       echo "Already current; continuing verification and relock."
     elif git merge-base --is-ancestor "$before" "$upstream"; then
-      git pull --ff-only
+      git merge --ff-only "$upstream"
     elif git merge-base --is-ancestor "$upstream" "$before"; then
       echo "Refusing update: local checkout is ahead of upstream. Publish or reset local commits first." >&2
       exit 11
