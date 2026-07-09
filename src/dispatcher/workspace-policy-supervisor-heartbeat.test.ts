@@ -209,6 +209,33 @@ describe("supervisor heartbeat workspace policy classification", () => {
     }
   });
 
+  it("still blocks finding-labeled source-edit bullets under supervisor findings", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "hive-supervisor",
+        title: "Hive supervisor heartbeat - 1 finding(s)",
+        brief: [
+          "## Hive Health Report",
+          "### Findings",
+          "- Finding F-22: Patch the HiveWright dispatcher source code and add Vitest tests.",
+        ].join("\n"),
+        acceptanceCriteria: "Code changes and tests are committed.",
+      },
+      hiveSlug: "hivewright",
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      gitBackedProject: false,
+      workspaceIsolation: null,
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("no approved git-backed project_id");
+      expect(decision.signals).toContain("code_changing_task");
+    }
+  });
+
   it("still blocks genuine HiveWright source edits without approved git-backed project routing", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {
