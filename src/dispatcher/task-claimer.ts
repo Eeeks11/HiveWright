@@ -185,7 +185,10 @@ export async function completeTask(
     resultSummary,
   });
   if (!routeDisposition.ok) {
-    await failTask(sql, taskId, routeDisposition.reason);
+    const pipelineFailure = await failPipelineRunFromTask(sql, { taskId, reason: routeDisposition.reason });
+    if (pipelineFailure.status === "not_pipeline_task") {
+      await failTask(sql, taskId, routeDisposition.reason);
+    }
     return;
   }
 

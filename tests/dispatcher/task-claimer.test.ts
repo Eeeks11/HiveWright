@@ -478,6 +478,43 @@ Unit checked and source request preserved.`);
     expect(task.failure_reason).toContain("missing required field");
   });
 
+  it("fails the pipeline cleanly when a routing publication step lacks route disposition evidence", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+    await sql`
+      UPDATE tasks
+      SET
+        title = 'Publish prior findings to GitHub',
+        brief = 'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.'
+      WHERE id = ${started.taskId}
+    `;
+
+    await completeTask(sql, started.taskId, `summary: Reviewed existing work for the routing pipeline handoff but left publication unresolved.
+verification: Checked notes only; no route or terminal closeout evidence recorded.`);
+
+    const [run] = await sql<{ status: string; supervisor_handoff: string | null }[]>`
+      SELECT status, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [stepRun] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM pipeline_step_runs WHERE task_id = ${started.taskId}
+    `;
+    const [task] = await sql<{ status: string; failure_reason: string | null; completed_at: Date | null }[]>`
+      SELECT status, failure_reason, completed_at FROM tasks WHERE id = ${started.taskId}
+    `;
+
+    expect(task.status).toBe("failed");
+    expect(task.completed_at).toBeNull();
+    expect(task.failure_reason).toContain("Routing/publication task completion rejected");
+    expect(stepRun.status).toBe("failed");
+    expect(stepRun.result_summary).toContain("Routing/publication task completion rejected");
+    expect(run.status).toBe("failed");
+    expect(run.supervisor_handoff).toContain("Routing/publication task completion rejected");
+  });
+
   it("fails the pipeline cleanly when schema-valid output drifts from original source task intent", async () => {
     const pipeline = await seedTwoStepPipelineForClaimedTask();
     await sql`
