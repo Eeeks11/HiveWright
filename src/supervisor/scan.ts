@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
+import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { getHiveCreationPause } from "@/operations/creation-pause";
 import { hasSupervisorManagedTerminalDisposition } from "./reference-terminal-disposition";
@@ -324,8 +325,15 @@ async function fetchMetrics(
         WHERE hive_id = ${hiveId} AND status = 'active'
       ) AS active_goals,
       (
-        SELECT COUNT(*)::int FROM decisions
-        WHERE hive_id = ${hiveId} AND status = 'pending'
+        SELECT COUNT(*)::int
+        FROM decisions d
+        JOIN hives h ON h.id = d.hive_id
+        LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+        WHERE d.hive_id = ${hiveId}
+          AND d.status = 'pending'
+          AND d.kind = 'decision'
+          AND d.is_qa_fixture = false
+          AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
       ) AS open_decisions,
       (
         SELECT COUNT(*)::int FROM tasks
@@ -461,9 +469,14 @@ async function detectAgingDecisions(
       d.id, d.title, d.priority, d.created_at,
       EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600 AS age_hours
     FROM decisions d
+    JOIN hives h ON h.id = d.hive_id
+    LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
     WHERE d.hive_id = ${hiveId}
       AND d.status = 'pending'
+      AND d.kind = 'decision'
+      AND d.is_qa_fixture = false
       AND d.owner_response IS NULL
+      AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
       AND (
         (
           d.priority = 'urgent'
