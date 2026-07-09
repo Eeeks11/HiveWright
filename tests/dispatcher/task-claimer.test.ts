@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
 import { startPipelineRun } from "@/pipelines/service";
+import { ANALYST_OUTPUT_DISPOSITION_KIND } from "@/tasks/output-disposition";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
@@ -277,6 +278,60 @@ describe("completeTask", () => {
     expect(updated.result_summary).toBe("Recovered after retry");
     expect(updated.failure_reason).toBe(warning);
     expect(updated.completed_at).not.toBeNull();
+  });
+  it("marks the task completed and records canonical disposition for GitHub routing publication output", async () => {
+    const [inserted] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${bizId},
+        'claimer-test-role',
+        'owner',
+        'Publish prior findings to GitHub',
+        'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.',
+        'active'
+      )
+      RETURNING *
+    `;
+
+    await completeTask(sql, inserted.id, "Published prior findings to GitHub issue #191 with verification evidence.");
+
+    const [updated] = await sql`
+      SELECT status, terminal_disposition
+      FROM tasks WHERE id = ${inserted.id}
+    `;
+    expect(updated.status).toBe("completed");
+    expect(updated.terminal_disposition).toMatchObject({
+      kind: ANALYST_OUTPUT_DISPOSITION_KIND,
+      terminal: true,
+      final_disposition_label: "github_issue_backlog_open",
+      evidence: { disposition: "github_route", githubRefs: expect.arrayContaining(["GitHub issue #191"]) },
+    });
+  });
+
+  it("rejects routing publication completion without route or terminal disposition evidence", async () => {
+    const [inserted] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${bizId},
+        'claimer-test-role',
+        'owner',
+        'Publish prior findings to GitHub',
+        'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.',
+        'active'
+      )
+      RETURNING *
+    `;
+
+    await completeTask(sql, inserted.id, "Prepared a summary of prior findings but did not publish or close out routing.");
+
+    const [updated] = await sql`
+      SELECT status, failure_reason, completed_at, terminal_disposition
+      FROM tasks WHERE id = ${inserted.id}
+    `;
+    expect(updated.status).toBe("failed");
+    expect(updated.failure_reason).toContain("Routing/publication task completion rejected");
+    expect(updated.completed_at).toBeNull();
+    expect(updated.terminal_disposition).toBeNull();
   });
 });
 

@@ -8,6 +8,7 @@ import {
 } from "@/pipelines/service";
 import type { ClaimedTask } from "./types";
 import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
+import { validateRoutingPublicationCompletion } from "@/tasks/output-disposition";
 
 export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
   await pauseOverBudgetGoalsForClaim(sql);
@@ -142,6 +143,19 @@ export async function completeTask(
   resultSummary: string,
   options: { runtimeWarnings?: string[] } = {},
 ): Promise<void> {
+  const [task] = await sql<{
+    id: string;
+    hive_id: string;
+    assigned_to: string;
+    title: string;
+    brief: string | null;
+  }[]>`
+    SELECT id, hive_id, assigned_to, title, brief
+    FROM tasks
+    WHERE id = ${taskId}
+  `;
+  if (!task) return;
+
   const rules = await getPipelineTaskExecutionRules(sql, taskId);
   if (rules) {
     const validation = validatePipelineOutputContract(resultSummary, rules.outputContract, {
@@ -160,16 +174,33 @@ export async function completeTask(
     }
   }
 
+  const routeDisposition = validateRoutingPublicationCompletion({
+    task: {
+      id: task.id,
+      hiveId: task.hive_id,
+      assignedTo: task.assigned_to,
+      title: task.title,
+      brief: task.brief,
+    },
+    resultSummary,
+  });
+  if (!routeDisposition.ok) {
+    await failTask(sql, taskId, routeDisposition.reason);
+    return;
+  }
+
   // Clear failure_reason on success so a stale message from a prior watchdog
   // hit / earlier retry doesn't keep showing up on the dashboard for a task
   // that ultimately succeeded. Runtime warnings are explicitly retained as a
   // visible QA guardrail for adapter-layer anomalies that did not prevent
   // output persistence.
   const warning = options.runtimeWarnings?.filter(Boolean).join("\n") || null;
+  const terminalDisposition = routeDisposition.disposition;
   const updated = await sql<{ id: string }[]>`
     UPDATE tasks
     SET status = 'completed', result_summary = ${resultSummary},
-        completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning}
+        completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning},
+        terminal_disposition = COALESCE(terminal_disposition, ${terminalDisposition ? sql.json(terminalDisposition) : null})
     WHERE id = ${taskId}
       AND status <> 'completed'
     RETURNING id
