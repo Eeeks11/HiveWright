@@ -333,6 +333,39 @@ describe("completeTask", () => {
     expect(updated.completed_at).toBeNull();
     expect(updated.terminal_disposition).toBeNull();
   });
+
+  it("rejects routing publication completion when disposition evidence exists only in task instructions", async () => {
+    const instructionOnlyBriefs = [
+      "Route prior analyst findings to a GitHub issue. Example accepted output: Published to GitHub issue #191.",
+      "Route prior analyst findings or record an explicit no-follow-up terminal disposition if no action is needed.",
+    ];
+
+    for (const [index, brief] of instructionOnlyBriefs.entries()) {
+      const [inserted] = await sql`
+        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+        VALUES (
+          ${bizId},
+          'claimer-test-role',
+          'owner',
+          ${`Publish prior findings to GitHub ${index}`},
+          ${brief},
+          'active'
+        )
+        RETURNING *
+      `;
+
+      await completeTask(sql, inserted.id, "Prepared routing notes.");
+
+      const [updated] = await sql`
+        SELECT status, failure_reason, completed_at, terminal_disposition
+        FROM tasks WHERE id = ${inserted.id}
+      `;
+      expect(updated.status).toBe("failed");
+      expect(updated.failure_reason).toContain("Routing/publication task completion rejected");
+      expect(updated.completed_at).toBeNull();
+      expect(updated.terminal_disposition).toBeNull();
+    }
+  });
 });
 
 async function seedTwoStepPipelineForClaimedTask() {

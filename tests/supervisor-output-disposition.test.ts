@@ -113,4 +113,30 @@ describe("analyst output canonical disposition", () => {
     expect(report.findings.some((f) => f.id === `unsatisfied_completion:${taskId}`)).toBe(true);
     expect(report.findings.some((f) => f.id === `orphan_output:${taskId}`)).toBe(true);
   });
+
+  it("does not record analyst disposition from route or closeout phrases that appear only in title or brief", async () => {
+    const taskId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaa3519";
+    await sql`
+      INSERT INTO tasks (id, hive_id, assigned_to, created_by, status, title, brief, result_summary, completed_at, updated_at)
+      VALUES (
+        ${taskId}, ${HIVE_ID}, 'operations-coordinator', 'schedule', 'completed',
+        'Publish prior findings to GitHub issue #191',
+        'Use either a GitHub issue #191 route or an explicit no-follow-up terminal disposition when evidence supports it.',
+        'Prepared routing notes.',
+        NOW() - interval '2 hours', NOW() - interval '2 hours'
+      )
+    `;
+    await sql`
+      INSERT INTO work_products (task_id, hive_id, role_slug, content, title, artifact_kind)
+      VALUES (${taskId}, ${HIVE_ID}, 'operations-coordinator', 'Drafted notes for review without publishing or closing out the route.', 'Routing notes', 'reference_report')
+    `;
+
+    const reconciled = await reconcileReferenceOnlyTerminalDispositions(sql, HIVE_ID);
+    expect(reconciled.disposed).toBe(0);
+
+    const [task] = await sql<Array<{ terminal_disposition: Record<string, unknown> | null }>>`
+      SELECT terminal_disposition FROM tasks WHERE id = ${taskId}
+    `;
+    expect(task.terminal_disposition).toBeNull();
+  });
 });

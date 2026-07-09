@@ -218,7 +218,7 @@ export async function reconcileReferenceOnlyTerminalDispositions(
       continue;
     }
 
-    const analystText = [task.title, task.brief, task.result_summary, task.work_product_text]
+    const analystText = [task.result_summary, task.work_product_text]
       .filter((value): value is string => Boolean(value))
       .join("\n");
     const analystDisposition = isAnalystOutputTask({

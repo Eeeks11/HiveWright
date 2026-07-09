@@ -162,7 +162,7 @@ export function validateRoutingPublicationCompletion(input: {
 }): { ok: true; disposition: AnalystOutputDisposition | null } | { ok: false; reason: string } {
   if (!isRoutingPublicationTask(input.task)) return { ok: true, disposition: null };
 
-  const text = [input.task.title, input.task.brief ?? "", input.resultSummary].join("\n");
+  const text = input.resultSummary;
   const canonical = findCanonicalOutputDisposition(text);
   if (!canonical) {
     return {
