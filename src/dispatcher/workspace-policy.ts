@@ -213,7 +213,7 @@ function stripPriorWorkspacePolicyFeedback(text: string): string {
 function stripSupervisorReportEvidence(text: string): string {
   const evidenceHeadingPattern = /^(?:#{1,6}\s*)?(?:findings?|task evidence|latest task evidence|scan summar(?:y|ies)|runtime\/source evidence)\b/i;
   const evidenceLinePattern = /\b(finding|task evidence|latest task evidence|scan summar(?:y|ies)|quoted evidence|quoted implementation|stalled implementation task|failed implementation task|workspace_policy_blocked)\b/i;
-  const evidenceListItemPattern = /^\s*(?:[-*+]|\d+[.)]|>)\s+(?:[A-Z]+-\d+\b|(?:evidence|quoted|stalled|failed|workspace_policy_blocked)\b)/i;
+  const evidenceListItemPattern = /^\s*(?:[-*+]|\d+[.)]|>)\s+(?:(?:evidence|quoted|stalled|failed|workspace_policy_blocked)\b)/i;
   let inEvidenceSection = false;
 
   return text
