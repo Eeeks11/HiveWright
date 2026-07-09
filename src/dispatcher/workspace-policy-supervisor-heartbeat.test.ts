@@ -75,6 +75,58 @@ describe("supervisor heartbeat workspace policy classification", () => {
     });
   });
 
+  it("does not let quoted implementation finding summaries veto heartbeat reports", () => {
+    const task = {
+      ...baseTask,
+      assignedTo: "hive-supervisor",
+      title: "Hive supervisor heartbeat - 1 finding(s)",
+      brief: [
+        "## Hive Health Report",
+        "Primary publication source: authenticated /api/analyst-telemetry?hiveId=...",
+        "## Findings",
+        "- F-1: stalled implementation task titled \"Patch the HiveWright dashboard source code and add Vitest tests\" remains blocked by workspace policy.",
+        "Supervisor actions should use findings_addressed to reference finding ids and spawn a separate bounded follow-up if needed.",
+      ].join("\n"),
+      acceptanceCriteria:
+        "Administrative health/report/routing packet only; do not perform source edits in this heartbeat.",
+    };
+
+    expect(isCodeChangingTask(task)).toBe(false);
+    expect(evaluateTaskWorkspacePolicy(ctx({
+      task,
+      hiveSlug: "hivewright",
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      gitBackedProject: false,
+    }))).toMatchObject({
+      allowed: true,
+      signals: expect.arrayContaining(["non_code_changing_task"]),
+    });
+  });
+
+  it("still blocks direct hive-supervisor source-edit requests without approved git-backed project routing", () => {
+    const decision = evaluateTaskWorkspacePolicy(ctx({
+      task: {
+        ...baseTask,
+        assignedTo: "hive-supervisor",
+        title: "Hive supervisor heartbeat: patch HiveWright dispatcher source code",
+        brief: "Patch the HiveWright dispatcher source code in this task and add a Vitest regression test.",
+        acceptanceCriteria: "Code changes and tests are committed.",
+      },
+      hiveSlug: "hivewright",
+      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/runtime-health",
+      gitBackedProject: false,
+      workspaceIsolation: null,
+    }));
+
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) {
+      expect(decision.reason).toContain("no approved git-backed project_id");
+      expect(decision.signals).toContain("code_changing_task");
+    }
+  });
+
   it("still blocks genuine HiveWright source edits without approved git-backed project routing", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
       task: {

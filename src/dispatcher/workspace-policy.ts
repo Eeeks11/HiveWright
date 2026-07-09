@@ -175,10 +175,13 @@ function isCodeChangingTaskForHive(
     && explicitNonImplementationIntent
     && !explicitSourceEditIntent;
   const assignedRole = task.assignedTo.trim().toLowerCase();
+  const supervisorReportSourceIntentText = stripSupervisorReportEvidence(sourceIntentText);
+  const supervisorReportExplicitSourceEditIntent = EXPLICIT_SOURCE_EDIT_PATTERN.test(supervisorReportSourceIntentText);
+  const supervisorReportPositiveSourceEditIntent = POSITIVE_SOURCE_EDIT_PATTERN.test(supervisorReportSourceIntentText);
   const supervisorAdminReportIntent = assignedRole === "hive-supervisor"
     && SUPERVISOR_ADMIN_REPORT_PATTERN.test(text)
-    && !explicitSourceEditIntent
-    && !positiveSourceEditIntent;
+    && !supervisorReportExplicitSourceEditIntent
+    && !supervisorReportPositiveSourceEditIntent;
   const qaReviewOnlyIntent = assignedRole === "qa"
     && (QA_WRAPPER_PATTERN.test(text) || QA_REVIEW_ONLY_PATTERN.test(text))
     && !QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN.test(sourceIntentText);
@@ -205,6 +208,14 @@ function stripPriorWorkspacePolicyFeedback(text: string): string {
   return text
     .replace(/###\s*QA Feedback\s*\nworkspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n")
     .replace(/workspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n");
+}
+
+function stripSupervisorReportEvidence(text: string): string {
+  return text
+    .replace(/(^|\n)(?:#{1,6}\s*)?(?:findings?|task evidence|latest task evidence|scan summar(?:y|ies)|runtime\/source evidence)\b[\s\S]*?(?=\n#{1,6}\s+\S|\n\n(?:[A-Z][^\n]{0,80}:)|$)/gi, "\n")
+    .split("\n")
+    .filter((line) => !/\b(finding|task evidence|latest task evidence|scan summar(?:y|ies)|quoted evidence|quoted implementation|stalled implementation task|failed implementation task|workspace_policy_blocked)\b/i.test(line))
+    .join("\n");
 }
 
 /** Backward-compatible alias for earlier callers/tests. */
