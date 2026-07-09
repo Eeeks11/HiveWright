@@ -211,10 +211,26 @@ function stripPriorWorkspacePolicyFeedback(text: string): string {
 }
 
 function stripSupervisorReportEvidence(text: string): string {
+  const evidenceHeadingPattern = /^(?:#{1,6}\s*)?(?:findings?|task evidence|latest task evidence|scan summar(?:y|ies)|runtime\/source evidence)\b/i;
+  const evidenceLinePattern = /\b(finding|task evidence|latest task evidence|scan summar(?:y|ies)|quoted evidence|quoted implementation|stalled implementation task|failed implementation task|workspace_policy_blocked)\b/i;
+  const evidenceListItemPattern = /^\s*(?:[-*+]|\d+[.)]|>)\s+/;
+  let inEvidenceSection = false;
+
   return text
-    .replace(/(^|\n)(?:#{1,6}\s*)?(?:findings?|task evidence|latest task evidence|scan summar(?:y|ies)|runtime\/source evidence)\b[\s\S]*?(?=\n#{1,6}\s+\S|\n\n(?:[A-Z][^\n]{0,80}:)|$)/gi, "\n")
     .split("\n")
-    .filter((line) => !/\b(finding|task evidence|latest task evidence|scan summar(?:y|ies)|quoted evidence|quoted implementation|stalled implementation task|failed implementation task|workspace_policy_blocked)\b/i.test(line))
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (evidenceHeadingPattern.test(trimmed)) {
+        inEvidenceSection = true;
+        return false;
+      }
+      if (inEvidenceSection && /^#{1,6}\s+\S/.test(trimmed)) {
+        inEvidenceSection = false;
+      }
+      if (evidenceLinePattern.test(line)) return false;
+      if (inEvidenceSection && evidenceListItemPattern.test(line)) return false;
+      return true;
+    })
     .join("\n");
 }
 
