@@ -16,6 +16,13 @@ import {
   type ImprovementScanFindingAction,
   type ImprovementScanPromotedFindingEvidence,
 } from "@/operations/improvement-scan-evidence";
+import {
+  ANALYST_OUTPUT_DISPOSITION_KIND,
+  buildAnalystOutputDisposition,
+  findCanonicalOutputDisposition,
+  isAnalystOutputTask,
+  isRoutingPublicationTask,
+} from "@/tasks/output-disposition";
 
 export const REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND = "reference_only_output";
 export const REFERENCE_ONLY_WRAPPER_DISPOSITION_KIND = "reference_only_wrapper_superseded";
@@ -121,7 +128,8 @@ export function hasSupervisorManagedTerminalDisposition(value: unknown): boolean
   const record = value as Record<string, unknown>;
   return record.terminal === true && (
     record.kind === REFERENCE_ONLY_TERMINAL_DISPOSITION_KIND ||
-    record.kind === IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND
+    record.kind === IMPROVEMENT_SCAN_BACKLOG_DISPOSITION_KIND ||
+    record.kind === ANALYST_OUTPUT_DISPOSITION_KIND
   );
 }
 
@@ -209,6 +217,41 @@ export async function reconcileReferenceOnlyTerminalDispositions(
       result.disposed += 1;
       continue;
     }
+
+    const analystText = [task.result_summary, task.work_product_text]
+      .filter((value): value is string => Boolean(value))
+      .join("\n");
+    const analystDisposition = isAnalystOutputTask({
+      assignedTo: task.assigned_to,
+      title: task.title,
+      brief: task.brief,
+    })
+      ? findCanonicalOutputDisposition(analystText)
+      : null;
+    if (analystDisposition) {
+      await persistReferenceOnlyDisposition(sql, task.id, buildAnalystOutputDisposition({
+        task: {
+          id: task.id,
+          hiveId: task.hive_id,
+          assignedTo: task.assigned_to,
+          title: task.title,
+          brief: task.brief,
+        },
+        resultSummary: task.result_summary,
+        disposition: analystDisposition.disposition,
+        githubRefs: analystDisposition.githubRefs,
+        now,
+        source: "supervisor.referenceOnlyTerminalDisposition.analystOutput",
+      }));
+      result.disposed += 1;
+      continue;
+    }
+
+    if (isRoutingPublicationTask({
+      assignedTo: task.assigned_to,
+      title: task.title,
+      brief: task.brief,
+    })) continue;
 
     if (!isReferenceOnlyTerminalCandidateText({
       title: task.title,
