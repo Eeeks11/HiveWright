@@ -48,6 +48,7 @@ const EXPLICIT_NON_IMPLEMENTATION_PATTERN = /\b(do not|don't)\b.{0,120}\b(live p
 const QA_REVIEW_ONLY_PATTERN = /\b(review|evaluate|verify)\b.{0,120}\b(deliverable|artifact|acceptance criteria|pass|fail)\b|\bfirst non-empty line\b.{0,80}\b(pass|fail)\b/i;
 const QA_WRAPPER_PATTERN = /^\[QA\]\s*Review:|##\s*QA Review/i;
 const QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,100}\b(HiveWright\s+)?(dashboard\/API\s+)?(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\badd\b.{0,80}\b(Vitest|test|regression)\b/i;
+const SUPERVISOR_ADMIN_REPORT_PATTERN = /\b(hive\s+supervisor\s+heartbeat|supervisor\s+heartbeat|hive\s+health\s+report|health\s+report|heartbeat\s+report|report\/routing\s+packet|administrative\s+(?:health|report|routing)|route[- ]health\s+counts|supervisor\s+actions|findings_addressed)\b|\bfinding\(s\)\b/i;
 const DOCUMENT_ONLY_ARTIFACT_PATTERN = /\b(document-only|markdown artifact|final markdown artifact|decision-ready remediation artifact|route\/flow evidence table|route\/flow matrix|evidence matrix|documented route\/flow matrix|synthesis|source-use boundary requirements|provenance tracking|remediation backlog)\b/i;
 const NON_CODE_ARTIFACT_ROLES = new Set([
   "document-manager",
@@ -174,6 +175,13 @@ function isCodeChangingTaskForHive(
     && explicitNonImplementationIntent
     && !explicitSourceEditIntent;
   const assignedRole = task.assignedTo.trim().toLowerCase();
+  const supervisorReportSourceIntentText = stripSupervisorReportEvidence(sourceIntentText);
+  const supervisorReportExplicitSourceEditIntent = EXPLICIT_SOURCE_EDIT_PATTERN.test(supervisorReportSourceIntentText);
+  const supervisorReportPositiveSourceEditIntent = POSITIVE_SOURCE_EDIT_PATTERN.test(supervisorReportSourceIntentText);
+  const supervisorAdminReportIntent = assignedRole === "hive-supervisor"
+    && SUPERVISOR_ADMIN_REPORT_PATTERN.test(text)
+    && !supervisorReportExplicitSourceEditIntent
+    && !supervisorReportPositiveSourceEditIntent;
   const qaReviewOnlyIntent = assignedRole === "qa"
     && (QA_WRAPPER_PATTERN.test(text) || QA_REVIEW_ONLY_PATTERN.test(text))
     && !QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN.test(sourceIntentText);
@@ -182,6 +190,7 @@ function isCodeChangingTaskForHive(
     && !explicitSourceEditIntent;
 
   if (doctorRole) return false;
+  if (supervisorAdminReportIntent) return false;
   if (qaReviewOnlyIntent) return false;
   if (nonCodeArtifactIntent) return false;
   if (explicitReadOnlyNoFileMutation) return false;
@@ -199,6 +208,30 @@ function stripPriorWorkspacePolicyFeedback(text: string): string {
   return text
     .replace(/###\s*QA Feedback\s*\nworkspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n")
     .replace(/workspace_policy_blocked: HiveWright code-changing task[^\n]*(?:\n|$)/gi, "\n");
+}
+
+function stripSupervisorReportEvidence(text: string): string {
+  const evidenceHeadingPattern = /^(?:#{1,6}\s*)?(?:findings?|task evidence|latest task evidence|scan summar(?:y|ies)|runtime\/source evidence)\b/i;
+  const evidenceLinePattern = /\b(task evidence|latest task evidence|scan summar(?:y|ies)|quoted evidence|quoted implementation|stalled implementation task|failed implementation task|workspace_policy_blocked)\b/i;
+  const evidenceListItemPattern = /^\s*(?:[-*+]|\d+[.)]|>)\s+(?:(?:evidence|quoted|stalled|failed|workspace_policy_blocked)\b)/i;
+  let inEvidenceSection = false;
+
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (evidenceHeadingPattern.test(trimmed)) {
+        inEvidenceSection = true;
+        return false;
+      }
+      if (inEvidenceSection && /^#{1,6}\s+\S/.test(trimmed)) {
+        inEvidenceSection = false;
+      }
+      if (evidenceLinePattern.test(line)) return false;
+      if (inEvidenceSection && evidenceListItemPattern.test(line)) return false;
+      return true;
+    })
+    .join("\n");
 }
 
 /** Backward-compatible alias for earlier callers/tests. */
