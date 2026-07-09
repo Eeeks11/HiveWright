@@ -48,6 +48,7 @@ const EXPLICIT_NON_IMPLEMENTATION_PATTERN = /\b(do not|don't)\b.{0,120}\b(live p
 const QA_REVIEW_ONLY_PATTERN = /\b(review|evaluate|verify)\b.{0,120}\b(deliverable|artifact|acceptance criteria|pass|fail)\b|\bfirst non-empty line\b.{0,80}\b(pass|fail)\b/i;
 const QA_WRAPPER_PATTERN = /^\[QA\]\s*Review:|##\s*QA Review/i;
 const QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN = /\b(patch|modify|edit|change|write|implement|refactor|fix)\b.{0,100}\b(HiveWright\s+)?(dashboard\/API\s+)?(source code|codebase|repository|repo|component|typescript|migration|schema|dispatcher-bundle|dashboard|api route|source implementation|implementation code)\b|\badd\b.{0,80}\b(Vitest|test|regression)\b/i;
+const SUPERVISOR_ADMIN_REPORT_PATTERN = /\b(hive\s+supervisor\s+heartbeat|supervisor\s+heartbeat|hive\s+health\s+report|health\s+report|heartbeat\s+report|report\/routing\s+packet|administrative\s+(?:health|report|routing)|route[- ]health\s+counts|supervisor\s+actions|findings_addressed)\b|\bfinding\(s\)\b/i;
 const DOCUMENT_ONLY_ARTIFACT_PATTERN = /\b(document-only|markdown artifact|final markdown artifact|decision-ready remediation artifact|route\/flow evidence table|route\/flow matrix|evidence matrix|documented route\/flow matrix|synthesis|source-use boundary requirements|provenance tracking|remediation backlog)\b/i;
 const NON_CODE_ARTIFACT_ROLES = new Set([
   "document-manager",
@@ -174,6 +175,10 @@ function isCodeChangingTaskForHive(
     && explicitNonImplementationIntent
     && !explicitSourceEditIntent;
   const assignedRole = task.assignedTo.trim().toLowerCase();
+  const supervisorAdminReportIntent = assignedRole === "hive-supervisor"
+    && SUPERVISOR_ADMIN_REPORT_PATTERN.test(text)
+    && !explicitSourceEditIntent
+    && !positiveSourceEditIntent;
   const qaReviewOnlyIntent = assignedRole === "qa"
     && (QA_WRAPPER_PATTERN.test(text) || QA_REVIEW_ONLY_PATTERN.test(text))
     && !QA_WRAPPER_EXPLICIT_SOURCE_EDIT_PATTERN.test(sourceIntentText);
@@ -182,6 +187,7 @@ function isCodeChangingTaskForHive(
     && !explicitSourceEditIntent;
 
   if (doctorRole) return false;
+  if (supervisorAdminReportIntent) return false;
   if (qaReviewOnlyIntent) return false;
   if (nonCodeArtifactIntent) return false;
   if (explicitReadOnlyNoFileMutation) return false;
