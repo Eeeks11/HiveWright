@@ -104,6 +104,7 @@ type BusinessOsOwnerDashboard = {
     }>;
   };
   priorityActions: Array<{
+    id?: string | null;
     title: string;
     brief: string;
     status: string;
@@ -113,8 +114,12 @@ type BusinessOsOwnerDashboard = {
     expectedOutcome: string | null;
     measurementMetric: string | null;
     evidence: string[];
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
   }>;
   approvalsRequired: Array<{
+    id?: string | null;
     title: string;
     brief: string;
     status: string;
@@ -122,6 +127,9 @@ type BusinessOsOwnerDashboard = {
     riskLevel: string | null;
     expectedOutcome: string | null;
     evidence: string[];
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
   }>;
   openGaps: Array<{
     title: string;
@@ -436,6 +444,26 @@ export default function HiveDetailPage() {
   const openTargets = targets.filter(t => t.status === "open");
   const historyTargets = targets.filter(t => t.status !== "open");
 
+  const actionTargetAffordance = (action: {
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
+  }) => {
+    if (action.targetHref) {
+      return (
+        <a href={action.targetHref} className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline dark:text-blue-300">
+          Open action target
+        </a>
+      );
+    }
+    return (
+      <div className="mt-2 rounded-md border border-dashed border-zinc-200 p-2 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+        <span className="font-medium text-zinc-700 dark:text-zinc-200">{action.targetStateLabel ?? "Informational"}</span>
+        {action.targetDescription ? <span> — {action.targetDescription}</span> : null}
+      </div>
+    );
+  };
+
   const renderTarget = (t: Target, i: number, isOpen: boolean) => {
     const muted = t.status !== "open";
     const titlePrefix = t.status === "achieved" ? "✓ " : "";
@@ -657,6 +685,7 @@ export default function HiveDetailPage() {
                   </div>
                   <p className="mt-1 text-zinc-700 dark:text-zinc-300">{action.brief}</p>
                   {action.expectedOutcome && <p className="mt-1 text-xs text-zinc-500">Outcome: {action.expectedOutcome}</p>}
+                  {actionTargetAffordance(action)}
                 </div>
               ))}
             </div>
@@ -672,6 +701,7 @@ export default function HiveDetailPage() {
                   </div>
                   <p className="mt-1 text-zinc-600 dark:text-zinc-400">{action.brief}</p>
                   <p className="mt-1 text-xs text-zinc-500">{action.status.replaceAll("_", " ")} · {action.riskLevel ?? "unknown"} risk{action.approvalRequired ? " · owner approval" : ""}</p>
+                  {actionTargetAffordance(action)}
                 </div>
               ))}
             </div>

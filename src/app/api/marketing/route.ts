@@ -284,7 +284,8 @@ export async function POST(request: Request) {
     `;
 
     return jsonOk({ campaign, assets: (assetRows as unknown as Record<string, unknown>[]).map(mapAsset) }, 201);
-  } catch {
-    return jsonError("Failed to create marketing objective", 500);
+  } catch (err) {
+    const detail = err instanceof Error && err.message ? `: ${err.message}` : "";
+    return jsonError(`Marketing objective draft was not saved. Check that the hive is valid and approval decision storage is available${detail}`, 500);
   }
 }

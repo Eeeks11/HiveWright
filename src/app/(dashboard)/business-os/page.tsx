@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useHiveContext } from "@/components/hive-context";
 
 type BusinessOsStatus = {
   status: string;
@@ -16,6 +17,12 @@ type BusinessOsStatus = {
   openGapsCount?: number;
   approvalsRequiredCount?: number;
   nextAction?: string;
+  actionPreview?: {
+    title: string;
+    href: string | null;
+    stateLabel: string;
+    description?: string;
+  } | null;
 };
 
 type HiveRow = {
@@ -31,6 +38,7 @@ function statusLabel(status: string) {
 }
 
 export default function BusinessOsIndexPage() {
+  const { selected } = useHiveContext();
   const [hives, setHives] = useState<HiveRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +73,16 @@ export default function BusinessOsIndexPage() {
         <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Owner command index</p>
         <h1 className="text-2xl font-semibold">Business OS</h1>
         <p className="max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Business hives are listed here only when HiveWright can show the owner what state the Business OS is in and what action opens it.
+          Global/all-hives Business OS index. Business hives are listed here only when HiveWright can show the owner what state the Business OS is in and what action opens it.
         </p>
+        {selected ? (
+          <Link
+            href={`/hives/${selected.id}`}
+            className="inline-flex rounded-md border border-blue-200 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 dark:border-blue-900 dark:text-blue-300 dark:hover:bg-blue-950/30"
+          >
+            Open active hive Business OS context
+          </Link>
+        ) : null}
       </div>
 
       {loading && <p className="text-sm text-zinc-500">Loading Business OS hives…</p>}
@@ -114,6 +130,22 @@ export default function BusinessOsIndexPage() {
                     <dd>{businessOs.nextAction ?? (configured ? "Open Business OS dashboard" : "Set up or audit this business")}</dd>
                   </div>
                 </dl>
+                {businessOs.actionPreview ? (
+                  <div className="rounded-md border border-dashed p-3 text-sm text-zinc-600 dark:border-zinc-800 dark:text-zinc-300">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium text-zinc-900 dark:text-zinc-100">{businessOs.actionPreview.title}</p>
+                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                        {businessOs.actionPreview.stateLabel}
+                      </span>
+                    </div>
+                    {businessOs.actionPreview.description ? <p className="mt-1 text-xs">{businessOs.actionPreview.description}</p> : null}
+                    {businessOs.actionPreview.href ? (
+                      <Link href={businessOs.actionPreview.href} className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline dark:text-blue-300">
+                        Open action target
+                      </Link>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <Link
                 href={businessOs.href}

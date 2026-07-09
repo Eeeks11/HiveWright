@@ -394,6 +394,7 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
         })),
     },
     priorityActions: activeActions.slice(0, 5).map((action) => ({
+      id: action.id ?? null,
       systemKey: action.systemKey ?? null,
       title: action.title,
       brief: action.brief,
@@ -404,6 +405,9 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       expectedOutcome: action.expectedOutcome,
       measurementMetric: typeof action.measurementPlan.metric === "string" ? action.measurementPlan.metric : null,
       evidence: action.sourceRefs.map(evidenceLabel),
+      targetHref: null,
+      targetStateLabel: "Missing target",
+      targetDescription: "No linked decision, task, deliverable, or owner route exists for this Business OS action yet.",
       conversionAffordance: {
         label: "Convert to governed work",
         href: action.id && input.hiveId ? `/api/hives/${input.hiveId}/business-os-actions/${action.id}/convert` : null,
@@ -418,6 +422,7 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       },
     })),
     approvalsRequired: approvalsRequired.slice(0, 5).map((action) => ({
+      id: action.id ?? null,
       title: action.title,
       brief: action.brief,
       status: action.status,
@@ -425,6 +430,9 @@ export function deriveBusinessOsOwnerDashboard(input: BusinessOsOwnerDashboardIn
       riskLevel: action.riskLevel,
       expectedOutcome: action.expectedOutcome,
       evidence: action.sourceRefs.map(evidenceLabel),
+      targetHref: null,
+      targetStateLabel: "Missing target",
+      targetDescription: "Owner approval is required, but no linked decision or approval route exists for this action yet.",
     })),
     openGaps: input.gaps
       .filter((gap) => ["open", "accepted", "in_progress"].includes(gap.status))

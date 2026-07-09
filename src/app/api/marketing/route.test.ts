@@ -34,6 +34,7 @@ beforeEach(() => {
   });
   mocks.canAccessHive.mockResolvedValue(true);
   mocks.canMutateHive.mockResolvedValue(true);
+
 });
 
 describe("/api/marketing", () => {
@@ -94,5 +95,26 @@ describe("/api/marketing", () => {
     expect(body.data.campaign.id).toBe(CAMPAIGN_ID);
     expect(body.data.assets[0]).toMatchObject({ approvalStatus: "pending_owner_approval", externalActionRequestId: "88888888-8888-8888-8888-888888888888" });
     expect(mocks.sql).toHaveBeenCalledTimes(3);
+  });
+
+  it("returns a specific persistence message instead of the opaque default when objective persistence fails", async () => {
+    mocks.sql
+      .mockResolvedValueOnce([{ id: "77777777-7777-7777-7777-777777777777" }])
+      .mockResolvedValueOnce([{ id: CAMPAIGN_ID, hive_id: HIVE_ID, objective: "Launch winter offer", status: "draft", channels: ["seo"], target_audience: "local owners", offer: "winter audit", success_metrics: ["impressions"], created_at: new Date("2026-06-16T00:00:00Z") }])
+      .mockRejectedValueOnce(new Error("missing approval decision linkage"));
+
+    const res = await POST(request("/api/marketing", {
+      hiveId: HIVE_ID,
+      objective: "Launch winter offer",
+      targetAudience: "local owners",
+      offer: "winter audit",
+      channels: ["seo"],
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toContain("Marketing objective draft was not saved");
+    expect(body.error).toContain("missing approval decision linkage");
+    expect(body.error).not.toBe("Failed to create marketing objective");
   });
 });
