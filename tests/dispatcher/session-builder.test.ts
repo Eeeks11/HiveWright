@@ -10,9 +10,43 @@ import { syncRoleLibrary } from "@/roles/sync";
 import type { ClaimedTask } from "@/dispatcher/types";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
+vi.mock("@/memory/embeddings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/memory/embeddings")>();
+  return {
+    ...actual,
+    checkPgvectorAvailable: vi.fn(async () => false),
+    findSimilar: vi.fn(async () => []),
+  };
+});
+
 let bizId: string;
 const TEST_ENCRYPTION_KEY = "session-builder-audit-test-key";
 const SESSION_BUILDER_TEST_TIMEOUT_MS = 120_000;
+
+async function upsertHealthyModelHealth(input: { fingerprint: string; modelId: string }) {
+  await sql`
+    INSERT INTO model_health (
+      fingerprint,
+      model_id,
+      status,
+      last_probed_at,
+      next_probe_at
+    )
+    VALUES (
+      ${input.fingerprint},
+      ${input.modelId},
+      'healthy',
+      NOW(),
+      NOW() + INTERVAL '1 hour'
+    )
+    ON CONFLICT (fingerprint, model_id) DO UPDATE
+    SET status = EXCLUDED.status,
+        last_probed_at = EXCLUDED.last_probed_at,
+        last_failed_at = NULL,
+        last_failure_reason = NULL,
+        next_probe_at = EXCLUDED.next_probe_at
+  `;
+}
 
 // These tests exercise full dispatcher session assembly against the real test
 // database and role library. The per-test DB reset + role resync routinely
@@ -49,11 +83,10 @@ beforeEach(async () => {
     )
     VALUES (${bizId}, 'openai', 'openai-codex/gpt-5.5', 'codex', 90, 20, true)
   `;
-  await sql`
-    INSERT INTO model_health (fingerprint, model_id, status)
-    VALUES (${defaultFingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-    ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-  `;
+  await upsertHealthyModelHealth({
+    fingerprint: defaultFingerprint,
+    modelId: "openai-codex/gpt-5.5",
+  });
   await sql`
     INSERT INTO adapter_config (hive_id, adapter_type, config)
     VALUES (
@@ -93,19 +126,14 @@ describe("buildSessionContext", () => {
       )
       VALUES (${bizId}, 'openai', 'gpt-image-3', 'openai-image', 99, 10, true)
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (
-        ${createRuntimeCredentialFingerprint({
-          provider: "openai",
-          adapterType: "openai-image",
-          baseUrl: null,
-        })},
-        'gpt-image-3',
-        'healthy'
-      )
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "openai",
+        adapterType: "openai-image",
+        baseUrl: null,
+      }),
+      modelId: "gpt-image-3",
+    });
     await sql`
       UPDATE adapter_config
       SET config = ${sql.json({
@@ -175,19 +203,14 @@ describe("buildSessionContext", () => {
       )
       VALUES (${bizId}, 'local', 'ollama/qwen3:32b', 'ollama', 76, 0, true)
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (
-        ${createRuntimeCredentialFingerprint({
-          provider: "local",
-          adapterType: "ollama",
-          baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
-        })},
-        'ollama/qwen3:32b',
-        'healthy'
-      )
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "local",
+        adapterType: "ollama",
+        baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
+      }),
+      modelId: "ollama/qwen3:32b",
+    });
     await sql`
       UPDATE adapter_config
       SET config = ${sql.json({ preferences: { costQualityBalance: 17 } })}
@@ -373,11 +396,10 @@ describe("buildSessionContext", () => {
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (${fingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint,
+      modelId: "openai-codex/gpt-5.5",
+    });
     await sql`
       INSERT INTO adapter_config (hive_id, adapter_type, config)
       VALUES (
@@ -515,29 +537,22 @@ describe("buildSessionContext", () => {
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES
-        (
-          ${createRuntimeCredentialFingerprint({
-            provider: "openai",
-            adapterType: "codex",
-            baseUrl: null,
-          })},
-          'openai-codex/gpt-5.5',
-          'healthy'
-        ),
-        (
-          ${createRuntimeCredentialFingerprint({
-            provider: "google",
-            adapterType: "gemini",
-            baseUrl: null,
-          })},
-          'google/gemini-2.5-flash',
-          'healthy'
-        )
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "openai",
+        adapterType: "codex",
+        baseUrl: null,
+      }),
+      modelId: "openai-codex/gpt-5.5",
+    });
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "google",
+        adapterType: "gemini",
+        baseUrl: null,
+      }),
+      modelId: "google/gemini-2.5-flash",
+    });
     await sql`
       INSERT INTO model_capability_scores (
         provider,
@@ -696,11 +711,10 @@ describe("buildSessionContext", () => {
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (${fingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint,
+      modelId: "openai-codex/gpt-5.5",
+    });
     await sql`
       INSERT INTO adapter_config (hive_id, adapter_type, config)
       VALUES (
