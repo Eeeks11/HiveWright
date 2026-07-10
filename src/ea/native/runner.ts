@@ -64,7 +64,7 @@ export async function runEa(
   options: RunEaOptions = {},
 ): Promise<RunEaResult> {
   const model = normalizeEaModel(options.model);
-  const cwd = ensureRuntimeDirectory(options.cwd ?? defaultEaRuntimeDirectory("workspace"));
+  const cwd = ensureRuntimeDirectory(options.cwd ?? process.cwd());
   const runtimeHome = options.runtimeHome ? ensureRuntimeDirectory(options.runtimeHome) : undefined;
   const sandbox = options.sandbox ?? "workspace-write";
   const approvalPolicy = options.approvalPolicy ?? "on-request";
@@ -183,10 +183,6 @@ export function normalizeEaModel(model: string | undefined): string | undefined 
   return trimmed || undefined;
 }
 
-function defaultEaRuntimeDirectory(kind: "workspace" | "home"): string {
-  return path.join(os.tmpdir(), "hivewright-ea-runtime", kind);
-}
-
 function ensureRuntimeDirectory(dir: string): string {
   const resolved = path.resolve(dir);
   fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
@@ -218,17 +214,50 @@ function buildEaRuntimeEnv(
   for (const key of BASE_ENV_ALLOWLIST) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
+  const internalServiceToken = process.env.INTERNAL_SERVICE_TOKEN;
+  if (internalServiceToken !== undefined) {
+    // EA prompts intentionally reference this variable rather than embedding
+    // the secret. Pass only this explicit service credential through; do not
+    // inherit arbitrary dispatcher/model/provider secrets.
+    env.INTERNAL_SERVICE_TOKEN = internalServiceToken;
+  }
   if (runtimeHome) {
     env.HOME = runtimeHome;
     env.XDG_CONFIG_HOME = path.join(runtimeHome, ".config");
     env.XDG_CACHE_HOME = path.join(runtimeHome, ".cache");
     env.XDG_DATA_HOME = path.join(runtimeHome, ".local", "share");
+    env.CODEX_HOME = prepareIsolatedCodexHome(runtimeHome);
   }
   env.TMPDIR = process.env.TMPDIR ?? os.tmpdir();
   for (const [key, value] of Object.entries(extraEnv ?? {})) {
     if (value !== undefined) env[key] = value;
   }
   return env;
+}
+
+
+function prepareIsolatedCodexHome(runtimeHome: string): string {
+  const codexHome = path.join(runtimeHome, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+
+  const sourceCodexHome = process.env.CODEX_HOME
+    ? path.resolve(process.env.CODEX_HOME)
+    : process.env.HOME
+      ? path.join(process.env.HOME, ".codex")
+      : undefined;
+  if (!sourceCodexHome) return codexHome;
+
+  const sourceAuth = path.join(sourceCodexHome, "auth.json");
+  const destAuth = path.join(codexHome, "auth.json");
+  if (path.resolve(sourceAuth) === path.resolve(destAuth)) return codexHome;
+  try {
+    if (fs.existsSync(sourceAuth) && !fs.existsSync(destAuth)) {
+      fs.symlinkSync(sourceAuth, destAuth);
+    }
+  } catch (err) {
+    console.warn("[ea-native] could not link Codex auth into isolated runtime home", err);
+  }
+  return codexHome;
 }
 
 function withAttachmentReferences(prompt: string, attachmentPaths: string[]): string {
