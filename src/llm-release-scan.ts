@@ -7,7 +7,6 @@ import type { ClaimedTask } from "./dispatcher/types";
 import {
   createInitiativeRun,
   finalizeInitiativeRun,
-  findRecentCreatedDecisionByDedupeKey,
   recordInitiativeDecision,
   type InitiativeActionTaken,
 } from "./initiative-engine/store";
@@ -136,6 +135,61 @@ export interface LlmReleaseScanOptions {
   repoRoot?: string;
 }
 
+async function findRecentLiveReleaseScanProposal(
+  sql: Sql,
+  input: { hiveId: string; dedupeKey: string; cooldownHours: number },
+): Promise<{
+  id: string;
+  run_id: string;
+  created_at: Date;
+  created_decision_id: string | null;
+  decision_status: string | null;
+  owner_response: string | null;
+} | null> {
+  const [row] = await sql<Array<{
+    id: string;
+    run_id: string;
+    created_at: Date;
+    created_decision_id: string | null;
+    decision_status: string | null;
+    owner_response: string | null;
+  }>>`
+    SELECT
+      ird.id,
+      ird.run_id,
+      ird.created_at,
+      ird.created_decision_id,
+      d.status AS decision_status,
+      d.owner_response
+    FROM initiative_run_decisions ird
+    LEFT JOIN decisions d
+      ON d.id = ird.created_decision_id
+    WHERE ird.hive_id = ${input.hiveId}
+      AND ird.dedupe_key = ${input.dedupeKey}
+      AND ird.action_taken = 'decision'
+      AND ird.created_at > NOW() - (${input.cooldownHours} * interval '1 hour')
+      AND (
+        d.status IN ('pending', 'ea_review')
+        OR (
+          d.status = 'resolved'
+          AND d.owner_response = 'approved'
+          AND EXISTS (
+            SELECT 1
+            FROM tasks t
+            WHERE t.hive_id = ird.hive_id
+              AND t.created_by = 'decision-release-scan'
+              AND t.status IN ('pending', 'active', 'blocked', 'in_review')
+              AND t.brief LIKE ${"%release-scan-decision:"} || d.id::text || '%'
+          )
+        )
+      )
+    ORDER BY ird.created_at DESC
+    LIMIT 1
+  `;
+
+  return row ?? null;
+}
+
 export async function runLlmReleaseScan(
   sql: Sql,
   input: LlmReleaseScanInput,
@@ -168,7 +222,7 @@ export async function runLlmReleaseScan(
 
     for (const candidate of candidates) {
       const dedupeKey = `${LLM_RELEASE_SCAN_TRIGGER}:${candidate.provider}:${candidate.modelId}`;
-      const cooldown = await findRecentCreatedDecisionByDedupeKey(sql, {
+      const cooldown = await findRecentLiveReleaseScanProposal(sql, {
         hiveId: input.hiveId,
         dedupeKey,
         cooldownHours: DECISION_COOLDOWN_HOURS,
@@ -181,11 +235,18 @@ export async function runLlmReleaseScan(
           candidateKey: dedupeKey,
           candidateRef: candidate.modelId,
           actionTaken: "suppress",
-          rationale: `Suppressed duplicate LLM release proposal for ${candidate.modelId}; an owner-gated proposal already exists in the cooldown window.`,
+          rationale: `Suppressed duplicate LLM release proposal for ${candidate.modelId}; active owner review or downstream patch work already exists in the cooldown window.`,
           suppressionReason: "cooldown_active",
           dedupeKey,
           cooldownHours: DECISION_COOLDOWN_HOURS,
-          evidence: { candidate, priorRunId: cooldown.run_id, priorDecisionRecordId: cooldown.id },
+          evidence: {
+            candidate,
+            priorRunId: cooldown.run_id,
+            priorDecisionRecordId: cooldown.id,
+            priorCreatedDecisionId: cooldown.created_decision_id,
+            priorDecisionStatus: cooldown.decision_status,
+            priorOwnerResponse: cooldown.owner_response,
+          },
         });
         outcomes.push({ actionTaken: "suppress" });
         continue;
