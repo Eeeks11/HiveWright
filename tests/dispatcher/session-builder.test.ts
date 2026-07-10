@@ -12,6 +12,13 @@ import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
 const TEST_ENCRYPTION_KEY = "session-builder-audit-test-key";
+const SESSION_BUILDER_TEST_TIMEOUT_MS = 120_000;
+
+// These tests exercise full dispatcher session assembly against the real test
+// database and role library. The per-test DB reset + role resync routinely
+// takes longer than Vitest's 5000ms default on clean installs, so set an
+// explicit file timeout instead of letting every case fail before assertions run.
+vi.setConfig({ testTimeout: SESSION_BUILDER_TEST_TIMEOUT_MS });
 
 beforeEach(async () => {
   await truncateAll(sql);
