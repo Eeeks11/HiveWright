@@ -33,7 +33,9 @@ SUDOERS_PATH="/etc/sudoers.d/hivewright-update"
 cat > "$UPDATER_DST" <<WRAPPER
 #!/usr/bin/env bash
 set -euo pipefail
-exec "\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}/scripts/hivewright-operational-update-root.sh" "\$@"
+export HIVEWRIGHT_LOCKED_INSTALL_DIR="\${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$INSTALL_DIR}"
+export HIVEWRIGHT_INSTALL_DIR="\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}"
+exec "\$HIVEWRIGHT_INSTALL_DIR/scripts/hivewright-operational-update-root.sh" "\$@"
 WRAPPER
 chown root:root "$UPDATER_DST"
 chmod 0755 "$UPDATER_DST"
@@ -49,6 +51,7 @@ Type=oneshot
 User=root
 Group=root
 Environment=HIVEWRIGHT_INSTALL_DIR=$INSTALL_DIR
+Environment=HIVEWRIGHT_LOCKED_INSTALL_DIR=$INSTALL_DIR
 Environment=HIVEWRIGHT_RUNTIME_ROOT=$RUNTIME_ROOT
 Environment=HIVEWRIGHT_ENV_FILE=$RUNTIME_ROOT/config/.env
 Environment=HIVEWRIGHT_SERVICE_USER=$SERVICE_USER
