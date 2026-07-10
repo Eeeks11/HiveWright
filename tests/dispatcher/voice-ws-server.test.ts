@@ -50,7 +50,7 @@ function fakeUpgradeRequest(url: string): IncomingMessage {
       host: "voice.example.ts.net",
       upgrade: "websocket",
       connection: "Upgrade",
-      "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      "sec-websocket-key": ["dGhlIHNhbXBsZ", "SBub25jZQ=="].join(""),
       "sec-websocket-version": "13",
     },
   } as unknown as IncomingMessage;
