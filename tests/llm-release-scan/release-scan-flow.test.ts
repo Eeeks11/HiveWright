@@ -221,6 +221,54 @@ describe("LLM release scan owner-gated flow", () => {
     expect(await countReleasePatchTasks()).toBe(1);
   });
 
+  it("suppresses duplicate proposals while a commented approval has active patch work", async () => {
+    await runWithSourceText(NEW_MODEL_HTML);
+    const [decision] = await sql<Array<{ id: string }>>`
+      SELECT id FROM decisions WHERE hive_id = ${HIVE}
+    `;
+
+    const approval = await respondToDecision(
+      new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hiveId: HIVE,
+          response: "approved",
+          comment: "Proceed with the registry patch",
+        }),
+      }),
+      { params: Promise.resolve({ id: decision.id }) },
+    );
+    expect(approval.status).toBe(200);
+
+    const [recordedDecision] = await sql<Array<{ owner_response: string | null }>>`
+      SELECT owner_response FROM decisions WHERE id = ${decision.id}
+    `;
+    expect(recordedDecision.owner_response).toBe("approved: Proceed with the registry patch");
+
+    const result = await runWithSourceText(NEW_MODEL_HTML);
+    expect(result).toMatchObject({
+      newModelsDetected: 1,
+      decisionsCreated: 0,
+    });
+
+    const decisions = await sql<Array<{ id: string }>>`
+      SELECT id FROM decisions WHERE hive_id = ${HIVE}
+    `;
+    expect(decisions).toHaveLength(1);
+    expect(await countReleasePatchTasks()).toBe(1);
+
+    const [runDecision] = await sql<Array<{ action_taken: string; suppression_reason: string | null }>>`
+      SELECT action_taken, suppression_reason
+      FROM initiative_run_decisions
+      WHERE run_id = ${result.runId}
+    `;
+    expect(runDecision).toMatchObject({
+      action_taken: "suppress",
+      suppression_reason: "cooldown_active",
+    });
+  });
+
   it("does not queue patch tasks while the decision is pending or after rejection", async () => {
     await runWithSourceText(NEW_MODEL_HTML);
     const [decision] = await sql<Array<{ id: string }>>`

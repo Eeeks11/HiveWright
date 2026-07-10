@@ -172,7 +172,11 @@ async function findRecentLiveReleaseScanProposal(
         d.status IN ('pending', 'ea_review')
         OR (
           d.status = 'resolved'
-          AND d.owner_response = 'approved'
+          AND (
+            d.owner_response = 'approved'
+            OR d.owner_response LIKE 'approved:%'
+            OR d.selected_option_key = 'approve'
+          )
           AND EXISTS (
             SELECT 1
             FROM tasks t
