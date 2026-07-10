@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 
 /**
  * Short-lived signed handshake token for the direct-WS voice path.
@@ -118,4 +119,29 @@ export function verifyVoiceSessionToken(
   }
   if (payload.exp <= now) return null;
   return payload;
+}
+
+/**
+ * Pull a direct-voice WebSocket session token from the upgrade request and
+ * verify it before the `ws` parser is handed the socket. Query-string tokens
+ * are the browser path; bearer tokens keep local smoke/curl flows simple.
+ */
+export function verifyVoiceSessionRequest(
+  req: Pick<IncomingMessage, "url" | "headers">,
+): VoiceSessionTokenPayload | null {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const queryToken = url.searchParams.get("token");
+  if (queryToken) {
+    const payload = verifyVoiceSessionToken(queryToken);
+    if (payload) return payload;
+  }
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string") {
+    const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+    if (m) {
+      const payload = verifyVoiceSessionToken(m[1]);
+      if (payload) return payload;
+    }
+  }
+  return null;
 }
