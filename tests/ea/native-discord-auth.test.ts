@@ -214,6 +214,30 @@ describe("maybeStartNativeEa startup validation", () => {
     if (originalKey === undefined) delete process.env.ENCRYPTION_KEY;
     else process.env.ENCRYPTION_KEY = originalKey;
   });
+
+  it("does not decrypt/register/start active installs with invalid applicationId", async () => {
+    const originalKey = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = "test-key";
+    const sql = vi.fn(async () => [{
+      id: "install-1",
+      hive_id: "55555555-5555-5555-5555-555555555555",
+      config: {
+        applicationId: "not-a-snowflake",
+        channelId: CHANNEL,
+        ownerUserIds: [OWNER],
+      },
+      credential_id: "cred-1",
+    }]) as never;
+
+    const handles = await maybeStartNativeEa(sql);
+
+    expect(handles).toEqual([]);
+    expect(sql).toHaveBeenCalledTimes(1);
+    expect(discordMock.restPut).not.toHaveBeenCalled();
+    expect(discordMock.clients).toHaveLength(0);
+    if (originalKey === undefined) delete process.env.ENCRYPTION_KEY;
+    else process.env.ENCRYPTION_KEY = originalKey;
+  });
 });
 
 describe("startNativeEa ingress rejects before queueing side effects", () => {

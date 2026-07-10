@@ -1,7 +1,7 @@
 import type { Sql } from "postgres";
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { startNativeEa, type NativeEaHandle } from "./connector";
-import { buildDiscordOwnerAuthConfig } from "./discord-auth";
+import { buildDiscordOwnerAuthConfig, normalizeDiscordSnowflake } from "./discord-auth";
 import { normalizeEaModel } from "./runner";
 import { decrypt } from "../../credentials/encryption";
 
@@ -56,7 +56,7 @@ export async function maybeStartNativeEa(sql: Sql): Promise<NativeEaHandle[]> {
 
   const handles: NativeEaHandle[] = [];
   for (const install of installs) {
-    const appId = install.config?.applicationId;
+    const appId = normalizeDiscordSnowflake(install.config?.applicationId);
     const authConfig = buildDiscordOwnerAuthConfig(install.config ?? {});
     if (!appId || !authConfig) {
       console.error(
