@@ -17,7 +17,7 @@ let goalId: string;
 
 beforeEach(async () => {
   await truncateAll(sql);
-  await syncRoleLibrary(path.resolve(__dirname, "../../role-library"), sql);
+  await syncRoleLibrary(path.resolve(__dirname, "../../role-library"), sql, { resetModelAndAdapter: true });
 
   const [biz] = await sql`
     INSERT INTO hives (slug, name, type, workspace_path)

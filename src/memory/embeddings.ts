@@ -143,7 +143,22 @@ export async function findSimilar(
   sql: Sql,
   input: SimilaritySearchInput,
 ): Promise<SimilarityResult[]> {
-  if (!input.pgvectorEnabled) return [];
+  if (!input.pgvectorEnabled || input.sourceTypes.length === 0 || input.limit <= 0) return [];
+
+  try {
+    const vectorRows = await sql`
+      SELECT 1
+      FROM memory_embeddings
+      WHERE source_type = ANY(${input.sourceTypes})
+        AND embedding IS NOT NULL
+        ${input.hiveId ? sql`AND hive_id = ${input.hiveId}` : sql``}
+      LIMIT 1
+    `;
+    if (vectorRows.length === 0) return [];
+  } catch {
+    return [];
+  }
+
   let config: ModelCallerConfig;
   try {
     config = input.modelConfig ?? await getEmbeddingModelConfig(sql);
