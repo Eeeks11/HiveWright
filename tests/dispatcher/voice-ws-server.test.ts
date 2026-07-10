@@ -90,6 +90,31 @@ describe("startVoiceWsServer upgrade auth gate", () => {
     await handle.shutdown();
   });
 
+  it("rejects malformed non-ASCII token signatures before handleUpgrade", async () => {
+    const handle = startVoiceWsServer(fakeSql, 0);
+    const handleUpgrade = vi.spyOn(handle.wss, "handleUpgrade");
+    const socket = new FakeSocket();
+    const malformed = `x.${"é".repeat(43)}`;
+
+    expect(() => {
+      handle.server.emit(
+        "upgrade",
+        fakeUpgradeRequest(
+          `/api/voice/direct/ws?token=${encodeURIComponent(malformed)}`,
+        ),
+        socket as unknown as Socket,
+        Buffer.alloc(0),
+      );
+    }).not.toThrow();
+
+    expect(handleUpgrade).not.toHaveBeenCalled();
+    expect(mocks.mountDirectWsHandler).not.toHaveBeenCalled();
+    expect(socket.writes.join("")).toContain("HTTP/1.1 401 Unauthorized");
+    expect(socket.destroyed).toBe(true);
+
+    await handle.shutdown();
+  });
+
   it("does not let unauthenticated upgrade floods reach handleUpgrade", async () => {
     const handle = startVoiceWsServer(fakeSql, 0);
     const handleUpgrade = vi.spyOn(handle.wss, "handleUpgrade");

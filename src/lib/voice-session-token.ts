@@ -96,12 +96,14 @@ export function verifyVoiceSessionToken(
     createHmac("sha256", secret).update(body).digest(),
   );
   // Constant-time compare. Length-mismatch fast path is also safe — the
-  // signature length is a function of the secret/algorithm, not user input.
-  if (sig.length !== expectedSig.length) return null;
-  const ok = timingSafeEqual(
-    Buffer.from(sig, "utf8"),
-    Buffer.from(expectedSig, "utf8"),
-  );
+  // signature byte length is a function of the secret/algorithm, not user
+  // input. Check Buffer lengths, not string lengths: non-ASCII input can have
+  // the expected character count but a different UTF-8 byte count, and
+  // timingSafeEqual throws when Buffer lengths differ.
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expectedSigBuf = Buffer.from(expectedSig, "utf8");
+  if (sigBuf.length !== expectedSigBuf.length) return null;
+  const ok = timingSafeEqual(sigBuf, expectedSigBuf);
   if (!ok) return null;
 
   let payload: VoiceSessionTokenPayload;
@@ -129,7 +131,12 @@ export function verifyVoiceSessionToken(
 export function verifyVoiceSessionRequest(
   req: Pick<IncomingMessage, "url" | "headers">,
 ): VoiceSessionTokenPayload | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  } catch {
+    return null;
+  }
   const queryToken = url.searchParams.get("token");
   if (queryToken) {
     const payload = verifyVoiceSessionToken(queryToken);
