@@ -5,6 +5,7 @@ import {
   processQaResult,
   parseQaVerdict,
 } from "@/dispatcher/qa-router";
+import { completeTask } from "@/dispatcher/task-claimer";
 import { emitWorkProduct } from "@/work-products/emitter";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -413,6 +414,56 @@ describe("processQaResult", () => {
       expect(updated.completed_at).toBeNull();
       expect(updated.failure_reason).toContain("Deployment-sensitive completion blocked");
       expect(updated.failure_reason).toContain("task-worktree QA alone is not live proof");
+    } finally {
+      if (previousHash === undefined) delete process.env.HIVEWRIGHT_BUILD_HASH;
+      else process.env.HIVEWRIGHT_BUILD_HASH = previousHash;
+    }
+  });
+
+  it("does not apply generated deployment-proof QA policy text to the QA child completion", async () => {
+    const previousHash = process.env.HIVEWRIGHT_BUILD_HASH;
+    process.env.HIVEWRIGHT_BUILD_HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try {
+      const [project] = await sql<{ id: string }[]>`
+        INSERT INTO projects (hive_id, slug, name, git_repo)
+        VALUES (${bizId}, 'ordinary-qa-git-project', 'Ordinary QA Git Project', true)
+        RETURNING id
+      `;
+      const [task] = await sql`
+        INSERT INTO tasks (
+          hive_id, assigned_to, created_by, title, brief, status, qa_required,
+          project_id, result_summary
+        )
+        VALUES (
+          ${bizId},
+          'qa-test-role',
+          'owner',
+          'Refactor helper module',
+          'Improve the parser and run focused tests.',
+          'active',
+          true,
+          ${project.id},
+          'Focused tests passed in the task worktree at commit 36cb96c.'
+        )
+        RETURNING *
+      `;
+
+      const qaTask = await routeToQa(sql, task.id, "Focused tests passed in the task worktree at commit 36cb96c.");
+      expect(qaTask!.brief).toContain("deployment/live/operational completion");
+      expect(qaTask!.brief).toContain("same-build live proof");
+
+      await processQaResult(sql, task.id, { passed: true, feedback: null });
+      await completeTask(sql, qaTask!.id as string, "pass\nOrdinary parser refactor meets the acceptance criteria.");
+
+      const [updatedParent] = await sql`SELECT status, failure_reason, completed_at FROM tasks WHERE id = ${task.id}`;
+      expect(updatedParent.status).toBe("completed");
+      expect(updatedParent.failure_reason).toBeNull();
+      expect(updatedParent.completed_at).not.toBeNull();
+
+      const [updatedQa] = await sql`SELECT status, failure_reason, completed_at FROM tasks WHERE id = ${qaTask!.id as string}`;
+      expect(updatedQa.status).toBe("completed");
+      expect(updatedQa.failure_reason).toBeNull();
+      expect(updatedQa.completed_at).not.toBeNull();
     } finally {
       if (previousHash === undefined) delete process.env.HIVEWRIGHT_BUILD_HASH;
       else process.env.HIVEWRIGHT_BUILD_HASH = previousHash;

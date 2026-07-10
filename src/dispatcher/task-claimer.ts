@@ -235,12 +235,16 @@ async function evaluateTaskDeploymentProof(
   input: { resultSummary?: string | null; qaFeedback?: string | null; workProductSummary?: string | null; workProductContent?: string | null },
 ) {
   const [task] = await sql<{
+    assigned_to: string;
+    parent_task_id: string | null;
     title: string;
     brief: string;
     acceptance_criteria: string | null;
     project_git_repo: boolean | null;
   }[]>`
-    SELECT t.title,
+    SELECT t.assigned_to,
+           t.parent_task_id,
+           t.title,
            t.brief,
            t.acceptance_criteria,
            COALESCE(p.git_repo, false) AS project_git_repo
@@ -249,6 +253,17 @@ async function evaluateTaskDeploymentProof(
     WHERE t.id = ${taskId}
     LIMIT 1
   `;
+
+  if (task?.assigned_to === "qa" && task.parent_task_id) {
+    return {
+      required: false,
+      ok: true,
+      expectedCommit: null,
+      liveBuildHash: null,
+      currentRuntimeBuildHash: null,
+      failures: [],
+    };
+  }
 
   return evaluateDeploymentSensitiveCompletionEvidence({
     projectGitRepo: task?.project_git_repo === true,
