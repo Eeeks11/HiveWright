@@ -23,7 +23,7 @@ export interface CodexReferenceReviewInput {
   timeoutMs?: number;
 }
 
-const DEFAULT_CODEX_PATH = process.env.HIVEWRIGHT_CODEX_CLI_PATH?.trim() || "/home/trent/.npm-global/bin/codex";
+const DEFAULT_CODEX_PATH = process.env.HIVEWRIGHT_CODEX_CLI_PATH?.trim() || path.join(os.homedir(), ".npm-global/bin/codex");
 const DEFAULT_TIMEOUT_MS = Number(process.env.HIVEWRIGHT_REFERENCE_REVIEW_CODEX_TIMEOUT_MS ?? 180_000);
 
 export async function runCodexReferenceDocumentReview(input: CodexReferenceReviewInput): Promise<CodexReferenceProposal[]> {
@@ -133,7 +133,7 @@ function minimalCodexEnv(tempDir: string): NodeJS.ProcessEnv {
   const home = path.join(tempDir, "home");
   const xdg = path.join(tempDir, "xdg");
   return {
-    PATH: process.env.PATH ?? "/home/trent/.npm-global/bin:/usr/local/bin:/usr/bin:/bin",
+    PATH: process.env.PATH ?? [path.join(os.homedir(), ".npm-global/bin"), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
     HOME: home,
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME,

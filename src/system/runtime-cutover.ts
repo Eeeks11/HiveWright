@@ -4,8 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { resolveRuntimePath } from "@/runtime/paths";
 
-const LOCKED_OPERATIONAL_INSTALL = "/home/trent/apps/HiveWright";
-const LEGACY_TOMBSTONE = "/home/trent/hivewrightv2";
+function defaultOperatorHome() {
+  return process.env.HIVEWRIGHT_OPERATOR_HOME ?? os.homedir();
+}
+
+function lockedOperationalInstall() {
+  return process.env.HIVEWRIGHT_OPERATIONAL_INSTALL_ROOT ?? path.join(defaultOperatorHome(), "apps/HiveWright");
+}
+
+function legacyTombstone() {
+  return process.env.HIVEWRIGHT_LEGACY_SOURCE_ROOT ?? path.join(defaultOperatorHome(), "hivewrightv2");
+}
 
 export const RUNTIME_CUTOVER_FILENAME = "latest-runtime-cutover.json";
 
@@ -119,10 +128,11 @@ export function buildRuntimeBuildCommands(): [string, string[]][] {
 export function buildRuntimeCutoverConfig(input: RuntimeCutoverConfigInput): RuntimeCutoverConfig {
   const serviceUser = input.serviceUser ?? os.userInfo().username;
   const runtimeCheckout = path.resolve(input.runtimeCheckout);
-  if (runtimeCheckout !== LOCKED_OPERATIONAL_INSTALL) {
+  const lockedInstall = path.resolve(lockedOperationalInstall());
+  if (runtimeCheckout !== lockedInstall) {
     throw new Error(
       `Refusing to render HiveWright services from writable runtime checkout ${runtimeCheckout}; ` +
-        `services must run from locked operational install ${LOCKED_OPERATIONAL_INSTALL}`,
+        `services must run from locked operational install ${lockedInstall}`,
     );
   }
   const runtimeRoot = path.resolve(input.runtimeRoot ?? path.join(os.homedir(), ".hivewright"));
@@ -194,8 +204,10 @@ WantedBy=default.target
 }
 
 export function renderDispatcherLegacyGuard(config: RuntimeCutoverConfig): string {
+  const lockedInstall = path.resolve(lockedOperationalInstall());
+  const tombstone = path.resolve(legacyTombstone());
   return `[Service]
-ExecStartPre=/usr/bin/bash -lc 'test "$PWD" = "${config.runtimeCheckout}" || { echo "HiveWright dispatcher cwd guard failed: $PWD" >&2; exit 1; }; test "${config.runtimeCheckout}" = "${LOCKED_OPERATIONAL_INSTALL}" || { echo "HiveWright dispatcher must run from locked install ${LOCKED_OPERATIONAL_INSTALL}" >&2; exit 1; }; test ! -e ${LEGACY_TOMBSTONE}/.git || { echo "Forbidden legacy repo ${LEGACY_TOMBSTONE} exists; refusing dispatcher start" >&2; exit 1; }; grep -q "FORBIDDEN LEGACY TOMBSTONE" ${LEGACY_TOMBSTONE}/AGENTS.md || { echo "Legacy tombstone missing; refusing dispatcher start" >&2; exit 1; }'
+ExecStartPre=/usr/bin/bash -lc 'test "$PWD" = "${config.runtimeCheckout}" || { echo "HiveWright dispatcher cwd guard failed: $PWD" >&2; exit 1; }; test "${config.runtimeCheckout}" = "${lockedInstall}" || { echo "HiveWright dispatcher must run from locked install ${lockedInstall}" >&2; exit 1; }; test ! -e ${tombstone}/.git || { echo "Forbidden legacy repo ${tombstone} exists; refusing dispatcher start" >&2; exit 1; }; grep -q "FORBIDDEN LEGACY TOMBSTONE" ${tombstone}/AGENTS.md || { echo "Legacy tombstone missing; refusing dispatcher start" >&2; exit 1; }'
 `;
 }
 

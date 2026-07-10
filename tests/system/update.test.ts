@@ -295,8 +295,8 @@ describe("HiveWright update system", () => {
     );
 
     expect(script).not.toContain('install -o root -g root -m 0755 "$UPDATER_SRC" "$UPDATER_DST"');
-    expect(script).toContain("cat > \"$UPDATER_DST\" <<'WRAPPER'");
-    expect(script).toContain('exec /home/trent/apps/HiveWright/scripts/hivewright-operational-update-root.sh "$@"');
+    expect(script).toContain('cat > "$UPDATER_DST" <<WRAPPER');
+    expect(script).toContain('exec "\\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}/scripts/hivewright-operational-update-root.sh" "\\$@"');
     expect(script).toContain('sudo -u "$SERVICE_USER" sudo -n /usr/local/sbin/hivewright-operational-update status-json >/dev/null');
   });
 

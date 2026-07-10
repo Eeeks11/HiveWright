@@ -134,7 +134,7 @@ describe("closeout drift checker", () => {
         {
           id: "wp-file",
           artifact_kind: "final_artifact",
-          file_path: "/home/trent/.hivewright/hives/h1/work-products/final.png",
+          file_path: "/home/operator/.hivewright/hives/h1/work-products/final.png",
           created_at: "2026-06-12T12:00:00.000Z",
         },
         {
