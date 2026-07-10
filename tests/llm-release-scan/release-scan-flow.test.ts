@@ -239,4 +239,178 @@ describe("LLM release scan owner-gated flow", () => {
     expect(res.status).toBe(200);
     expect(await countReleasePatchTasks()).toBe(0);
   });
+
+  it("creates a fresh owner-review proposal when official GPT-5.6 evidence appears after a prior rejection", async () => {
+    const [priorRun] = await sql<Array<{ id: string }>>`
+      INSERT INTO initiative_runs (
+        hive_id,
+        trigger_type,
+        trigger_ref,
+        status,
+        started_at,
+        completed_at,
+        evaluated_candidates,
+        created_count,
+        created_goals,
+        created_tasks,
+        created_decisions,
+        suppressed_count,
+        noop_count,
+        suppression_reasons,
+        guardrail_config,
+        run_failures,
+        failure_reason
+      )
+      VALUES (
+        ${HIVE},
+        'llm-release-scan',
+        ${SCHEDULE},
+        'completed',
+        ${new Date("2026-06-29T10:00:00.000Z")},
+        ${new Date("2026-06-29T10:05:00.000Z")},
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        ${sql.json({})},
+        ${sql.json({ decisionCooldownHours: 720 })},
+        0,
+        NULL
+      )
+      RETURNING id
+    `;
+
+    const [rejectedDecision] = await sql<Array<{ id: string }>>`
+      INSERT INTO decisions (
+        hive_id,
+        title,
+        context,
+        recommendation,
+        priority,
+        status,
+        kind,
+        owner_response,
+        created_at,
+        resolved_at
+      )
+      VALUES (
+        ${HIVE},
+        'Tier-2: review new openai model openai/gpt-5.6',
+        'Created before official OpenAI docs listed GPT-5.6.',
+        'Wait for official OpenAI documentation before patching.',
+        'normal',
+        'resolved',
+        ${RELEASE_SCAN_DECISION_KIND},
+        'rejected',
+        ${new Date("2026-06-29T10:01:00.000Z")},
+        ${new Date("2026-06-30T09:00:00.000Z")}
+      )
+      RETURNING id
+    `;
+
+    await sql`
+      INSERT INTO initiative_run_decisions (
+        run_id,
+        hive_id,
+        trigger_type,
+        candidate_key,
+        candidate_ref,
+        action_taken,
+        rationale,
+        dedupe_key,
+        cooldown_hours,
+        evidence,
+        created_decision_id,
+        created_at
+      )
+      VALUES (
+        ${priorRun.id},
+        ${HIVE},
+        'llm-release-scan',
+        'llm-release-scan:openai:openai/gpt-5.6',
+        'openai/gpt-5.6',
+        'decision',
+        'Created owner-review proposal before GPT-5.6 was officially documented.',
+        'llm-release-scan:openai:openai/gpt-5.6',
+        720,
+        ${sql.json({
+          candidate: {
+            provider: "openai",
+            modelId: "openai/gpt-5.6",
+          },
+        })},
+        ${rejectedDecision.id},
+        ${new Date("2026-06-29T10:01:00.000Z")}
+      )
+    `;
+
+    const result = await runLlmReleaseScan(
+      sql,
+      {
+        hiveId: HIVE,
+        trigger: {
+          kind: "schedule",
+          scheduleId: SCHEDULE,
+        },
+      },
+      {
+        researchOfficialSources: async () => [{
+          provider: "openai",
+          url: "https://platform.openai.com/docs/models",
+          ok: true,
+          researchMethod: "agent-web-search",
+          text: `
+            Official OpenAI API models page on July 10, 2026 lists gpt-5.6.
+            Input $2.50 per 1M input tokens. Output $10.00 per 1M output tokens.
+          `,
+        }],
+        now: new Date("2026-07-10T12:00:00.000Z"),
+      },
+    );
+
+    expect(result).toMatchObject({
+      newModelsDetected: 1,
+      decisionsCreated: 1,
+      heartbeatRecorded: false,
+    });
+
+    const decisions = await sql<Array<{
+      title: string;
+      status: string;
+      owner_response: string | null;
+      created_at: Date;
+    }>>`
+      SELECT title, status, owner_response, created_at
+      FROM decisions
+      WHERE hive_id = ${HIVE}
+      ORDER BY created_at ASC
+    `;
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]).toMatchObject({
+      title: "Tier-2: review new openai model openai/gpt-5.6",
+      status: "resolved",
+      owner_response: "rejected",
+    });
+    expect(decisions[1]).toMatchObject({
+      title: "Tier-2: review new openai model openai/gpt-5.6",
+      status: "pending",
+      owner_response: null,
+    });
+
+    const runDecisions = await sql<Array<{ action_taken: string; suppression_reason: string | null }>>`
+      SELECT action_taken, suppression_reason
+      FROM initiative_run_decisions
+      WHERE run_id = ${result.runId}
+      ORDER BY created_at ASC
+    `;
+    expect(runDecisions).toEqual([
+      {
+        action_taken: "decision",
+        suppression_reason: null,
+      },
+    ]);
+  });
 });
