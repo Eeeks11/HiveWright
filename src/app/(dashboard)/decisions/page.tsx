@@ -302,7 +302,7 @@ function ActionButton({
 function DecisionsPageContent() {
   const { selected, loading: bizLoading } = useHiveContext();
   const searchParams = useSearchParams();
-  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const requestedTargetHiveId = searchParams?.get("targetHiveId") ?? null;
   const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = target.effectiveHiveId;
   const [decisions, setDecisions] = useState<Decision[]>([]);

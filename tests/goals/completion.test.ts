@@ -179,8 +179,8 @@ describe("completeGoal", () => {
       primary_open_url: `/deliverables/${workProductId}/open`,
     });
     expect(outcomes[0].evidence).toEqual({ taskIds: [taskId], workProductIds: [workProductId] });
-    expect(outcomes[0].why_it_matters).toContain("owner-visible handoff");
-    expect(outcomes[0].recommended_next_action).toContain("Review");
+    expect(outcomes[0].why_it_matters).toContain("so the owner can see what changed");
+    expect(outcomes[0].recommended_next_action).toContain("Open the final output");
     expect(outcomes[0].impact_statement).toContain("Business hive impact");
   });
 

@@ -30,7 +30,7 @@ inside our published refund policy.
 
 function SopImporterPageContent() {
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const { selected } = useHiveContext();
   const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = targetHiveId

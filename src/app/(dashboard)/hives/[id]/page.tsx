@@ -435,6 +435,11 @@ export default function HiveDetailPage() {
 
   const openTargets = targets.filter(t => t.status === "open");
   const historyTargets = targets.filter(t => t.status !== "open");
+  const operatingModelMap = businessOsDashboard?.operatingModelMap ?? {
+    overallScore: null,
+    nextReviewAt: null,
+    modules: [],
+  };
 
   const renderTarget = (t: Target, i: number, isOpen: boolean) => {
     const muted = t.status !== "open";
@@ -615,14 +620,14 @@ export default function HiveDetailPage() {
                   <p className="text-xs text-zinc-500">Ideal Business OS modules, evidence, gaps, actions, systems, and next review.</p>
                 </div>
                 <div className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-100">
-                  Score {businessOsDashboard.operatingModelMap.overallScore ?? "—"}
+                  Score {operatingModelMap.overallScore ?? "—"}
                 </div>
               </div>
-              {businessOsDashboard.operatingModelMap.nextReviewAt && (
-                <p className="text-xs text-zinc-500">Next review: {new Date(businessOsDashboard.operatingModelMap.nextReviewAt).toLocaleString()}</p>
+              {operatingModelMap.nextReviewAt && (
+                <p className="text-xs text-zinc-500">Next review: {new Date(operatingModelMap.nextReviewAt).toLocaleString()}</p>
               )}
               <div className="grid gap-3 md:grid-cols-2">
-                {businessOsDashboard.operatingModelMap.modules.map((module) => (
+                {operatingModelMap.modules.map((module) => (
                   <div key={module.key} className="rounded-md border p-3 text-sm dark:border-zinc-800">
                     <div className="flex items-start justify-between gap-2">
                       <div>

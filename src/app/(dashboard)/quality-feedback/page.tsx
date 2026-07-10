@@ -71,11 +71,11 @@ async function fetchFeedback(
 function QualityFeedbackPageInner() {
   const searchParams = useSearchParams();
   const { selected, loading: hivesLoading } = useHiveContext();
-  const legacyHiveId = searchParams.get("hiveId");
-  const requestedTargetHiveId = searchParams.get("targetHiveId") ?? legacyHiveId;
+  const legacyHiveId = searchParams?.get("hiveId") ?? null;
+  const requestedTargetHiveId = searchParams?.get("targetHiveId") ?? legacyHiveId;
   const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
   const selectedHiveId = target.effectiveHiveId;
-  const qaRunId = searchParams.get("qaRunId");
+  const qaRunId = searchParams?.get("qaRunId") ?? null;
   const [pending, setPending] = useState<QualityFeedbackDecision[]>([]);
   const [resolved, setResolved] = useState<QualityFeedbackDecision[]>([]);
   const [ratings, setRatings] = useState<Record<string, number>>({});

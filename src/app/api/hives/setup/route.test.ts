@@ -111,6 +111,41 @@ describe("POST /api/hives/setup", () => {
           mission: null,
         }];
       }
+      if (query.includes("SELECT name, kind FROM hives")) {
+        return [{ name: "Test Hive", kind: "business" }];
+      }
+      if (query.includes("INSERT INTO business_os_profiles")) {
+        return [{
+          id: "business-profile-1",
+          hive_id: values[0],
+          business_mode: "new_business",
+          business_name: "Test Hive",
+          industry: null,
+          stage: null,
+          summary: null,
+          owner_goals: [],
+          constraints: [],
+          approval_policy: {},
+          ai_spend_budget: {},
+          autonomy_policy: {},
+          source_profile: {},
+        }];
+      }
+      if (query.includes("INSERT INTO business_setup_profiles")) {
+        return [{ id: "business-setup-1" }];
+      }
+      if (query.includes("INSERT INTO business_system_readiness")) {
+        return [{ id: "business-readiness-1" }];
+      }
+      if (query.includes("INSERT INTO business_gaps")) {
+        return [{ id: "business-gap-1" }];
+      }
+      if (query.includes("INSERT INTO business_recommendations")) {
+        return [{ id: "business-recommendation-1" }];
+      }
+      if (query.includes("INSERT INTO business_action_items")) {
+        return [{ id: "business-action-1" }];
+      }
       if (query.includes("SELECT") && query.includes("FROM hive_operating_profiles")) {
         return [];
       }

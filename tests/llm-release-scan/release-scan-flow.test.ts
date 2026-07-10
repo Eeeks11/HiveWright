@@ -175,7 +175,7 @@ describe("LLM release scan owner-gated flow", () => {
     const req = new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ response: "approved", comment: "Proceed with the registry patch" }),
+      body: JSON.stringify({ hiveId: HIVE, response: "approved", comment: "Proceed with the registry patch" }),
     });
     const res = await respondToDecision(req, {
       params: Promise.resolve({ id: decision.id }),
@@ -211,7 +211,7 @@ describe("LLM release scan owner-gated flow", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Proceed with the registry patch" }),
+        body: JSON.stringify({ hiveId: HIVE, response: "approved", comment: "Proceed with the registry patch" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
@@ -232,7 +232,7 @@ describe("LLM release scan owner-gated flow", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "rejected", comment: "Do not patch this model" }),
+        body: JSON.stringify({ hiveId: HIVE, response: "rejected", comment: "Do not patch this model" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );

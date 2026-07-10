@@ -67,7 +67,7 @@ function ConnectorsPageContent() {
   const { selected } = useHiveContext();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = targetHiveId
     ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)

@@ -35,14 +35,14 @@ describe("GET /api/tasks/[id]/attachments", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "task-1", hive_id: "hive-1", goal_id: "goal-1" }]);
+    mockSql.mockResolvedValueOnce([{ id: "task-1", hive_id: "11111111-1111-4111-8111-111111111111", goal_id: "goal-1" }]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1/attachments"), params);
+    const res = await GET(new Request("http://localhost/api/tasks/task-1/attachments?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(403);
     expect(mockSql).toHaveBeenCalledTimes(1);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("allows hive members to list task and inherited goal attachments", async () => {
@@ -50,7 +50,8 @@ describe("GET /api/tasks/[id]/attachments", () => {
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
     mockSql
-      .mockResolvedValueOnce([{ id: "task-1", hive_id: "hive-1", goal_id: "goal-1" }])
+      .mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }])
+      .mockResolvedValueOnce([{ id: "task-1", hive_id: "11111111-1111-4111-8111-111111111111", goal_id: "goal-1" }])
       .mockResolvedValueOnce([
         {
           id: "att-1",
@@ -63,11 +64,11 @@ describe("GET /api/tasks/[id]/attachments", () => {
       ]);
     mockCanAccessHive.mockResolvedValueOnce(true);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1/attachments"), params);
+    const res = await GET(new Request("http://localhost/api/tasks/task-1/attachments?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toMatchObject([{ id: "att-1", source: "goal" }]);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "11111111-1111-4111-8111-111111111111");
   });
 });
