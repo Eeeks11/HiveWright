@@ -63,7 +63,42 @@ describe("runEa", () => {
     expect(command).toBe("codex");
     expect(args).toContain("exec");
     expect(args).toContain("--json");
+    expect(args).toContain("--sandbox");
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
+    expect(args).toContain("--ask-for-approval");
+    expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("on-request");
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(args).not.toContain("-m");
+  });
+
+  it("uses a minimal allowlisted environment instead of inheriting dispatcher secrets", async () => {
+    process.env.HIVEWRIGHT_EA_SENTINEL_SECRET = "do-not-pass";
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    const run = runEa("test prompt");
+    queueMicrotask(() => proc.emit("close", 0));
+
+    await expect(run).resolves.toMatchObject({ success: true });
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string | undefined> };
+    expect(spawnOptions.env.HIVEWRIGHT_EA_SENTINEL_SECRET).toBeUndefined();
+    expect(spawnOptions.env.OPENAI_API_KEY).toBeUndefined();
+    expect(spawnOptions.env.OPENAI_BASE_URL).toBeUndefined();
+    expect(spawnOptions.env.HOME).toBe(process.env.HOME);
+    delete process.env.HIVEWRIGHT_EA_SENTINEL_SECRET;
+  });
+
+  it("uses isolated HOME/XDG directories when a caller provides runtimeHome", async () => {
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    const run = runEa("test prompt", { runtimeHome: "/tmp/hivewright-ea-test-home" });
+    queueMicrotask(() => proc.emit("close", 0));
+
+    await expect(run).resolves.toMatchObject({ success: true });
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string | undefined> };
+    expect(spawnOptions.env.HOME).toBe("/tmp/hivewright-ea-test-home");
+    expect(spawnOptions.env.XDG_CONFIG_HOME).toBe("/tmp/hivewright-ea-test-home/.config");
   });
 
   it("passes a configured EA model through to Codex", async () => {

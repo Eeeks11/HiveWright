@@ -1316,7 +1316,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
   name: "HiveWright EA (Discord)",
   category: "messaging",
   description:
-    "Hosts this hive's Executive Assistant on Discord. The dispatcher runs a bot that listens in the configured channel (and DMs), handles /status + /new slash commands, and replies to owner messages with full shell + HiveWright API access. Replaces the OpenClaw-gateway EA.",
+    "Hosts this hive's Executive Assistant on Discord. The dispatcher runs a bot that listens only in the configured channel/guild and only accepts messages or slash commands from configured owner Discord user IDs. DMs are disabled unless explicitly enabled. This PR keeps existing installs fail-closed until owner IDs are configured.",
   icon: "🐝",
   authType: "api_key",
   setupFields: [
@@ -1324,7 +1324,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
       key: "applicationId",
       label: "Discord Application ID",
       type: "text",
-      placeholder: "1234567890...",
+      placeholder: "123456789012345678",
       helpText:
         "From the Discord developer portal → your app → General Information → Application ID.",
       required: true,
@@ -1333,10 +1333,27 @@ const eaDiscord: ConnectorDefinitionDraft = {
       key: "channelId",
       label: "Discord channel ID",
       type: "text",
-      placeholder: "1234567890...",
+      placeholder: "123456789012345678",
       helpText:
-        "Right-click the channel in Discord with Developer Mode on → Copy Channel ID.",
+        "Required. Right-click the single channel this EA may read with Developer Mode on → Copy Channel ID. Non-DM messages outside this channel are rejected before any side effect.",
       required: true,
+    },
+    {
+      key: "ownerUserIds",
+      label: "Owner Discord user IDs",
+      type: "textarea",
+      placeholder: "123456789012345678\n234567890123456789",
+      helpText:
+        "Required allowlist. Add one Discord user ID per line (Developer Mode → right-click user → Copy User ID). Installs without at least one valid owner user ID will not start.",
+      required: true,
+    },
+    {
+      key: "directMessagesEnabled",
+      label: "Enable DMs — optional",
+      type: "text",
+      placeholder: "false",
+      helpText:
+        "DMs are disabled by default. Set exactly 'true' only if this EA should accept DMs, and only from the allowed owner Discord user IDs.",
     },
     {
       key: "botToken",
@@ -1399,7 +1416,13 @@ const eaDiscord: ConnectorDefinitionDraft = {
           botUsername: me.username,
           applicationId: config.applicationId,
           channelId: config.channelId,
-          note: "After saving, restart the dispatcher to take the EA online. The dispatcher auto-registers /status and /new on startup.",
+          ownerUserIdsConfigured: Array.isArray(config.ownerUserIds)
+            ? config.ownerUserIds.length
+            : typeof config.ownerUserIds === "string"
+              ? config.ownerUserIds.split(/[\s,]+/).filter(Boolean).length
+              : 0,
+          directMessagesEnabled: config.directMessagesEnabled === true || config.directMessagesEnabled === "true",
+          note: "After saving, restart the dispatcher to take the EA online. The dispatcher refuses to start ea-discord installs without valid owner Discord user IDs; DMs stay disabled unless explicitly enabled.",
         };
       },
     },

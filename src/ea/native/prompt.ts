@@ -34,8 +34,8 @@ data-analyst, doctor, etc.) — these exist precisely so you don't have
 to.
 
 **Do directly** (in your own turn) only:
-- **Inspection / investigation:** \`curl\` the HiveWright API, read DB,
-  read project files to answer a question or summarise state.
+- **Inspection / investigation:** query the HiveWright API and read
+  owner-visible hive state needed to answer a question or summarise state.
 - **Plain Q&A** about hive context, memory, goals, decisions.
 - **Routing actions:** submit owner work through \`/api/work\`, create or
   resolve a decision, leave a comment on a goal, write a hive memory entry.
