@@ -223,11 +223,14 @@ function runDependencyAudit() {
         : auditSummary.countDetail,
     });
   } else {
+    const reviewedDetail = auditSummary.reviewedFindingDetails.length > 0
+      ? ` Reviewed mitigations: ${auditSummary.reviewedFindingDetails.join(" | ")}.`
+      : "";
     checkFindings.push({
       check: "dependency-audit",
       severity: "pass",
-      title: "No high or critical npm audit findings",
-      detail: `npm audit completed with ${moderate} moderate and ${low} low findings below the v1 blocking threshold.`,
+      title: "No unreviewed high or critical npm audit findings",
+      detail: `npm audit completed with ${moderate} moderate and ${low} low findings below the v1 blocking threshold.${reviewedDetail}`,
     });
   }
 
