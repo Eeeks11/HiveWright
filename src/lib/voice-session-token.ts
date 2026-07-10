@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 
 /**
  * Short-lived signed handshake token for the direct-WS voice path.
@@ -95,12 +96,14 @@ export function verifyVoiceSessionToken(
     createHmac("sha256", secret).update(body).digest(),
   );
   // Constant-time compare. Length-mismatch fast path is also safe — the
-  // signature length is a function of the secret/algorithm, not user input.
-  if (sig.length !== expectedSig.length) return null;
-  const ok = timingSafeEqual(
-    Buffer.from(sig, "utf8"),
-    Buffer.from(expectedSig, "utf8"),
-  );
+  // signature byte length is a function of the secret/algorithm, not user
+  // input. Check Buffer lengths, not string lengths: non-ASCII input can have
+  // the expected character count but a different UTF-8 byte count, and
+  // timingSafeEqual throws when Buffer lengths differ.
+  const sigBuf = Buffer.from(sig, "utf8");
+  const expectedSigBuf = Buffer.from(expectedSig, "utf8");
+  if (sigBuf.length !== expectedSigBuf.length) return null;
+  const ok = timingSafeEqual(sigBuf, expectedSigBuf);
   if (!ok) return null;
 
   let payload: VoiceSessionTokenPayload;
@@ -118,4 +121,34 @@ export function verifyVoiceSessionToken(
   }
   if (payload.exp <= now) return null;
   return payload;
+}
+
+/**
+ * Pull a direct-voice WebSocket session token from the upgrade request and
+ * verify it before the `ws` parser is handed the socket. Query-string tokens
+ * are the browser path; bearer tokens keep local smoke/curl flows simple.
+ */
+export function verifyVoiceSessionRequest(
+  req: Pick<IncomingMessage, "url" | "headers">,
+): VoiceSessionTokenPayload | null {
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  } catch {
+    return null;
+  }
+  const queryToken = url.searchParams.get("token");
+  if (queryToken) {
+    const payload = verifyVoiceSessionToken(queryToken);
+    if (payload) return payload;
+  }
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string") {
+    const m = /^Bearer\s+(.+)$/i.exec(authHeader);
+    if (m) {
+      const payload = verifyVoiceSessionToken(m[1]);
+      if (payload) return payload;
+    }
+  }
+  return null;
 }

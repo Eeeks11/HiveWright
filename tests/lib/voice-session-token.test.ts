@@ -50,6 +50,13 @@ describe("voice session token", () => {
     expect(verifyVoiceSessionToken("body.")).toBeNull();
   });
 
+  it("returns null instead of throwing for a malformed non-ASCII signature", () => {
+    const malformed = `x.${"é".repeat(43)}`;
+
+    expect(() => verifyVoiceSessionToken(malformed)).not.toThrow();
+    expect(verifyVoiceSessionToken(malformed)).toBeNull();
+  });
+
   it("returns null when the secret is missing", () => {
     delete process.env.INTERNAL_SERVICE_TOKEN;
     // Sign throws when secret is missing — callers shouldn't be calling
