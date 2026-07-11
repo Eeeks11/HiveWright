@@ -253,6 +253,12 @@ export async function GET(request: Request) {
         openGapsCount: Number(r.business_os_open_gaps_count ?? 0),
         approvalsRequiredCount: Number(r.business_os_approvals_required_count ?? 0),
         nextAction: r.business_os_next_action ?? (r.business_os_profile_id ? "Open Business OS dashboard" : "Set up or audit this business"),
+        actionPreview: r.business_os_next_action && r.business_os_profile_id && r.business_os_next_action !== "Open Business OS dashboard" ? {
+          title: r.business_os_next_action,
+          href: null,
+          stateLabel: "Missing target",
+          description: "This Business OS action is informational until HiveWright links it to a decision, task, deliverable, or conversion target.",
+        } : null,
       } : null,
     }));
     return jsonOk(data);

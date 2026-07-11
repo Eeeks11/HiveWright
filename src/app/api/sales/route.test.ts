@@ -99,7 +99,7 @@ describe("/api/sales", () => {
     expect(sqlText).toContain("manual_queue");
   });
 
-  it("rolls back the full sales plan create flow when approval draft creation fails", async () => {
+  it("returns a specific persistence message instead of the opaque default when approval draft creation fails", async () => {
     mocks.sql.begin.mockRejectedValueOnce(new Error("approval draft insert failed"));
 
     const res = await POST(request("/api/sales", {
@@ -109,8 +109,12 @@ describe("/api/sales", () => {
       customerType: "lead",
       metrics: { traffic: 100, leads: 20, responded: 5, qualified: 4, booked: 2, showed: 2, sold: 1, reviews: 0, referrals: 0, repeatPurchases: 0 },
     }));
+    const body = await res.json();
 
     expect(res.status).toBe(500);
     expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
+    expect(body.error).toContain("Sales conversion plan draft was not saved");
+    expect(body.error).toContain("approval draft insert failed");
+    expect(body.error).not.toBe("Failed to create sales conversion plan");
   });
 });

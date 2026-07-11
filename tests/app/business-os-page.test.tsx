@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+
+const hiveContextMock = vi.hoisted(() => ({ selected: null as null | { id: string; name: string } }));
+vi.mock("@/components/hive-context", () => ({
+  useHiveContext: () => ({ selected: hiveContextMock.selected, loading: false }),
+}));
+
 import BusinessOsIndexPage from "../../src/app/(dashboard)/business-os/page";
 
 describe("BusinessOsIndexPage", () => {
   let originalFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
+    hiveContextMock.selected = null;
     originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
@@ -27,6 +34,7 @@ describe("BusinessOsIndexPage", () => {
                 openGapsCount: 3,
                 approvalsRequiredCount: 2,
                 nextAction: "Review owner approvals",
+                actionPreview: { title: "Approve finance checklist", href: null, stateLabel: "Missing target", description: "No linked decision, task, deliverable, or conversion target is available yet." },
               },
             },
             {
@@ -83,5 +91,24 @@ describe("BusinessOsIndexPage", () => {
     expect(screen.getByText("Set up or audit this business")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Set up or audit WM Unconfigured" }).getAttribute("href")).toBe("/hives/22222222-2222-4222-8222-222222222222/business-os/setup");
     expect(screen.queryByText("Research Hive")).toBeNull();
+  });
+
+  it("labels the global Business OS index and offers the active hive context when one is selected", async () => {
+    hiveContextMock.selected = { id: "11111111-1111-4111-8111-111111111111", name: "Whiston Management" };
+
+    render(<BusinessOsIndexPage />);
+
+    expect(await screen.findByText(/Global\/all-hives Business OS index/)).toBeTruthy();
+    const activeHiveLink = screen.getByRole("link", { name: "Open active hive Business OS context" });
+    expect(activeHiveLink.getAttribute("href")).toBe("/hives/11111111-1111-4111-8111-111111111111");
+  });
+
+  it("labels Business OS action previews without targets as missing target instead of rendering fake actions", async () => {
+    render(<BusinessOsIndexPage />);
+
+    expect(await screen.findByText("Approve finance checklist")).toBeTruthy();
+    expect(screen.getByText("Missing target")).toBeTruthy();
+    expect(screen.getByText("No linked decision, task, deliverable, or conversion target is available yet.")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: /Open action target/i })).toBeNull();
   });
 });

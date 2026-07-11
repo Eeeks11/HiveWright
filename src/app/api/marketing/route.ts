@@ -213,78 +213,83 @@ export async function POST(request: Request) {
 
     const draft = createMarketingObjectiveDraft({ hiveId, objective, targetAudience, offer, channels });
     const successMetrics = successMetricsForChannels(channels);
-    const profileRows = await sql`
-      INSERT INTO marketing_profiles (hive_id, industry, target_customers, offers, service_areas, approval_policy)
-      VALUES (${hiveId}, ${"unspecified"}, ${JSON.stringify([targetAudience])}::jsonb, ${JSON.stringify([offer])}::jsonb, ${JSON.stringify([])}::jsonb,
-              ${JSON.stringify({ publicOrSpendActions: "owner_approval_required", defaultAutonomyLevel: 1 })}::jsonb)
-      ON CONFLICT (hive_id) DO UPDATE SET updated_at = now()
-      RETURNING id
-    `;
-    const campaignRows = await sql`
-      INSERT INTO marketing_campaigns (hive_id, profile_id, objective, status, channels, target_audience, offer, success_metrics, approval_policy)
-      VALUES (${hiveId}, ${(profileRows[0] as { id: string }).id}, ${objective}, ${"draft"}, ${JSON.stringify(channels)}::jsonb,
-              ${targetAudience}, ${offer}, ${JSON.stringify(successMetrics)}::jsonb,
-              ${JSON.stringify({ publicOrSpendActions: "owner_approval_required" })}::jsonb)
-      RETURNING id, hive_id, objective, status, channels, target_audience, offer, spend_budget_cents, success_metrics, created_at
-    `;
-    const campaign = mapCampaign((campaignRows as unknown as Record<string, unknown>[])[0]);
-    const assetPayload = draft.assets.map((asset) => ({
-      channel: asset.channel,
-      assetType: asset.assetType,
-      title: asset.title,
-      draftBody: asset.draftBody,
-      scheduledFor: asset.scheduledFor,
-      requestPayload: {
-        domain: "marketing-attention",
-        campaignId: campaign.id,
+    const created = await sql.begin(async (tx) => {
+      const profileRows = await tx`
+        INSERT INTO marketing_profiles (hive_id, industry, target_customers, offers, service_areas, approval_policy)
+        VALUES (${hiveId}, ${"unspecified"}, ${JSON.stringify([targetAudience])}::jsonb, ${JSON.stringify([offer])}::jsonb, ${JSON.stringify([])}::jsonb,
+                ${JSON.stringify({ publicOrSpendActions: "owner_approval_required", defaultAutonomyLevel: 1 })}::jsonb)
+        ON CONFLICT (hive_id) DO UPDATE SET updated_at = now()
+        RETURNING id
+      `;
+      const campaignRows = await tx`
+        INSERT INTO marketing_campaigns (hive_id, profile_id, objective, status, channels, target_audience, offer, success_metrics, approval_policy)
+        VALUES (${hiveId}, ${(profileRows[0] as { id: string }).id}, ${objective}, ${"draft"}, ${JSON.stringify(channels)}::jsonb,
+                ${targetAudience}, ${offer}, ${JSON.stringify(successMetrics)}::jsonb,
+                ${JSON.stringify({ publicOrSpendActions: "owner_approval_required" })}::jsonb)
+        RETURNING id, hive_id, objective, status, channels, target_audience, offer, spend_budget_cents, success_metrics, created_at
+      `;
+      const campaign = mapCampaign((campaignRows as unknown as Record<string, unknown>[])[0]);
+      const assetPayload = draft.assets.map((asset) => ({
         channel: asset.channel,
+        assetType: asset.assetType,
         title: asset.title,
         draftBody: asset.draftBody,
-      },
-    }));
+        scheduledFor: asset.scheduledFor,
+        requestPayload: {
+          domain: "marketing-attention",
+          campaignId: campaign.id,
+          channel: asset.channel,
+          title: asset.title,
+          draftBody: asset.draftBody,
+        },
+      }));
 
-    const assetRows = await sql`
-      WITH payload AS (
-        SELECT * FROM jsonb_to_recordset(${JSON.stringify(assetPayload)}::jsonb)
-          AS x(channel text, "assetType" text, title text, "draftBody" text, "scheduledFor" timestamptz, "requestPayload" jsonb)
-      ), action_requests AS (
-        INSERT INTO external_action_requests (hive_id, connector, operation, state, requested_by, request_payload, policy_snapshot)
-        SELECT ${hiveId}, channel, 'publish_marketing_asset', 'awaiting_approval', ${authz.user.id}, "requestPayload",
-               ${JSON.stringify({ publicOrSpendActions: "owner_approval_required" })}::jsonb
-        FROM payload
-        RETURNING id, request_payload
-      ), approval_decisions AS (
-        INSERT INTO decisions (hive_id, title, context, recommendation, options, priority, status, kind, route_metadata)
-        SELECT ${hiveId},
-               'Approve marketing asset publication?',
-               'Marketing OS asset draft requires owner approval before any public, spend, or customer-facing execution.',
-               'Approve only if the draft matches the offer, brand voice, and risk boundary.',
-               ${JSON.stringify([
-                 { key: "approve", label: "Approve", consequence: "Allow this marketing asset to be queued for execution." },
-                 { key: "reject", label: "Reject", consequence: "Block this marketing asset from execution." },
-               ])}::jsonb,
-               'normal', 'pending', 'external_action_approval',
-               jsonb_build_object('externalActionRequestId', ar.id, 'connectorSlug', p.channel, 'operation', 'publish_marketing_asset', 'domain', 'marketing-attention')
-        FROM action_requests ar
-        JOIN payload p ON ar.request_payload->>'title' = p.title
-        RETURNING id, route_metadata
-      ), linked_requests AS (
-        UPDATE external_action_requests ear
-        SET decision_id = ad.id, updated_at = now()
-        FROM approval_decisions ad
-        WHERE ear.id = (ad.route_metadata->>'externalActionRequestId')::uuid
-        RETURNING ear.id, ear.decision_id, ear.request_payload
-      )
-      INSERT INTO marketing_assets (hive_id, campaign_id, external_action_request_id, channel, asset_type, title, draft_body, scheduled_for)
-      SELECT ${hiveId}, ${campaign.id}, lr.id, p.channel, p."assetType", p.title, p."draftBody", p."scheduledFor"
-      FROM payload p
-      JOIN linked_requests lr ON lr.request_payload->>'title' = p.title
-      RETURNING id, hive_id, campaign_id, external_action_request_id, channel, asset_type, title, draft_body,
-                approval_status, publication_status, scheduled_for
-    `;
+      const assetRows = await tx`
+        WITH payload AS (
+          SELECT * FROM jsonb_to_recordset(${JSON.stringify(assetPayload)}::jsonb)
+            AS x(channel text, "assetType" text, title text, "draftBody" text, "scheduledFor" timestamptz, "requestPayload" jsonb)
+        ), action_requests AS (
+          INSERT INTO external_action_requests (hive_id, connector, operation, state, requested_by, request_payload, policy_snapshot)
+          SELECT ${hiveId}, channel, 'publish_marketing_asset', 'awaiting_approval', ${authz.user.id}, "requestPayload",
+                 ${JSON.stringify({ publicOrSpendActions: "owner_approval_required" })}::jsonb
+          FROM payload
+          RETURNING id, request_payload
+        ), approval_decisions AS (
+          INSERT INTO decisions (hive_id, title, context, recommendation, options, priority, status, kind, route_metadata)
+          SELECT ${hiveId},
+                 'Approve marketing asset publication?',
+                 'Marketing OS asset draft requires owner approval before any public, spend, or customer-facing execution.',
+                 'Approve only if the draft matches the offer, brand voice, and risk boundary.',
+                 ${JSON.stringify([
+                   { key: "approve", label: "Approve", consequence: "Allow this marketing asset to be queued for execution." },
+                   { key: "reject", label: "Reject", consequence: "Block this marketing asset from execution." },
+                 ])}::jsonb,
+                 'normal', 'pending', 'external_action_approval',
+                 jsonb_build_object('externalActionRequestId', ar.id, 'connectorSlug', p.channel, 'operation', 'publish_marketing_asset', 'domain', 'marketing-attention')
+          FROM action_requests ar
+          JOIN payload p ON ar.request_payload->>'title' = p.title
+          RETURNING id, route_metadata
+        ), linked_requests AS (
+          UPDATE external_action_requests ear
+          SET decision_id = ad.id, updated_at = now()
+          FROM approval_decisions ad
+          WHERE ear.id = (ad.route_metadata->>'externalActionRequestId')::uuid
+          RETURNING ear.id, ear.decision_id, ear.request_payload
+        )
+        INSERT INTO marketing_assets (hive_id, campaign_id, external_action_request_id, channel, asset_type, title, draft_body, scheduled_for)
+        SELECT ${hiveId}, ${campaign.id}, lr.id, p.channel, p."assetType", p.title, p."draftBody", p."scheduledFor"
+        FROM payload p
+        JOIN linked_requests lr ON lr.request_payload->>'title' = p.title
+        RETURNING id, hive_id, campaign_id, external_action_request_id, channel, asset_type, title, draft_body,
+                  approval_status, publication_status, scheduled_for
+      `;
 
-    return jsonOk({ campaign, assets: (assetRows as unknown as Record<string, unknown>[]).map(mapAsset) }, 201);
-  } catch {
-    return jsonError("Failed to create marketing objective", 500);
+      return { campaign, assetRows };
+    });
+
+    return jsonOk({ campaign: created.campaign, assets: (created.assetRows as unknown as Record<string, unknown>[]).map(mapAsset) }, 201);
+  } catch (err) {
+    const detail = err instanceof Error && err.message ? `: ${err.message}` : "";
+    return jsonError(`Marketing objective draft was not saved. Check that the hive is valid and approval decision storage is available${detail}`, 500);
   }
 }

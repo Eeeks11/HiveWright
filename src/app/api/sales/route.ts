@@ -295,7 +295,8 @@ export async function POST(request: Request) {
       actionPlan: { ...plan.actionPlan, id: created.actionPlanId, funnelId: created.funnelId },
       actionDrafts: (created.actionDraftRows as unknown as Record<string, unknown>[]).map(mapActionDraft),
     }, 201);
-  } catch {
-    return jsonError("Failed to create sales conversion plan", 500);
+  } catch (err) {
+    const detail = err instanceof Error && err.message ? `: ${err.message}` : "";
+    return jsonError(`Sales conversion plan draft was not saved. Check that the hive, segment, metrics, and approval decision storage are valid${detail}`, 500);
   }
 }

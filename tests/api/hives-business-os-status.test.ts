@@ -86,7 +86,7 @@ describe("GET /api/hives Business OS acceptance status", () => {
       expect.objectContaining({
         slug: "wm",
         kind: "business",
-        businessOs: {
+        businessOs: expect.objectContaining({
           status: "audit_in_progress",
           mode: "existing_business",
           profileId: "profile-1",
@@ -99,12 +99,17 @@ describe("GET /api/hives Business OS acceptance status", () => {
           openGapsCount: 3,
           approvalsRequiredCount: 2,
           nextAction: "Review owner approvals",
-        },
+          actionPreview: expect.objectContaining({
+            title: "Review owner approvals",
+            href: null,
+            stateLabel: "Missing target",
+          }),
+        }),
       }),
       expect.objectContaining({
         slug: "newco",
         kind: "business",
-        businessOs: {
+        businessOs: expect.objectContaining({
           status: "setup_required",
           mode: null,
           profileId: null,
@@ -117,7 +122,8 @@ describe("GET /api/hives Business OS acceptance status", () => {
           openGapsCount: 0,
           approvalsRequiredCount: 0,
           nextAction: "Set up or audit this business",
-        },
+          actionPreview: null,
+        }),
       }),
       expect.objectContaining({
         slug: "research",
