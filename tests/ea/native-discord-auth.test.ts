@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const eaRouteMock = vi.hoisted(() => ({
+  resolveEaModelRoute: vi.fn(),
+  recordEaModelRouteTelemetry: vi.fn(),
+}));
+
+vi.mock("@/ea/native/model-selection", () => eaRouteMock);
+vi.mock("@/credentials/encryption", () => ({
+  decrypt: vi.fn(() => JSON.stringify({ botToken: "decrypted-bot-token" })),
+}));
+
 const discordMock = vi.hoisted(() => {
   class FakeClient {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -123,6 +133,13 @@ beforeEach(() => {
   discordMock.clients.length = 0;
   discordMock.restPut.mockClear();
   vi.clearAllMocks();
+  eaRouteMock.resolveEaModelRoute.mockResolvedValue({
+    model: "openai-codex/gpt-5.6-sol",
+    selected: "primary",
+    reason: "fresh_healthy_probe",
+    primaryModel: "openai-codex/gpt-5.6-sol",
+    fallbackModel: "openai-codex/gpt-5.5",
+  });
 });
 
 describe("Discord EA owner auth config", () => {
@@ -192,6 +209,43 @@ describe("Discord EA owner auth config", () => {
 });
 
 describe("maybeStartNativeEa startup validation", () => {
+  it("starts Discord with the same shared healthy per-hive route and records telemetry", async () => {
+    const originalKey = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = "test-key";
+    const sql = vi.fn()
+      .mockResolvedValueOnce([{
+        id: "install-1",
+        hive_id: "55555555-5555-5555-5555-555555555555",
+        config: {
+          applicationId: "666456789012345678",
+          channelId: CHANNEL,
+          ownerUserIds: [OWNER],
+        },
+        credential_id: "cred-1",
+      }])
+      .mockResolvedValueOnce([{ value: "encrypted" }]) as never;
+
+    const handles = await maybeStartNativeEa(sql);
+
+    expect(handles).toHaveLength(1);
+    expect(eaRouteMock.resolveEaModelRoute).toHaveBeenCalledWith(
+      sql,
+      "55555555-5555-5555-5555-555555555555",
+    );
+    expect(eaRouteMock.recordEaModelRouteTelemetry).toHaveBeenCalledWith(sql, {
+      hiveId: "55555555-5555-5555-5555-555555555555",
+      transport: "discord",
+      route: expect.objectContaining({
+        model: "openai-codex/gpt-5.6-sol",
+        selected: "primary",
+      }),
+    });
+    expect(discordMock.clients[0]?.login).toHaveBeenCalledWith("decrypted-bot-token");
+    await handles[0].shutdown();
+    if (originalKey === undefined) delete process.env.ENCRYPTION_KEY;
+    else process.env.ENCRYPTION_KEY = originalKey;
+  });
+
   it("does not decrypt/register/start active installs missing owner allowlist", async () => {
     const originalKey = process.env.ENCRYPTION_KEY;
     process.env.ENCRYPTION_KEY = "test-key";

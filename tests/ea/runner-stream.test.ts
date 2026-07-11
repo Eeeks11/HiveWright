@@ -10,7 +10,7 @@ import path from "node:path";
 vi.mock("child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn } from "child_process";
-import { runEa, runEaStream } from "@/ea/native/runner";
+import { buildEaCommandArgs, runEa, runEaStream } from "@/ea/native/runner";
 
 const mockSpawn = vi.mocked(spawn) as unknown as Mock;
 
@@ -52,6 +52,21 @@ afterEach(() => {
 });
 
 describe("runEa", () => {
+  it("builds the canonical GPT-5.6 Sol Codex command", () => {
+    expect(buildEaCommandArgs({ model: "openai-codex/gpt-5.6-sol" }, "/tmp/ea")).toEqual([
+      "exec",
+      "--json",
+      "--sandbox",
+      "workspace-write",
+      "--ask-for-approval",
+      "on-request",
+      "--skip-git-repo-check",
+      "-m",
+      "gpt-5.6-sol",
+      "-C",
+      "/tmp/ea",
+    ]);
+  });
   it("runs the Codex CLI without forcing a source-code default model", async () => {
     const proc = makeFakeProc();
     mockSpawn.mockReturnValue(proc);
@@ -175,16 +190,16 @@ describe("runEa", () => {
     }
   });
 
-  it("passes a configured EA model through to Codex", async () => {
+  it("passes the canonical GPT-5.6 Sol model through to Codex", async () => {
     const proc = makeFakeProc();
     mockSpawn.mockReturnValue(proc);
 
-    const run = runEa("test prompt", { model: "openai-codex/gpt-5.5" });
+    const run = runEa("test prompt", { model: "openai-codex/gpt-5.6-sol" });
     queueMicrotask(() => proc.emit("close", 0));
 
     await expect(run).resolves.toMatchObject({ success: true });
     const args = mockSpawn.mock.calls[0]?.[1] as string[];
-    expect(args[args.indexOf("-m") + 1]).toBe("gpt-5.5");
+    expect(args[args.indexOf("-m") + 1]).toBe("gpt-5.6-sol");
   });
 
   it("adds attachment prompt references", async () => {

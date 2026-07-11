@@ -88,6 +88,21 @@ export const CURATED_MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     provider: "openai",
     adapterType: "codex",
+    modelId: "openai-codex/gpt-5.6-sol",
+    displayName: "GPT-5.6 Sol",
+    family: "gpt-5",
+    capabilities: ["text", "code", "reasoning"],
+    local: false,
+    costPerInputToken: "0.000005",
+    costPerOutputToken: "0.000030",
+    benchmarkQualityScore: null,
+    routingCostScore: 70,
+    metadataSourceName: "OpenAI GPT-5.6 Sol pricing",
+    metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+  },
+  {
+    provider: "openai",
+    adapterType: "codex",
     modelId: "openai-codex/gpt-5.5",
     displayName: "GPT-5.5",
     family: "gpt-5",
@@ -683,6 +698,10 @@ async function retireUnbenchmarkedAutoDiscoveredModels(sql: Sql) {
           'ollama_tags_api'
         )
         AND mc.benchmark_quality_score IS NULL
+        AND mc.cost_per_input_token IS NULL
+        AND mc.cost_per_output_token IS NULL
+        AND mc.routing_cost_score IS NULL
+        AND mc.metadata_source_name IS NULL
         AND NOT EXISTS (
           SELECT 1
           FROM model_capability_scores mcs

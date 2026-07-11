@@ -117,6 +117,53 @@ describe("ConnectorsPage", () => {
     });
   });
 
+  it("loads and persists shared EA primary and fallback routing", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "/api/connectors") return jsonResponse({ data: [] });
+      if (url === "/api/connector-installs?hiveId=hive-1") return jsonResponse({ data: [] });
+      if (url === "/api/hives/hive-1" && !init?.method) {
+        return jsonResponse({
+          data: {
+            eaModelConfiguration: {
+              primaryModel: "openai-codex/gpt-5.6-sol",
+              fallbackModel: "openai-codex/gpt-5.5",
+            },
+          },
+        });
+      }
+      if (url === "/api/hives/hive-1" && init?.method === "PATCH") {
+        return jsonResponse({
+          data: { eaModelConfiguration: JSON.parse(init.body as string).eaModelConfiguration },
+        });
+      }
+      return new Response("not found", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ConnectorsPage />);
+
+    const primary = await screen.findByLabelText("EA primary model");
+    const fallback = screen.getByLabelText("EA fallback model");
+    expect((primary as HTMLInputElement).value).toBe("openai-codex/gpt-5.6-sol");
+    expect((fallback as HTMLInputElement).value).toBe("openai-codex/gpt-5.5");
+
+    fireEvent.change(fallback, { target: { value: "openai-codex/gpt-5.4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save EA routing" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([url, init]) => url === "/api/hives/hive-1" && init?.method === "PATCH",
+      );
+      expect(JSON.parse(patchCall![1]!.body as string)).toEqual({
+        eaModelConfiguration: {
+          primaryModel: "openai-codex/gpt-5.6-sol",
+          fallbackModel: "openai-codex/gpt-5.4",
+        },
+      });
+    });
+  });
+
   it("preserves targetHiveId when linking from the setup connectors mirror", async () => {
     hiveContextMock.searchParams = new URLSearchParams("targetHiveId=hive-2");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

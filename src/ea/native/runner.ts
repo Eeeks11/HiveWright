@@ -46,6 +46,28 @@ export interface RunEaOptions {
   signal?: AbortSignal;
 }
 
+export function buildEaCommandArgs(
+  options: Pick<RunEaOptions, "model" | "sandbox" | "approvalPolicy">,
+  cwd: string,
+): string[] {
+  const model = normalizeEaModel(options.model);
+  const args = [
+    "exec",
+    "--json",
+    "--sandbox",
+    options.sandbox ?? "workspace-write",
+    "--ask-for-approval",
+    options.approvalPolicy ?? "on-request",
+    "--skip-git-repo-check",
+  ];
+  if (model) {
+    const modelName = model.includes("/") ? model.split("/").at(-1)! : model;
+    args.push("-m", modelName);
+  }
+  args.push("-C", cwd);
+  return args;
+}
+
 function appendOwnerVisibleText(
   text: string,
   emit: (text: string) => void,
@@ -63,29 +85,11 @@ export async function runEa(
   prompt: string,
   options: RunEaOptions = {},
 ): Promise<RunEaResult> {
-  const model = normalizeEaModel(options.model);
   const cwd = ensureRuntimeDirectory(options.cwd ?? process.cwd());
   const runtimeHome = options.runtimeHome ? ensureRuntimeDirectory(options.runtimeHome) : undefined;
-  const sandbox = options.sandbox ?? "workspace-write";
-  const approvalPolicy = options.approvalPolicy ?? "on-request";
-  const args = [
-    "exec",
-    "--json",
-    "--sandbox",
-    sandbox,
-    "--ask-for-approval",
-    approvalPolicy,
-    "--skip-git-repo-check",
-    // No --max-turns cap. Owner subscriptions bound cost externally;
-    // arbitrary turn caps were forcing the EA into premature stop on
-    // legitimately long investigations. Wall-clock cap below covers
-    // genuine runaway protection.
-  ];
-  if (model) {
-    const modelName = model.includes("/") ? model.split("/")[1] : model;
-    args.push("-m", modelName);
-  }
-  args.push("-C", cwd);
+  // No --max-turns cap. Owner subscriptions bound cost externally;
+  // wall-clock timeout below covers genuine runaway protection.
+  const args = buildEaCommandArgs(options, cwd);
 
   const env = buildEaRuntimeEnv(runtimeHome, options.env);
 

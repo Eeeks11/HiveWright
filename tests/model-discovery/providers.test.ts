@@ -322,6 +322,7 @@ describe("provider model discovery adapters", () => {
 
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5");
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.5");
+    expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.6-sol");
     expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2");
     expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2-codex");
     expect(models[0]?.metadataSourceName).toBe("OpenAI static model fallback");

@@ -50,6 +50,7 @@ const STATIC_OPENAI_MODELS = [
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-5.5",
+  "gpt-5.6-sol",
   "gpt-4.1",
   "gpt-4.1-mini",
   "o4-mini",

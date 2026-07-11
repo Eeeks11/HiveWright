@@ -126,6 +126,7 @@ describe("runHiveSetup atomicity", () => {
       fields: {
         applicationId: "app-123",
         channelId: "channel-123",
+        ownerUserIds: "123456789012345678",
         botToken: "bad-token",
       },
     }];

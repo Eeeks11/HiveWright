@@ -974,6 +974,13 @@
       "when": 1782183000000,
       "tag": "0141_business_os_existing_business_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 140,
+      "version": "7",
+      "when": 1783731600000,
+      "tag": "0142_ea_model_configuration",
+      "breakpoints": true
     }
   ]
 }

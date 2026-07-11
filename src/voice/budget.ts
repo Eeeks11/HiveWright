@@ -10,10 +10,10 @@ import { and, eq, gte, sql } from "drizzle-orm";
  * `VOICE_MONTHLY_LLM_CAP_CENTS` env). Produces four-tier guidance consumed by the voice
  * adapter:
  *
- *   ratio < 0.8  → warn=false, model=opus,   pause=false   (normal)
- *   ratio >= 0.8 → warn=true,  model=opus,   pause=false   (verbal warning)
- *   ratio >= 1.0 → warn=true,  model=sonnet, pause=false   (downgrade)
- *   ratio >= 1.2 → warn=true,  model=sonnet, pause=true    (hang up)
+ *   ratio < 0.8  → warn=false, model=primary,  pause=false (normal)
+ *   ratio >= 0.8 → warn=true,  model=primary,  pause=false (verbal warning)
+ *   ratio >= 1.0 → warn=true,  model=fallback, pause=false (downgrade)
+ *   ratio >= 1.2 → warn=true,  model=fallback, pause=true  (hang up)
  *
  * The caller decides what to do with `pause` — this helper is pure and
  * has no side effects.
@@ -25,7 +25,7 @@ export interface BudgetLimits {
 
 export interface BudgetAssessment {
   warn: boolean;
-  model: "opus" | "sonnet";
+  model: "primary" | "fallback";
   pause: boolean;
   spendCents: number;
   capCents: number;
@@ -54,7 +54,7 @@ export async function assessBudget(
     spendCents: spend,
     capCents: limits.monthlyLlmCap,
     warn: ratio >= 0.8,
-    model: ratio >= 1.0 ? "sonnet" : "opus",
+    model: ratio >= 1.0 ? "fallback" : "primary",
     pause: ratio >= 1.2,
   };
 }

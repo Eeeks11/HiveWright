@@ -19,6 +19,7 @@ import { deriveOperatingProfileDefaults, upsertOperatingProfile } from "@/hives/
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { hiveProjectsPath, hiveRootPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 import { saveHiveRoleOverride } from "@/roles/hive-overrides";
+import { DEFAULT_EA_FALLBACK_MODEL, DEFAULT_EA_PRIMARY_MODEL } from "@/ea/native/model-selection";
 
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -493,6 +494,18 @@ async function installConnector(tx: SqlExecutor, hiveId: string, connector: Conn
     VALUES (${hiveId}::uuid, ${def.slug}, ${connector.displayName}, ${tx.json(publicConfig)}, ${tx.json(grantedScopes)}, ${credentialId})
     RETURNING id, connector_slug AS "connectorSlug", display_name AS "displayName"
   `;
+
+  if (def.slug === "ea-discord" || def.slug === "voice-ea") {
+    const configuredPrimary = publicConfig.model?.trim() || DEFAULT_EA_PRIMARY_MODEL;
+    await tx`
+      INSERT INTO ea_model_configurations (hive_id, primary_model, fallback_model)
+      VALUES (${hiveId}::uuid, ${configuredPrimary}, ${DEFAULT_EA_FALLBACK_MODEL})
+      ON CONFLICT (hive_id) DO UPDATE SET
+        primary_model = EXCLUDED.primary_model,
+        fallback_model = COALESCE(ea_model_configurations.fallback_model, EXCLUDED.fallback_model),
+        updated_at = NOW()
+    `;
+  }
 
   const testOperation = def.operations.find((operation) =>
     ["test_connection", "self_test"].includes(operation.slug)

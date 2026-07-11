@@ -6,6 +6,11 @@ import {
 } from "./thread-store";
 import { buildEaPrompt } from "./prompt";
 import { runEaStream } from "./runner";
+import {
+  getEaModelConfiguration,
+  recordEaModelRouteTelemetry,
+  resolveEaModelRoute,
+} from "./model-selection";
 import { VOICE_MODE_PROMPT_SUFFIX } from "@/connectors/voice/prompt";
 import { assessBudget } from "@/voice/budget";
 import { scheduleImplicitQualityExtraction } from "@/quality/ea-post-turn";
@@ -121,6 +126,18 @@ export const eaVoiceClient: EaVoiceClient = {
         "voice",
         ctx.sessionId,
       );
+      const config = await getEaModelConfiguration(sql, ctx.hiveId);
+      await recordEaModelRouteTelemetry(sql, {
+        hiveId: ctx.hiveId,
+        transport: "voice",
+        voiceSessionId: ctx.sessionId,
+        route: {
+          model: undefined,
+          selected: "runtime_default",
+          reason: "budget_pause_120_percent",
+          ...config,
+        },
+      });
       scheduleImplicitQualityExtraction(sql, {
         hiveId: ctx.hiveId,
         ownerMessage: text,
@@ -135,8 +152,17 @@ export const eaVoiceClient: EaVoiceClient = {
       ? `\n## Budget warning\n\nMonthly voice-LLM spend: ${budget.spendCents}¢ of ${budget.capCents}¢. Mention this briefly at the START of your next reply, then continue with the owner's request.\n`
       : "";
     const fullPrompt = `${basePrompt}\n${VOICE_MODE_PROMPT_SUFFIX}${warnBanner}`;
+    const route = await resolveEaModelRoute(sql, ctx.hiveId, {
+      preferFallback: budget?.model === "fallback",
+    });
+    await recordEaModelRouteTelemetry(sql, {
+      hiveId: ctx.hiveId,
+      transport: "voice",
+      voiceSessionId: ctx.sessionId,
+      route,
+    });
 
-    const stream = runEaStream(fullPrompt);
+    const stream = runEaStream(fullPrompt, { model: route.model });
 
     return (async function* () {
       let accumulated = "";
