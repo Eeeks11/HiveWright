@@ -14,16 +14,27 @@ vi.mock("@/ea/native/prompt", () => ({
   buildEaPrompt: async () => "STUB PROMPT",
 }));
 
+const mocks = vi.hoisted(() => ({
+  loadGovernedEaModel: vi.fn(),
+  runEaStream: vi.fn(),
+}));
+
+vi.mock("@/ea/native/model-selection", () => ({
+  loadGovernedEaModel: mocks.loadGovernedEaModel,
+}));
+
 // Stub the streaming runner so we never spawn a `claude` subprocess.
 // Yields three deltas that the adapter should concatenate verbatim.
 vi.mock("@/ea/native/runner", () => ({
-  runEaStream: async function* () {
-    yield "Hello";
-    yield ", ";
-    yield "Trent.";
-  },
+  runEaStream: mocks.runEaStream,
   runEa: async () => ({ success: true, text: "" }),
 }));
+
+mocks.runEaStream.mockImplementation(async function* () {
+  yield "Hello";
+  yield ", ";
+  yield "Trent.";
+});
 
 import { eaVoiceClient } from "@/ea/native/voice-adapter";
 import { VOICE_MODE_PROMPT_SUFFIX } from "@/connectors/voice/prompt";
@@ -41,10 +52,19 @@ beforeEach(async () => {
     INSERT INTO voice_sessions (id, hive_id)
     VALUES (${SESSION_ID}, ${HIVE_ID})
   `;
+  vi.clearAllMocks();
+  mocks.loadGovernedEaModel.mockResolvedValue(undefined);
+  mocks.runEaStream.mockImplementation(async function* () {
+    yield "Hello";
+    yield ", ";
+    yield "Trent.";
+  });
 });
 
 describe("eaVoiceClient.submit", () => {
   it("streams EA chunks and persists both turns to ea_messages", async () => {
+    mocks.loadGovernedEaModel.mockResolvedValue("openai-codex/gpt-5.6");
+
     const stream = await eaVoiceClient.submit("Hey, what's up?", {
       sessionId: SESSION_ID,
       hiveId: HIVE_ID,
@@ -55,6 +75,12 @@ describe("eaVoiceClient.submit", () => {
 
     expect(chunks).toEqual(["Hello", ", ", "Trent."]);
     expect(chunks.join("")).toBe("Hello, Trent.");
+    expect(mocks.runEaStream).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: "openai-codex/gpt-5.6",
+      }),
+    );
 
     const rows = await sql<
       {

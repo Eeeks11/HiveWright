@@ -72,6 +72,15 @@ const KNOWN_LIVE_MODELS: KnownLiveModel[] = [
   {
     provider: "openai",
     adapterType: "codex",
+    modelId: "openai-codex/gpt-5.6",
+    displayName: "GPT-5.6",
+    family: "gpt-5",
+    capabilities: ["text", "code", "reasoning"],
+    local: false,
+  },
+  {
+    provider: "openai",
+    adapterType: "codex",
     modelId: "openai-codex/gpt-5.5",
     displayName: "GPT-5.5",
     family: "gpt-5",
@@ -181,6 +190,7 @@ export async function buildLiveModelCatalogEntries(
   ]);
 
   const costs = new Map(OFFICIAL_COST_FALLBACKS);
+  setCost(costs, "openai-codex/gpt-5.6", parseSectionTokenPrices(openAiPricing, "GPT-5.6", ["GPT-5.5", "GPT-5.4"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.5", parseSectionTokenPrices(openAiPricing, "GPT-5.5", ["GPT-5.4"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.4", parseSectionTokenPrices(openAiPricing, "GPT-5.4", ["GPT-5.3", "Containers"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.4-mini", parseSectionTokenPrices(openAiPricing, "GPT-5.4 Mini", ["GPT-5.4", "GPT-5.3"]), "OpenAI API pricing", OPENAI_PRICING_URL);

@@ -110,6 +110,9 @@ setup; restart isn't required for config changes.
 - `maxMonthlyLlmCents` (optional) — monthly LLM-cost cap in cents.
   Blank or `0` = no cap. When set, the EA verbally warns at 80%,
   downgrades to Sonnet at 100%, and hangs up at 120%.
+- `model` (optional) — EA runtime override. Leave blank to use the
+  governed runtime default when the model is not yet present and
+  healthy.
 
 The connector has a **Test connection** action that probes
 `<url>/health` on the GPU host. Run it after editing.

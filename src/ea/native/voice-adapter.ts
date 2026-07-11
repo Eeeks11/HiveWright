@@ -6,6 +6,7 @@ import {
 } from "./thread-store";
 import { buildEaPrompt } from "./prompt";
 import { runEaStream } from "./runner";
+import { loadGovernedEaModel } from "./model-selection";
 import { VOICE_MODE_PROMPT_SUFFIX } from "@/connectors/voice/prompt";
 import { assessBudget } from "@/voice/budget";
 import { scheduleImplicitQualityExtraction } from "@/quality/ea-post-turn";
@@ -135,8 +136,9 @@ export const eaVoiceClient: EaVoiceClient = {
       ? `\n## Budget warning\n\nMonthly voice-LLM spend: ${budget.spendCents}¢ of ${budget.capCents}¢. Mention this briefly at the START of your next reply, then continue with the owner's request.\n`
       : "";
     const fullPrompt = `${basePrompt}\n${VOICE_MODE_PROMPT_SUFFIX}${warnBanner}`;
+    const model = await loadGovernedEaModel(sql, ctx.hiveId, ["voice-ea", "ea-discord"]);
 
-    const stream = runEaStream(fullPrompt);
+    const stream = runEaStream(fullPrompt, { model });
 
     return (async function* () {
       let accumulated = "";

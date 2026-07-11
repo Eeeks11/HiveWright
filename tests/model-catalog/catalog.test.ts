@@ -926,7 +926,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
     expect(result.missingMetadata).toBe(0);
   });
 
-  it("retires auto-discovered models that still have no real benchmark data after live refresh", async () => {
+  it("retires auto-discovered models that still have no official metadata after live refresh", async () => {
     const hiveId = await createHive("catalog-retire-unbenchmarked-discovered-models");
     await sql`
       INSERT INTO hive_models (
@@ -967,8 +967,8 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
         'gpt',
         ${sql.json(["text", "code", "reasoning"])},
         false,
-        'OpenAI public model docs',
-        'https://developers.openai.com/api/docs/models/all/',
+        null,
+        null,
         'openai_public_model_docs'
       )
     `;
@@ -994,6 +994,97 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
     expect(result.missingMetadata).toBe(0);
     expect(hiveRow.count).toBe("0");
     expect(catalogRow.count).toBe("0");
+  });
+
+  it("retains GPT-5.6 when live refresh can attach official metadata but the model is still unbenchmarked", async () => {
+    const hiveId = await createHive("catalog-retain-official-gpt-5-6");
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        adapter_type,
+        model_id,
+        enabled,
+        auto_discovered
+      )
+      VALUES (
+        ${hiveId},
+        'openai',
+        'codex',
+        'openai-codex/gpt-5.6',
+        true,
+        true
+      )
+    `;
+    await sql`
+      INSERT INTO model_catalog (
+        provider,
+        adapter_type,
+        model_id,
+        display_name,
+        family,
+        capabilities,
+        local,
+        metadata_source_name,
+        metadata_source_url,
+        discovery_source
+      )
+      VALUES (
+        'openai',
+        'codex',
+        'openai-codex/gpt-5.6',
+        'GPT-5.6',
+        'gpt-5',
+        ${sql.json(["text", "code", "reasoning"])},
+        false,
+        'OpenAI public model docs',
+        'https://developers.openai.com/api/docs/models/all/',
+        'openai_public_model_docs'
+      )
+    `;
+
+    await refreshModelCatalogMetadata(sql, {
+      hiveId,
+      fetchLiveMetadata: true,
+      fetchImpl: async (url) => {
+        const href = String(url);
+        if (href === "https://openai.com/api/pricing/") {
+          return new Response(`
+            GPT-5.6
+            Input price $5.00 / 1M tokens
+            Output price $30.00 / 1M tokens
+          `);
+        }
+        return new Response("");
+      },
+    });
+
+    const [hiveRow] = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM hive_models
+      WHERE hive_id = ${hiveId}
+        AND model_id = 'openai-codex/gpt-5.6'
+    `;
+    const [catalogRow] = await sql<{
+      count: string;
+      metadata_source_name: string | null;
+      cost_per_input_token: string | null;
+      cost_per_output_token: string | null;
+    }[]>`
+      SELECT
+        COUNT(*)::text AS count,
+        MAX(metadata_source_name) AS metadata_source_name,
+        MAX(cost_per_input_token) AS cost_per_input_token,
+        MAX(cost_per_output_token) AS cost_per_output_token
+      FROM model_catalog
+      WHERE model_id = 'openai-codex/gpt-5.6'
+    `;
+
+    expect(hiveRow.count).toBe("1");
+    expect(catalogRow.count).toBe("1");
+    expect(catalogRow.metadata_source_name).toBe("OpenAI API pricing");
+    expect(catalogRow.cost_per_input_token).toBe("0.000005000000");
+    expect(catalogRow.cost_per_output_token).toBe("0.000030000000");
   });
 
   it("keeps auto-discovered models when real benchmark data exists", async () => {

@@ -10,6 +10,7 @@ import {
 } from "./thread-store";
 import { buildEaPrompt } from "./prompt";
 import { runEaStream } from "./runner";
+import { loadGovernedEaModel } from "./model-selection";
 import { emitEaChatEvent } from "./events";
 import { scheduleImplicitQualityExtraction } from "@/quality/ea-post-turn";
 import { type EaAttachment, renderEaAttachmentSection } from "./attachments";
@@ -132,11 +133,13 @@ async function prepareDashboardTurn(
   const promptWithAttachments = attachments.length > 0
     ? `${prompt}\n${attachmentSection}`
     : prompt;
+  const model = await loadGovernedEaModel(sql, input.hiveId, ["ea-discord"]);
   const streamController = new AbortController();
   const signal = linkAbortSignals(input.signal, streamController.signal);
   const eaStream = runEaStream(promptWithAttachments, {
     signal,
     attachmentPaths: attachments.map((attachment) => attachment.absolutePath),
+    model,
   });
 
   const stream = (async function* () {

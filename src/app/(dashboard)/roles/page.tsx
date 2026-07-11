@@ -52,6 +52,7 @@ const ANTHROPIC_MODELS = [
   "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "anthropic/claude-opus-4-6",
 ];
 const CODEX_MODELS = [
+  "openai-codex/gpt-5.6",
   "openai-codex/gpt-5.5",
   "openai-codex/gpt-5.4",
   "openai-codex/gpt-5.4-mini",

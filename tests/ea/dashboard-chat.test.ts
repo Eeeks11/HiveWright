@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   state: { streamReturned: false },
   buildEaPrompt: vi.fn(async () => "FULL EA PROMPT"),
   runEaStream: vi.fn(),
+  loadGovernedEaModel: vi.fn(),
   scheduleImplicitQualityExtraction: vi.fn(),
 }));
 
@@ -25,6 +26,10 @@ mocks.runEaStream.mockImplementation(
 
 vi.mock("@/ea/native/prompt", () => ({
   buildEaPrompt: mocks.buildEaPrompt,
+}));
+
+vi.mock("@/ea/native/model-selection", () => ({
+  loadGovernedEaModel: mocks.loadGovernedEaModel,
 }));
 
 vi.mock("@/ea/native/runner", () => ({
@@ -49,10 +54,13 @@ beforeEach(async () => {
   `;
   vi.clearAllMocks();
   mocks.state.streamReturned = false;
+  mocks.loadGovernedEaModel.mockResolvedValue(undefined);
 });
 
 describe("dashboardEaClient.submit", () => {
   it("builds the full EA prompt, uses the dashboard hive thread, and persists both turns", async () => {
+    mocks.loadGovernedEaModel.mockResolvedValue("openai-codex/gpt-5.6");
+
     const stream = await dashboardEaClient.submit("What active goals do I have?", {
       hiveId: HIVE_ID,
       hiveName: "Dashboard Native Hive",
@@ -92,6 +100,7 @@ describe("dashboardEaClient.submit", () => {
     expect(mocks.runEaStream).toHaveBeenCalledWith("FULL EA PROMPT", {
       signal: firstRunOptions?.signal,
       attachmentPaths: [],
+      model: "openai-codex/gpt-5.6",
     });
     expect(firstRunOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(firstRunOptions?.signal?.aborted).toBe(false);

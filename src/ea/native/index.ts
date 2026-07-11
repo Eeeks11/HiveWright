@@ -2,7 +2,7 @@ import type { Sql } from "postgres";
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { startNativeEa, type NativeEaHandle } from "./connector";
 import { buildDiscordOwnerAuthConfig, normalizeDiscordSnowflake } from "./discord-auth";
-import { normalizeEaModel } from "./runner";
+import { resolveGovernedEaModel } from "./model-selection";
 import { decrypt } from "../../credentials/encryption";
 
 /**
@@ -104,7 +104,7 @@ export async function maybeStartNativeEa(sql: Sql): Promise<NativeEaHandle[]> {
       // Non-fatal — the gateway will still start, commands just won't work until next boot.
     }
 
-    const model = normalizeEaModel(install.config.model);
+    const model = await resolveGovernedEaModel(sql, install.hive_id, install.config.model);
     console.log(
       `[ea-native] starting install ${install.id.slice(0, 8)} (hive=${install.hive_id.slice(0, 8)}..., channel=${authConfig.channelId}, guild=${authConfig.guildId ?? "any"}, dms=${authConfig.directMessagesEnabled ? "enabled" : "disabled"}, model=${model ?? "runtime-default"})`,
     );

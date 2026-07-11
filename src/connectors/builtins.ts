@@ -715,6 +715,13 @@ const voiceEa: ConnectorDefinitionDraft = {
         "Base URL of the GPU-hosted voice services (faster-whisper STT + Kokoro TTS + Pyannote voiceprint). Hostname:port; no trailing slash. Reachable over the tailnet from the dispatcher.",
     },
     {
+      key: "model",
+      label: "Model — optional",
+      type: "text",
+      placeholder: "openai-codex/<model-id>",
+      helpText: "Optional runtime model override. Leave blank to use the configured runtime default.",
+    },
+    {
       key: "maxMonthlyLlmCents",
       label: "Max monthly LLM spend (cents)",
       type: "text",
