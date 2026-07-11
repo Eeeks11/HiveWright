@@ -2,9 +2,9 @@ import { collectHiveWrightDiagnostics } from "@/diagnostics/checks";
 import { jsonError, jsonOk } from "../_lib/responses";
 
 // hive-access-not-required: readiness is controller-global; hiveId is read only to disclose that it is not applied.
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   try {
-    const requestedHiveId = request ? new URL(request.url).searchParams.get("hiveId") : null;
+    const requestedHiveId = new URL(request.url).searchParams.get("hiveId");
     const diagnostics = await collectHiveWrightDiagnostics();
     const body = {
       status: diagnostics.summary.ready ? "ready" : "not_ready",

@@ -96,7 +96,7 @@ function SetupLinkCard({ href, title, description }: { href: string; title: stri
 export default async function SetupPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ targetHiveId?: string | string[] }> | { targetHiveId?: string | string[] };
+  searchParams?: Promise<{ targetHiveId?: string | string[] }>;
 }) {
   const resolvedSearchParams = await searchParams;
   const rawTargetHiveId = Array.isArray(resolvedSearchParams?.targetHiveId)
