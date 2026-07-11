@@ -55,7 +55,7 @@ describe("GET /api/diagnostics", () => {
     });
     const { GET } = await import("../../src/app/api/diagnostics/route");
 
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/diagnostics"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -115,7 +115,7 @@ describe("GET /api/diagnostics", () => {
     setupReadinessMock.listSetupRuntimeReadinessWarnings.mockReturnValue(warningSources);
     const { GET } = await import("../../src/app/api/diagnostics/route");
 
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/diagnostics"));
     const body = await response.json();
 
     expect(response.status).toBe(200);

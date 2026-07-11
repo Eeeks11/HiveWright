@@ -10,11 +10,11 @@ import { jsonError, jsonOk, parseSearchParams } from "../_lib/responses";
 
 const HIVE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   const unauth = await requireApiAuth();
   if (unauth) return unauth;
 
-  const hiveId = request ? parseSearchParams(request.url).get("hiveId") : null;
+  const hiveId = parseSearchParams(request.url).get("hiveId");
   if (hiveId && !HIVE_ID_RE.test(hiveId)) return jsonError("hiveId must be a valid UUID", 400);
 
   try {
