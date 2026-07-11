@@ -36,24 +36,43 @@ npm install
 npm run db:migrate:app
 ```
 
-4. Start the dashboard:
+4. On a brand-new install, provision the one-time owner setup token. The command
+   writes a 256-bit token to the runtime `secrets.env` file with owner-only
+   permissions and stores only its SHA-256 digest in PostgreSQL. It never prints
+   the token. Existing/initialized installs remain disabled and have any stale
+   setup-token entry removed.
+
+```bash
+npm run auth:owner-bootstrap:provision
+```
+
+5. Start the dashboard:
 
 ```bash
 npm run dev
 ```
 
-5. Open the dashboard in your browser and go to `/login`.
+6. Open the dashboard in your browser and go to `/login`.
 
-6. If this is a brand-new install, HiveWright will show `Create owner account`. Create the first owner, then sign in.
+7. If this is a brand-new install, HiveWright will show `Create owner account`.
+   Copy the setup token locally from `~/.hivewright/secrets.env` into the form.
+   On success, the database capability is permanently consumed atomically with
+   owner creation and the raw token is removed from the secrets file.
 
-7. In a second terminal, start the dispatcher so HiveWright can actually run work:
+8. In a second terminal, start the dispatcher so HiveWright can actually run work:
 
 ```bash
 npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services, keep the services pointed at the locked operational install (by default `~/apps/HiveWright`, or `HIVEWRIGHT_INSTALL_DIR`) and keep runtime/private state under `~/.hivewright` (or `HIVEWRIGHT_RUNTIME_ROOT`). Do not run dashboard or dispatcher from a writable `~/dev` checkout; updates should flow through GitHub and the privileged operational updater.
+If you run HiveWright as user services, the supplied dashboard unit performs
+owner-bootstrap provisioning before startup. Keep the services pointed at the
+locked operational install (by default `~/apps/HiveWright`, or
+`HIVEWRIGHT_INSTALL_DIR`) and keep runtime/private state under `~/.hivewright`
+(or `HIVEWRIGHT_RUNTIME_ROOT`). Do not run dashboard or dispatcher from a
+writable `~/dev` checkout; updates should flow through GitHub and the privileged
+operational updater.
 
 ## Setup Walkthrough
 
@@ -130,7 +149,9 @@ Notes:
 ### I cannot sign in
 
 - Open `/login`.
-- If this is the first boot and no owner exists yet, create the first owner there.
+- If this is the first boot and no owner exists yet, provision the one-time setup
+  token and enter it when creating the first owner. Missing, invalid, expired,
+  or reused proofs intentionally return the same response.
 - If setup is already complete, use the existing owner email and password instead.
 
 ### The hive was created, but setup still feels incomplete

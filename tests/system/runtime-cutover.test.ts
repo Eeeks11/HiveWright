@@ -49,6 +49,7 @@ describe("runtime cutover", () => {
     expect(unit).toContain("ExecStart=/usr/bin/npm run start -- -H 127.0.0.1");
     expect(unit).toContain("Environment=HIVEWRIGHT_RUNTIME_ROOT=/home/operator/.hivewright");
     expect(unit).toContain("Environment=HIVEWRIGHT_SECRETS_FILE=/home/operator/.hivewright/secrets.env");
+    expect(unit).toContain("ExecStartPre=/usr/bin/npm run auth:owner-bootstrap:provision");
     expect(unit).not.toContain("/home/operator/dev/hivewright-live");
   });
 

@@ -169,6 +169,7 @@ Environment=HIVEWRIGHT_RUNTIME_ROOT=${config.runtimeRoot}
 Environment=HIVEWRIGHT_ENV_FILE=${config.envFile}
 Environment=HIVEWRIGHT_SECRETS_FILE=${config.secretsFile}
 EnvironmentFile=${config.envFile}
+ExecStartPre=/usr/bin/npm run auth:owner-bootstrap:provision
 StandardOutput=journal
 StandardError=journal
 

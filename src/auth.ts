@@ -1,9 +1,8 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import postgres from "postgres";
-import { verifyCredentials, countUsers } from "./auth/users";
+import { verifyCredentials } from "./auth/users";
 import { authConfig } from "./auth.config";
-import { resolveBootstrapDashboardPassword } from "./auth/defaults";
 
 // Dedicated SQL handle so auth.ts doesn't depend on the shared API-layer pool.
 // NextAuth runs before request handlers, so using the singleton here could
@@ -30,21 +29,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         try {
           const email = (credentials?.email as string | undefined) ?? "";
           const password = (credentials?.password as string | undefined) ?? "";
-
-          // Development-only bootstrap path for local first-run setup.
-          // Outside development, an explicit DASHBOARD_PASSWORD is required.
-          const users = await countUsers(sql);
-          if (users === 0) {
-            const fallback = resolveBootstrapDashboardPassword();
-            if (password === fallback) {
-              return {
-                id: "owner-bootstrap",
-                name: "Owner (bootstrap)",
-                email: "owner@hivewright.local",
-              };
-            }
-            return null;
-          }
 
           if (!email || !password) return null;
           const user = await verifyCredentials(sql, email, password);

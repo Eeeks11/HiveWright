@@ -187,7 +187,8 @@ export function buildSetupGuide(input: { writeEnvTemplate: boolean }): SetupGuid
     "2. npm run db:migrate:app",
     "3. npm run security:scan",
     "4. npm run readiness:dispatcher-health",
-    "5. npm run dispatcher",
+    "5. npm run auth:owner-bootstrap:provision (brand-new installs only)",
+    "6. npm run dispatcher",
   ];
   if (!input.writeEnvTemplate) {
     lines.push("", "Env template not written. Re-run `npm run setup -- --write-env-template` to create `.env.local.example`.");
