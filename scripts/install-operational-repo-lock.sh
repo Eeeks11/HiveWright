@@ -2,13 +2,25 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Run with sudo: sudo /home/trent/apps/HiveWright/scripts/install-operational-repo-lock.sh" >&2
+  echo "Run with sudo from the locked operational install: sudo ./scripts/install-operational-repo-lock.sh" >&2
   exit 77
 fi
 
-INSTALL_DIR="/home/trent/apps/HiveWright"
-RUNTIME_ROOT="/home/trent/.hivewright"
-SERVICE_USER="trent"
+resolve_service_user() {
+  if [ -n "${HIVEWRIGHT_SERVICE_USER:-}" ]; then
+    printf '%s\n' "$HIVEWRIGHT_SERVICE_USER"
+  elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    printf '%s\n' "$SUDO_USER"
+  else
+    logname 2>/dev/null || id -un
+  fi
+}
+
+SERVICE_USER="$(resolve_service_user)"
+SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+SERVICE_HOME="${SERVICE_HOME:-$HOME}"
+INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-$SERVICE_HOME/apps/HiveWright}"
+RUNTIME_ROOT="${HIVEWRIGHT_RUNTIME_ROOT:-$SERVICE_HOME/.hivewright}"
 UPDATER_SRC="$INSTALL_DIR/scripts/hivewright-operational-update-root.sh"
 UPDATER_DST="/usr/local/sbin/hivewright-operational-update"
 SERVICE_PATH="/etc/systemd/system/hivewright-update.service"
@@ -18,15 +30,17 @@ SUDOERS_PATH="/etc/sudoers.d/hivewright-update"
 [ -d "$INSTALL_DIR/.git" ] || { echo "Missing operational git checkout: $INSTALL_DIR" >&2; exit 3; }
 [ -d "$RUNTIME_ROOT" ] || mkdir -p "$RUNTIME_ROOT"
 
-cat > "$UPDATER_DST" <<'WRAPPER'
+cat > "$UPDATER_DST" <<WRAPPER
 #!/usr/bin/env bash
 set -euo pipefail
-exec /home/trent/apps/HiveWright/scripts/hivewright-operational-update-root.sh "$@"
+export HIVEWRIGHT_LOCKED_INSTALL_DIR="\${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$INSTALL_DIR}"
+export HIVEWRIGHT_INSTALL_DIR="\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}"
+exec "\$HIVEWRIGHT_INSTALL_DIR/scripts/hivewright-operational-update-root.sh" "\$@"
 WRAPPER
 chown root:root "$UPDATER_DST"
 chmod 0755 "$UPDATER_DST"
 
-cat > "$SERVICE_PATH" <<'UNIT'
+cat > "$SERVICE_PATH" <<UNIT
 [Unit]
 Description=HiveWright privileged operational update
 Wants=network-online.target
@@ -36,18 +50,19 @@ After=network-online.target
 Type=oneshot
 User=root
 Group=root
-Environment=HIVEWRIGHT_INSTALL_DIR=/home/trent/apps/HiveWright
-Environment=HIVEWRIGHT_RUNTIME_ROOT=/home/trent/.hivewright
-Environment=HIVEWRIGHT_ENV_FILE=/home/trent/.hivewright/config/.env
-Environment=HIVEWRIGHT_SERVICE_USER=trent
+Environment=HIVEWRIGHT_INSTALL_DIR=$INSTALL_DIR
+Environment=HIVEWRIGHT_LOCKED_INSTALL_DIR=$INSTALL_DIR
+Environment=HIVEWRIGHT_RUNTIME_ROOT=$RUNTIME_ROOT
+Environment=HIVEWRIGHT_ENV_FILE=$RUNTIME_ROOT/config/.env
+Environment=HIVEWRIGHT_SERVICE_USER=$SERVICE_USER
 ExecStart=/usr/local/sbin/hivewright-operational-update apply
 TimeoutStartSec=1800
 UNIT
 chmod 0644 "$SERVICE_PATH"
 
-cat > "$SUDOERS_PATH" <<'SUDOERS'
-trent ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start hivewright-update.service
-trent ALL=(root) NOPASSWD: /usr/local/sbin/hivewright-operational-update status-json
+cat > "$SUDOERS_PATH" <<SUDOERS
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start hivewright-update.service
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/local/sbin/hivewright-operational-update status-json
 SUDOERS
 chmod 0440 "$SUDOERS_PATH"
 visudo -cf "$SUDOERS_PATH"

@@ -1,4 +1,5 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import type { SessionContext } from "../adapters/types";
 import type { ClaimedTask } from "./types";
@@ -14,16 +15,22 @@ export interface WorkspacePolicyOptions {
   requireActiveIsolation?: boolean;
 }
 
+const DEFAULT_OPERATOR_HOME = process.env.HIVEWRIGHT_OPERATOR_HOME ?? os.homedir();
+
 const DEFAULT_FORBIDDEN_ROOTS = [
-  "/home/trent/hivewrightv2",
-  "/home/trent/archive/legacy-ai-systems",
+  path.join(DEFAULT_OPERATOR_HOME, "hivewrightv2"),
+  path.join(DEFAULT_OPERATOR_HOME, "archive/legacy-ai-systems"),
+  "/home/operator/hivewrightv2",
+  "/home/operator/archive/legacy-ai-systems",
 ];
 
-const DEFAULT_OPERATIONAL_INSTALL_ROOT = "/home/trent/apps/HiveWright";
+const DEFAULT_OPERATIONAL_INSTALL_ROOT = path.join(DEFAULT_OPERATOR_HOME, "apps/HiveWright");
+const DEFAULT_OPERATIONAL_INSTALL_ROOTS = [DEFAULT_OPERATIONAL_INSTALL_ROOT, "/home/operator/apps/HiveWright"];
 
 const DEFAULT_APPROVED_CODE_WORKSPACE_ROOTS = [
-  "/home/twhis/dev/hivewright",
-  "/home/trent/dev/hivewright",
+  path.join(os.homedir(), "dev/hivewright"),
+  "/home/operator/dev/hivewright",
+  "/workspace/hivewright",
 ];
 
 const CODE_ROLE_SLUGS = new Set([
@@ -69,8 +76,10 @@ export function evaluateTaskWorkspacePolicy(
 ): WorkspacePolicyDecision {
   const signals: string[] = [];
   const forbiddenRoots = normalizeRoots(options.forbiddenRoots ?? envRoots("HIVEWRIGHT_FORBIDDEN_SOURCE_ROOTS", DEFAULT_FORBIDDEN_ROOTS));
-  const operationalInstallRoot = normalizeRoot(
-    options.operationalInstallRoot ?? process.env.HIVEWRIGHT_OPERATIONAL_INSTALL_ROOT ?? DEFAULT_OPERATIONAL_INSTALL_ROOT,
+  const operationalInstallRoots = normalizeRoots(
+    options.operationalInstallRoot
+      ? [options.operationalInstallRoot]
+      : envRoots("HIVEWRIGHT_OPERATIONAL_INSTALL_ROOTS", process.env.HIVEWRIGHT_OPERATIONAL_INSTALL_ROOT ? [process.env.HIVEWRIGHT_OPERATIONAL_INSTALL_ROOT] : DEFAULT_OPERATIONAL_INSTALL_ROOTS),
   );
   const approvedCodeWorkspaceRoots = normalizeRoots(
     options.approvedCodeWorkspaceRoots ?? envRoots("HIVEWRIGHT_APPROVED_CODE_WORKSPACE_ROOTS", DEFAULT_APPROVED_CODE_WORKSPACE_ROOTS),
@@ -83,7 +92,7 @@ export function evaluateTaskWorkspacePolicy(
     if (forbidden) {
       signals.push(`forbidden workspace path: ${candidate}`);
       return blocked(
-        `workspace_policy_blocked: Refusing to spawn agent in forbidden HiveWright legacy/archive path (${candidate}). Approved source must be assigned by project_id; never discover source from /home/trent/hivewrightv2 or archives.`,
+        `workspace_policy_blocked: Refusing to spawn agent in forbidden HiveWright legacy/archive path (${candidate}). Approved source must be assigned by project_id; never discover source from legacy home checkouts or archives.`,
         signals,
       );
     }
@@ -112,10 +121,11 @@ export function evaluateTaskWorkspacePolicy(
   }
 
   const normalizedBase = normalizeRoot(baseWorkspace);
-  if (operationalInstallRoot && pathWithin(normalizedBase, operationalInstallRoot)) {
+  const operationalInstallRoot = operationalInstallRoots.find((root) => pathWithin(normalizedBase, root));
+  if (operationalInstallRoot) {
     signals.push(`operational install workspace: ${normalizedBase}`);
     return blocked(
-      `workspace_policy_blocked: Code-changing task resolved to the local operational install (${normalizedBase}). Development must run from an approved Git-backed dev workspace, not /home/trent/apps/HiveWright.`,
+      `workspace_policy_blocked: Code-changing task resolved to the local operational install (${normalizedBase}). Development must run from an approved Git-backed dev workspace, not the locked operational install.`,
       signals,
     );
   }

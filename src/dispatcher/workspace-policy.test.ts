@@ -42,9 +42,9 @@ function ctx(overrides: Partial<SessionContext> = {}): SessionContext {
     skills: [],
     standingInstructions: [],
     goalContext: null,
-    projectWorkspace: "/home/trent/businesses/example",
+    projectWorkspace: "/home/operator/businesses/example",
     gitBackedProject: false,
-    baseProjectWorkspace: "/home/trent/businesses/example",
+    baseProjectWorkspace: "/home/operator/businesses/example",
     workspaceIsolation: null,
     model: "openai-codex/gpt-5.5",
     fallbackModel: null,
@@ -82,14 +82,14 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("blocks forbidden legacy v2 paths before any agent can spawn", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/hivewrightv2",
-      baseProjectWorkspace: "/home/trent/hivewrightv2",
+      projectWorkspace: "/home/operator/hivewrightv2",
+      baseProjectWorkspace: "/home/operator/hivewrightv2",
       gitBackedProject: true,
       task: { ...baseTask, projectId: "project-1" },
       workspaceIsolation: {
         status: "active",
-        baseWorkspacePath: "/home/trent/hivewrightv2",
-        worktreePath: "/home/trent/hivewrightv2/.claude/worktrees/task-1",
+        baseWorkspacePath: "/home/operator/hivewrightv2",
+        worktreePath: "/home/operator/hivewrightv2/.claude/worktrees/task-1",
         branchName: "hw/task/task-1-dev-agent",
         isolationActive: true,
         reused: false,
@@ -100,7 +100,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) {
       expect(decision.reason).toContain("forbidden HiveWright legacy/archive path");
-      expect(decision.reason).toContain("/home/trent/hivewrightv2");
+      expect(decision.reason).toContain("/home/operator/hivewrightv2");
     }
   });
 
@@ -108,15 +108,15 @@ describe("evaluateTaskWorkspacePolicy", () => {
     process.env.HIVEWRIGHT_FORBIDDEN_SOURCE_ROOTS = "/tmp/some-other-forbidden-root";
 
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/hivewrightv2",
-      baseProjectWorkspace: "/home/trent/hivewrightv2",
+      projectWorkspace: "/home/operator/hivewrightv2",
+      baseProjectWorkspace: "/home/operator/hivewrightv2",
       gitBackedProject: true,
       task: { ...baseTask, projectId: "project-1" },
     }), { requireActiveIsolation: false });
 
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) {
-      expect(decision.reason).toContain("/home/trent/hivewrightv2");
+      expect(decision.reason).toContain("/home/operator/hivewrightv2");
     }
   });
 
@@ -145,7 +145,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
   });
 
   it("blocks archived legacy checkouts as source workspaces", () => {
-    const archivePath = "/home/trent/archive/legacy-ai-systems/hivewrightv2-legacy-disabled-20260608-210321";
+    const archivePath = "/home/operator/archive/legacy-ai-systems/hivewrightv2-legacy-disabled-20260608-210321";
     const decision = evaluateTaskWorkspacePolicy(ctx({
       projectWorkspace: archivePath,
       baseProjectWorkspace: archivePath,
@@ -170,14 +170,14 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("blocks the local operational install for product code work", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/apps/HiveWright",
-      baseProjectWorkspace: "/home/trent/apps/HiveWright",
+      projectWorkspace: "/home/operator/apps/HiveWright",
+      baseProjectWorkspace: "/home/operator/apps/HiveWright",
       gitBackedProject: true,
       task: { ...baseTask, projectId: "project-1" },
       workspaceIsolation: {
         status: "active",
-        baseWorkspacePath: "/home/trent/apps/HiveWright",
-        worktreePath: "/home/trent/apps/HiveWright/.claude/worktrees/task-1",
+        baseWorkspacePath: "/home/operator/apps/HiveWright",
+        worktreePath: "/home/operator/apps/HiveWright/.claude/worktrees/task-1",
         branchName: "hw/task/task-1-dev-agent",
         isolationActive: true,
         reused: false,
@@ -193,14 +193,14 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("allows approved git-backed product code tasks only when an isolated worktree is active", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/dev/hivewright",
-      baseProjectWorkspace: "/home/trent/dev/hivewright",
+      projectWorkspace: "/home/operator/dev/hivewright",
+      baseProjectWorkspace: "/home/operator/dev/hivewright",
       gitBackedProject: true,
       task: { ...baseTask, projectId: "project-1" },
       workspaceIsolation: {
         status: "active",
-        baseWorkspacePath: "/home/trent/dev/hivewright",
-        worktreePath: "/home/trent/dev/hivewright/.claude/worktrees/task-1",
+        baseWorkspacePath: "/home/operator/dev/hivewright",
+        worktreePath: "/home/operator/dev/hivewright/.claude/worktrees/task-1",
         branchName: "hw/task/task-1-dev-agent",
         isolationActive: true,
         reused: false,
@@ -213,8 +213,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("allows approved git-backed product code tasks before provisioning when pre-provision mode is used", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/dev/hivewright",
-      baseProjectWorkspace: "/home/trent/dev/hivewright",
+      projectWorkspace: "/home/operator/dev/hivewright",
+      baseProjectWorkspace: "/home/operator/dev/hivewright",
       gitBackedProject: true,
       task: { ...baseTask, projectId: "project-1" },
       workspaceIsolation: null,
@@ -225,8 +225,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("allows non-HiveWright code tasks from git-backed isolated workspaces without HiveWright approved-root matching", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/dev/customer-portal",
-      baseProjectWorkspace: "/home/trent/dev/customer-portal",
+      projectWorkspace: "/home/operator/dev/customer-portal",
+      baseProjectWorkspace: "/home/operator/dev/customer-portal",
       gitBackedProject: true,
       task: {
         ...baseTask,
@@ -237,8 +237,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
       },
       workspaceIsolation: {
         status: "active",
-        baseWorkspacePath: "/home/trent/dev/customer-portal",
-        worktreePath: "/home/trent/dev/customer-portal/.claude/worktrees/task-1",
+        baseWorkspacePath: "/home/operator/dev/customer-portal",
+        worktreePath: "/home/operator/dev/customer-portal/.claude/worktrees/task-1",
         branchName: "hw/task/task-1-dev-agent",
         isolationActive: true,
         reused: false,
@@ -251,21 +251,21 @@ describe("evaluateTaskWorkspacePolicy", () => {
 
   it("does not let stale HiveWright workspace-policy feedback reclassify business app code as HiveWright product code", () => {
     const decision = evaluateTaskWorkspacePolicy(ctx({
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
       gitBackedProject: true,
       task: {
         ...baseTask,
         assignedTo: "dev-agent",
         projectId: "short-stay-sales-app",
         title: "Sprint 6: Project-scoped technical map and gate test targets",
-        brief: "Inspect and map the approved Short Stay Sales app repository. Add failing tests or test stubs if the repo test framework is clear.\n### QA Feedback\nworkspace_policy_blocked: HiveWright code-changing task resolved to an unapproved workspace (/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales). Approved roots: /home/twhis/dev/hivewright, /home/trent/dev/hivewright.",
+        brief: "Inspect and map the approved Short Stay Sales app repository. Add failing tests or test stubs if the repo test framework is clear.\n### QA Feedback\nworkspace_policy_blocked: HiveWright code-changing task resolved to an unapproved workspace (/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales). Approved roots: /home/twhis/dev/hivewright, /home/operator/dev/hivewright.",
         acceptanceCriteria: "Map routes, schema, and tests for the Short Stay Sales app.",
       },
       workspaceIsolation: {
         status: "active",
-        baseWorkspacePath: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
-        worktreePath: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales/.claude/worktrees/task-1",
+        baseWorkspacePath: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+        worktreePath: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales/.claude/worktrees/task-1",
         branchName: "hw/task/task-1-dev-agent",
         isolationActive: true,
         reused: false,
@@ -278,7 +278,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
   });
 
   it("does not treat business-hive app implementation tasks that mention HiveWright context as HiveWright product code", () => {
-    const workspace = "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales";
+    const workspace = "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales";
     const decision = evaluateTaskWorkspacePolicy(ctx({
       hiveSlug: "short-stay-sales",
       projectWorkspace: workspace,
@@ -309,7 +309,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
   });
 
   it("still enforces approved HiveWright source roots for HiveWright-hive product code", () => {
-    const workspace = "/home/trent/.hivewright/hives/hivewright/projects/not-approved";
+    const workspace = "/home/operator/.hivewright/hives/hivewright/projects/not-approved";
     const decision = evaluateTaskWorkspacePolicy(ctx({
       hiveSlug: "hivewright",
       projectWorkspace: workspace,
@@ -347,8 +347,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/short-stay-sales",
       gitBackedProject: true,
       workspaceIsolation: null,
     }))).toMatchObject({ allowed: true });
@@ -363,8 +363,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Write a summary for the owner.",
         acceptanceCriteria: "Clear and concise.",
       },
-      projectWorkspace: "/home/trent/businesses/short-stay-sales",
-      baseProjectWorkspace: "/home/trent/businesses/short-stay-sales",
+      projectWorkspace: "/home/operator/businesses/short-stay-sales",
+      baseProjectWorkspace: "/home/operator/businesses/short-stay-sales",
       gitBackedProject: false,
     }));
 
@@ -384,8 +384,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
       hiveSlug: "lakes-bushland-caravan-park",
-      projectWorkspace: "/home/trent/.hivewright/task-workspaces/lakes-publish",
-      baseProjectWorkspace: "/home/trent/.hivewright/task-workspaces/lakes-publish",
+      projectWorkspace: "/home/operator/.hivewright/task-workspaces/lakes-publish",
+      baseProjectWorkspace: "/home/operator/.hivewright/task-workspaces/lakes-publish",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -399,8 +399,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Review source links for HiveWright market context and write an evidence summary. Do not change code or repositories.",
         acceptanceCriteria: "Cite sources and identify decisions.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/market-scan",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/market-scan",
       gitBackedProject: false,
     }));
 
@@ -416,8 +416,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Scan only the highest-signal changes relevant to HiveWright: competitors, pricing, model/runtime changes, security developments, and customer demand signals. Use guarded APIs and durable artifacts only. Do not edit any local HiveWright repository or implementation code.",
         acceptanceCriteria: "Produce a concise brief with only the material findings.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/market-scan",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/market-scan",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/market-scan",
       gitBackedProject: false,
     }));
 
@@ -433,8 +433,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Run the daily world scan for Short Stay Sales. Hive context: Australian marketplace for buying and selling Airbnb and short-stay accommodation investment properties; current imported context needs live repo/site/runtime verification. Do not propose HiveWright product improvements, AI model/runtime changes, or internal platform work from this business-hive scan.",
         acceptanceCriteria: "Produce a concise external-signal summary only.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales",
       gitBackedProject: false,
     }));
 
@@ -453,8 +453,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/read-only-infra-verification",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -468,8 +468,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Use exactly one cause category and produce a fenced JSON diagnosis. Evidence includes previous workspace_policy_blocked text and runtime-route logs; do not patch source code.",
         acceptanceCriteria: "Diagnosis only.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright",
       gitBackedProject: false,
     }));
 
@@ -485,8 +485,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Failed task context mentions reference document UI, workspace_policy_blocked, repository flow, and source logs. Diagnose and route the next action; do not edit source directly.",
         acceptanceCriteria: "Diagnosis or follow-up task only.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management",
+      projectWorkspace: "/home/operator/.hivewright/hives/whiston-management",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/whiston-management",
       gitBackedProject: false,
     }));
 
@@ -502,8 +502,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Read a HiveWright hive artifact and cover Oneflare closure/migration by 30 June 2026. Do not change code or repositories.",
         acceptanceCriteria: "Produce the internal action register only.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/aussie-garden-pros/projects/operations",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/aussie-garden-pros/projects/operations",
+      projectWorkspace: "/home/operator/.hivewright/hives/aussie-garden-pros/projects/operations",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/aussie-garden-pros/projects/operations",
       gitBackedProject: false,
     }));
 
@@ -522,8 +522,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      projectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects/governance",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects/governance",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -540,8 +540,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/privacy-surface",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/privacy-surface",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/privacy-surface",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/privacy-surface",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -558,8 +558,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects/governance",
+      projectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects/governance",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects/governance",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -576,8 +576,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/runtime-triage",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/runtime-triage",
+      projectWorkspace: "/home/operator/.hivewright/hives/whiston-management/projects/runtime-triage",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/whiston-management/projects/runtime-triage",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -594,8 +594,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/runtime-audit",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -612,8 +612,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(true);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/review",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/review",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/review",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/review",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: false });
   });
@@ -630,8 +630,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/remediation-docs",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -648,8 +648,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/remediation-docs",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/remediation-docs",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -666,8 +666,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/runtime-audit",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects/runtime-audit",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -684,7 +684,7 @@ describe("evaluateTaskWorkspacePolicy", () => {
       ...baseTask,
       assignedTo: "social-media-manager",
       title: "Pipeline: Publish or handoff with evidence",
-      brief: "Pipeline step: Publish or handoff with evidence. Stage or publish to the Lakes WordPress/news channel only when valid Lakes WordPress application-password credentials are available and owner approval is explicit. Otherwise produce a handoff package, credential gap, and exact next action. Verify live URL/status if published. Previous result: the live article exposes an author in page UI and Yoast schema; artifact path /home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing/package.md.",
+      brief: "Pipeline step: Publish or handoff with evidence. Stage or publish to the Lakes WordPress/news channel only when valid Lakes WordPress application-password credentials are available and owner approval is explicit. Otherwise produce a handoff package, credential gap, and exact next action. Verify live URL/status if published. Previous result: the live article exposes an author in page UI and Yoast schema; artifact path /home/operator/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing/package.md.",
       acceptanceCriteria: "Either a verified live/staged WordPress URL is returned, or a clear blocked handoff names the missing credential/approval without exposing secrets.",
     };
 
@@ -692,8 +692,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
       expect(evaluateTaskWorkspacePolicy(ctx({
         task,
         hiveSlug: "lakes-bushland-caravan-park",
-        projectWorkspace: "/home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
-        baseProjectWorkspace: "/home/trent/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
+        projectWorkspace: "/home/operator/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
+        baseProjectWorkspace: "/home/operator/.hivewright/hives/lakes-bushland-caravan-park/projects/content-publishing",
         gitBackedProject: false,
       }))).toMatchObject({ allowed: true });
     }
@@ -720,8 +720,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
       expect(isCodeChangingTask(task)).toBe(true);
       const decision = evaluateTaskWorkspacePolicy(ctx({
         task,
-        projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/governance",
-        baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/governance",
+        projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/governance",
+        baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/governance",
         gitBackedProject: false,
       }));
       expect(decision.allowed).toBe(false);
@@ -743,8 +743,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
     expect(isCodeChangingTask(task)).toBe(false);
     expect(evaluateTaskWorkspacePolicy(ctx({
       task,
-      projectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/intelligence",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/whiston-management/projects/intelligence",
+      projectWorkspace: "/home/operator/.hivewright/hives/whiston-management/projects/intelligence",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/whiston-management/projects/intelligence",
       gitBackedProject: false,
     }))).toMatchObject({ allowed: true });
   });
@@ -758,8 +758,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "## QA Failure Re-Planning\nThe following sprint task failed QA repeatedly and needs automatic re-planning or decomposition. Original brief: Sprint 1 needs traceable evidence, not broad narratives. Owner guardrails prohibit public/production changes.",
         acceptanceCriteria: "Create follow-up non-code research tasks only.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/cabin-connect/projects",
+      projectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/cabin-connect/projects",
       gitBackedProject: false,
     }));
 
@@ -775,8 +775,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Rerun current install proofs so audit evidence is current: dispatcher-health, runtime-path, backup, and restore-smoke. Store results in a new dated readiness directory and summarize backup retention gaps if any remain.",
         acceptanceCriteria: "A new dated readiness artifact set exists with dispatcher health, runtime path, backup, and restore-smoke results captured.",
       },
-      projectWorkspace: "/home/trent/.hivewright/readiness",
-      baseProjectWorkspace: "/home/trent/.hivewright/readiness",
+      projectWorkspace: "/home/operator/.hivewright/readiness",
+      baseProjectWorkspace: "/home/operator/.hivewright/readiness",
       gitBackedProject: false,
     }));
 
@@ -792,8 +792,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "A new skill candidate has been proposed by role dev-agent and requires QA review. Please review the skill content for correctness, clarity, scope, and no sensitive data.",
         acceptanceCriteria: "Approve or reject the candidate through the governed skill lifecycle API.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects",
       gitBackedProject: false,
     }));
 
@@ -809,8 +809,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "## Git Evidence\nIsolation status: skipped\nSkipped reason: Worktree isolation disabled: task is not associated with a git-backed project.\n\n### Your Job\nReview the deliverable against the acceptance criteria. Your first non-empty line must be exactly `pass` or `fail`.",
         acceptanceCriteria: "Review the artifact only and do not modify source code.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/short-stay-sales/projects",
+      projectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/short-stay-sales/projects",
       gitBackedProject: false,
     }));
 
@@ -826,8 +826,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Produce the Sprint 1 canonical OAIC/privacy remediation checklist/table using only internal artifacts and source references. Build one finite table with privacy surfaces, cloud/API routing, risk rating, mitigation class, owner gate status, and stop condition. Do not use live probes, do not inspect production/customer data, do not make configuration changes, do not contact vendors, and do not draft external-facing policy text. If any attribute cannot be resolved from internal evidence, mark it as unknown or defer rather than inferring. Mitigations are classified as internal-safe, implementation-later, owner-gated, or defer.",
         acceptanceCriteria: "No live probes, customer data inspection, vendor contact, or config changes occur.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      projectWorkspace: "/home/operator/.hivewright/hives/trents-personal/projects/compliance",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/trents-personal/projects/compliance",
       gitBackedProject: false,
     }));
 
@@ -843,8 +843,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Patch the dashboard API route source code and add a Vitest regression for the compliance logging bug.",
         acceptanceCriteria: "Code changes and tests are committed.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/trents-personal/projects/compliance",
+      projectWorkspace: "/home/operator/.hivewright/hives/trents-personal/projects/compliance",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/trents-personal/projects/compliance",
       gitBackedProject: false,
     }));
 
@@ -860,8 +860,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Implement the HiveWright dashboard UI table that renders internal artifacts and owner checklist state.",
         acceptanceCriteria: "Add component code and Vitest coverage.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/internal-artifacts",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/internal-artifacts",
       gitBackedProject: false,
     }));
 
@@ -880,8 +880,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Fix the HiveWright dashboard source so the readiness artifact table shows QA failure re-planning status.",
         acceptanceCriteria: "Patch React component code and add tests.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/readiness",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/readiness",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/readiness",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/readiness",
       gitBackedProject: false,
     }));
 
@@ -900,8 +900,8 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Implement the HiveWright dashboard UI table that renders internal artifacts and owner checklist state. Do not use live probes, do not inspect production/customer data, do not make configuration changes, do not contact vendors, and do not draft external-facing policy text.",
         acceptanceCriteria: "Dashboard UI implementation is covered by tests.",
       },
-      projectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
-      baseProjectWorkspace: "/home/trent/.hivewright/hives/hivewright/projects/internal-artifacts",
+      projectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/internal-artifacts",
+      baseProjectWorkspace: "/home/operator/.hivewright/hives/hivewright/projects/internal-artifacts",
       gitBackedProject: false,
     }));
 
@@ -920,13 +920,13 @@ describe("evaluateTaskWorkspacePolicy", () => {
         brief: "Patch the dispatcher source code and add a schema migration.",
         projectId: "project-1",
       },
-      projectWorkspace: "/home/trent/dev/hivewright",
-      baseProjectWorkspace: "/home/trent/dev/hivewright",
+      projectWorkspace: "/home/operator/dev/hivewright",
+      baseProjectWorkspace: "/home/operator/dev/hivewright",
       gitBackedProject: true,
       workspaceIsolation: {
         status: "active",
-        worktreePath: "/home/trent/dev/hivewright/.worktrees/task-routing",
-        baseWorkspacePath: "/home/trent/dev/hivewright",
+        worktreePath: "/home/operator/dev/hivewright/.worktrees/task-routing",
+        baseWorkspacePath: "/home/operator/dev/hivewright",
         branchName: "hw/task/task-routing-backend-engineer",
         isolationActive: true,
         reused: false,

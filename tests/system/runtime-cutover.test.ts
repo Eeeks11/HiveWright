@@ -16,12 +16,15 @@ import {
 
 const tmpRoots: string[] = [];
 
+process.env.HIVEWRIGHT_OPERATIONAL_INSTALL_ROOT = "/home/operator/apps/HiveWright";
+process.env.HIVEWRIGHT_LEGACY_SOURCE_ROOT = "/home/operator/hivewrightv2";
+
 describe("runtime cutover", () => {
   const config = buildRuntimeCutoverConfig({
-    serviceUser: "trent",
-    runtimeCheckout: "/home/trent/apps/HiveWright",
-    runtimeRoot: "/home/trent/.hivewright",
-    serviceDirectory: "/home/trent/.config/systemd/user",
+    serviceUser: "operator",
+    runtimeCheckout: "/home/operator/apps/HiveWright",
+    runtimeRoot: "/home/operator/.hivewright",
+    serviceDirectory: "/home/operator/.config/systemd/user",
   });
 
   afterEach(async () => {
@@ -31,10 +34,10 @@ describe("runtime cutover", () => {
   it("refuses to render services against a writable runtime checkout", () => {
     expect(() =>
       buildRuntimeCutoverConfig({
-        serviceUser: "trent",
-        runtimeCheckout: "/home/trent/dev/hivewright-live",
-        runtimeRoot: "/home/trent/.hivewright",
-        serviceDirectory: "/home/trent/.config/systemd/user",
+        serviceUser: "operator",
+        runtimeCheckout: "/home/operator/dev/hivewright-live",
+        runtimeRoot: "/home/operator/.hivewright",
+        serviceDirectory: "/home/operator/.config/systemd/user",
       }),
     ).toThrow(/locked operational install/);
   });
@@ -42,39 +45,39 @@ describe("runtime cutover", () => {
   it("renders dashboard service against the locked operational install", () => {
     const unit = renderDashboardUserService(config);
 
-    expect(unit).toContain("WorkingDirectory=/home/trent/apps/HiveWright");
+    expect(unit).toContain("WorkingDirectory=/home/operator/apps/HiveWright");
     expect(unit).toContain("ExecStart=/usr/bin/npm run start -- -H 127.0.0.1");
-    expect(unit).toContain("Environment=HIVEWRIGHT_RUNTIME_ROOT=/home/trent/.hivewright");
-    expect(unit).toContain("Environment=HIVEWRIGHT_SECRETS_FILE=/home/trent/.hivewright/secrets.env");
-    expect(unit).not.toContain("/home/trent/dev/hivewright-live");
+    expect(unit).toContain("Environment=HIVEWRIGHT_RUNTIME_ROOT=/home/operator/.hivewright");
+    expect(unit).toContain("Environment=HIVEWRIGHT_SECRETS_FILE=/home/operator/.hivewright/secrets.env");
+    expect(unit).not.toContain("/home/operator/dev/hivewright-live");
   });
 
   it("renders dispatcher service and cwd guard against the locked operational install", () => {
     const unit = renderDispatcherUserService(config);
     const guard = renderDispatcherLegacyGuard(config);
 
-    expect(unit).toContain("WorkingDirectory=/home/trent/apps/HiveWright");
-    expect(unit).toContain("ExecStart=/bin/bash /home/trent/apps/HiveWright/start-dispatcher.sh");
-    expect(unit).toContain("Environment=HIVEWRIGHT_SECRETS_FILE=/home/trent/.hivewright/secrets.env");
-    expect(guard).toContain('test "$PWD" = "/home/trent/apps/HiveWright"');
-    expect(guard).toContain("HiveWright dispatcher must run from locked install /home/trent/apps/HiveWright");
-    expect(guard).not.toContain("/home/trent/dev/hivewright-live");
+    expect(unit).toContain("WorkingDirectory=/home/operator/apps/HiveWright");
+    expect(unit).toContain("ExecStart=/bin/bash /home/operator/apps/HiveWright/start-dispatcher.sh");
+    expect(unit).toContain("Environment=HIVEWRIGHT_SECRETS_FILE=/home/operator/.hivewright/secrets.env");
+    expect(guard).toContain('test "$PWD" = "/home/operator/apps/HiveWright"');
+    expect(guard).toContain("HiveWright dispatcher must run from locked install /home/operator/apps/HiveWright");
+    expect(guard).not.toContain("/home/operator/dev/hivewright-live");
   });
 
   it("records deployment provenance for the locked operational install", () => {
     const provenance = buildRuntimeDeploymentProvenance(config, {
-      sourceRepo: "/home/trent/apps/HiveWright",
+      sourceRepo: "/home/operator/apps/HiveWright",
       requestedRef: "origin/main",
       deployedCommit: "abc123def456",
       deployedAt: "2026-06-09T06:30:00.000Z",
       readinessUrl: "http://127.0.0.1:3002/api/readiness",
     });
 
-    expect(provenance.runtimeCheckout).toBe("/home/trent/apps/HiveWright");
-    expect(provenance.sourceRepo).toBe("/home/trent/apps/HiveWright");
+    expect(provenance.runtimeCheckout).toBe("/home/operator/apps/HiveWright");
+    expect(provenance.sourceRepo).toBe("/home/operator/apps/HiveWright");
     expect(provenance.deployedCommit).toBe("abc123def456");
-    expect(provenance.systemd.dashboardUnit).toBe("/home/trent/.config/systemd/user/hivewright-dashboard.service");
-    expect(provenance.systemd.dispatcherUnit).toBe("/home/trent/.config/systemd/user/hivewright-dispatcher.service");
+    expect(provenance.systemd.dashboardUnit).toBe("/home/operator/.config/systemd/user/hivewright-dashboard.service");
+    expect(provenance.systemd.dispatcherUnit).toBe("/home/operator/.config/systemd/user/hivewright-dispatcher.service");
   });
 
   it("includes dev dependencies in the runtime cutover build plan", () => {
@@ -118,14 +121,14 @@ describe("runtime cutover", () => {
     await fs.writeFile(cutoverPath, JSON.stringify({
       recordedAt: "2026-06-13T00:33:00.000Z",
       runtimeMode: "locked-install",
-      installDir: "/home/trent/apps/HiveWright",
+      installDir: "/home/operator/apps/HiveWright",
       runtimeRoot,
       envFile: `${runtimeRoot}/config/.env`,
       dashboardHealthUrl: "http://127.0.0.1:3002",
       deployedCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
       buildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
-      dashboard: { pid: 101, cwd: "/home/trent/apps/HiveWright" },
-      dispatcher: { pid: 202, cwd: "/home/trent/apps/HiveWright" },
+      dashboard: { pid: 101, cwd: "/home/operator/apps/HiveWright" },
+      dispatcher: { pid: 202, cwd: "/home/operator/apps/HiveWright" },
     }));
 
     const read = await readRuntimeCutoverRecord({
@@ -136,7 +139,7 @@ describe("runtime cutover", () => {
       ...read,
       expected: {
         runtimeMode: "locked-install",
-        installDir: "/home/trent/apps/HiveWright",
+        installDir: "/home/operator/apps/HiveWright",
         runtimeRoot,
         envFile: `${runtimeRoot}/config/.env`,
         dashboardHealthUrl: "http://127.0.0.1:3002",
@@ -159,12 +162,12 @@ describe("runtime cutover", () => {
     await fs.mkdir(path.dirname(cutoverPath), { recursive: true });
     await fs.writeFile(cutoverPath, JSON.stringify({
       completedAt: "2026-06-11T00:00:00.000Z",
-      runtimeCheckout: "/home/trent/dev/hivewright-live",
+      runtimeCheckout: "/home/operator/dev/hivewright-live",
       runtimeRoot,
       deployedCommit: "ba33cbdcecb6f30ed8c8daa7d80f19e7049f4e44",
       buildHash: "ba33cbdcecb6f30ed8c8daa7d80f19e7049f4e44",
-      dashboard: { pid: 101, cwd: "/home/trent/dev/hivewright-live" },
-      dispatcher: { pid: 202, cwd: "/home/trent/dev/hivewright-live" },
+      dashboard: { pid: 101, cwd: "/home/operator/dev/hivewright-live" },
+      dispatcher: { pid: 202, cwd: "/home/operator/dev/hivewright-live" },
     }));
 
     const read = await readRuntimeCutoverRecord({
@@ -175,7 +178,7 @@ describe("runtime cutover", () => {
       ...read,
       expected: {
         runtimeMode: "locked-install",
-        installDir: "/home/trent/apps/HiveWright",
+        installDir: "/home/operator/apps/HiveWright",
         runtimeRoot,
         currentCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
         currentBuildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
@@ -185,7 +188,7 @@ describe("runtime cutover", () => {
     expect(status.available).toBe(true);
     expect(status.state).toBe("drift");
     expect(status.reasons.join("\n")).toContain("runtimeMode");
-    expect(status.reasons.join("\n")).toContain("/home/trent/apps/HiveWright");
+    expect(status.reasons.join("\n")).toContain("/home/operator/apps/HiveWright");
     expect(status.reasons.join("\n")).toContain("18cacfaa6b8682bde5802e7b2b53f63470f63d3e");
   });
 
@@ -197,12 +200,12 @@ describe("runtime cutover", () => {
     await fs.writeFile(cutoverPath, JSON.stringify({
       recordedAt: "2026-06-13T00:33:00.000Z",
       runtimeMode: "locked-install",
-      installDir: "/home/trent/apps/HiveWright",
+      installDir: "/home/operator/apps/HiveWright",
       runtimeRoot,
       envFile: `${runtimeRoot}/config/.env`,
       dashboardHealthUrl: "http://127.0.0.1:3002",
-      dashboard: { pid: 101, cwd: "/home/trent/apps/HiveWright" },
-      dispatcher: { pid: 202, cwd: "/home/trent/apps/HiveWright" },
+      dashboard: { pid: 101, cwd: "/home/operator/apps/HiveWright" },
+      dispatcher: { pid: 202, cwd: "/home/operator/apps/HiveWright" },
     }));
 
     const read = await readRuntimeCutoverRecord({
@@ -213,7 +216,7 @@ describe("runtime cutover", () => {
       ...read,
       expected: {
         runtimeMode: "locked-install",
-        installDir: "/home/trent/apps/HiveWright",
+        installDir: "/home/operator/apps/HiveWright",
         runtimeRoot,
         envFile: `${runtimeRoot}/config/.env`,
         dashboardHealthUrl: "http://127.0.0.1:3002",
@@ -240,12 +243,12 @@ describe("runtime cutover", () => {
     await fs.writeFile(cutoverPath, JSON.stringify({
       recordedAt: "2026-06-13T00:33:00.000Z",
       runtimeMode: "locked-install",
-      installDir: "/home/trent/apps/HiveWright",
+      installDir: "/home/operator/apps/HiveWright",
       runtimeRoot,
       deployedCommit: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
       buildHash: "18cacfaa6b8682bde5802e7b2b53f63470f63d3e",
-      dashboard: { pid: 101, cwd: "/home/trent/apps/HiveWright" },
-      dispatcher: { pid: 202, cwd: "/home/trent/apps/HiveWright" },
+      dashboard: { pid: 101, cwd: "/home/operator/apps/HiveWright" },
+      dispatcher: { pid: 202, cwd: "/home/operator/apps/HiveWright" },
     }));
 
     const read = await readRuntimeCutoverRecord({
@@ -256,7 +259,7 @@ describe("runtime cutover", () => {
       ...read,
       expected: {
         runtimeMode: "locked-install",
-        installDir: "/home/trent/apps/HiveWright",
+        installDir: "/home/operator/apps/HiveWright",
         runtimeRoot,
         envFile: `${runtimeRoot}/config/.env`,
         dashboardHealthUrl: "http://127.0.0.1:3002",

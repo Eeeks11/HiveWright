@@ -295,9 +295,31 @@ describe("HiveWright update system", () => {
     );
 
     expect(script).not.toContain('install -o root -g root -m 0755 "$UPDATER_SRC" "$UPDATER_DST"');
-    expect(script).toContain("cat > \"$UPDATER_DST\" <<'WRAPPER'");
-    expect(script).toContain('exec /home/trent/apps/HiveWright/scripts/hivewright-operational-update-root.sh "$@"');
+    expect(script).toContain('cat > "$UPDATER_DST" <<WRAPPER');
+    expect(script).toContain('export HIVEWRIGHT_LOCKED_INSTALL_DIR="\\${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$INSTALL_DIR}"');
+    expect(script).toContain('export HIVEWRIGHT_INSTALL_DIR="\\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}"');
+    expect(script).toContain('exec "\\$HIVEWRIGHT_INSTALL_DIR/scripts/hivewright-operational-update-root.sh" "\\$@"');
     expect(script).toContain('sudo -u "$SERVICE_USER" sudo -n /usr/local/sbin/hivewright-operational-update status-json >/dev/null');
+  });
+
+  it("pins non-default operational installs as the locked updater root", () => {
+    const installer = readFileSync(
+      path.resolve(__dirname, "../../scripts/install-operational-repo-lock.sh"),
+      "utf8",
+    );
+    const updater = readFileSync(
+      path.resolve(__dirname, "../../scripts/hivewright-operational-update-root.sh"),
+      "utf8",
+    );
+
+    expect(installer).toContain('INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-$SERVICE_HOME/apps/HiveWright}"');
+    expect(installer).toContain("Environment=HIVEWRIGHT_INSTALL_DIR=$INSTALL_DIR");
+    expect(installer).toContain("Environment=HIVEWRIGHT_LOCKED_INSTALL_DIR=$INSTALL_DIR");
+    expect(installer).toContain('export HIVEWRIGHT_LOCKED_INSTALL_DIR="\\${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$INSTALL_DIR}"');
+    expect(installer).toContain('export HIVEWRIGHT_INSTALL_DIR="\\${HIVEWRIGHT_INSTALL_DIR:-$INSTALL_DIR}"');
+    expect(updater).toContain('LOCKED_INSTALL_DIR="${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$SERVICE_HOME/apps/HiveWright}"');
+    expect(updater).toContain('INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-$LOCKED_INSTALL_DIR}"');
+    expect(updater).toContain('[ "$INSTALL_DIR" = "$LOCKED_INSTALL_DIR" ] || { echo "Refusing unexpected install path: $INSTALL_DIR" >&2; exit 20; }');
   });
 
   it("places dashboard update logs under the external runtime root", () => {

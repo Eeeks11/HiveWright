@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-/home/trent/apps/HiveWright}"
-RUNTIME_ROOT="${HIVEWRIGHT_RUNTIME_ROOT:-/home/trent/.hivewright}"
+resolve_service_user() {
+  if [ -n "${HIVEWRIGHT_SERVICE_USER:-}" ]; then
+    printf '%s\n' "$HIVEWRIGHT_SERVICE_USER"
+  elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    printf '%s\n' "$SUDO_USER"
+  else
+    logname 2>/dev/null || id -un
+  fi
+}
+
+SERVICE_USER="$(resolve_service_user)"
+SERVICE_HOME="$(getent passwd "$SERVICE_USER" | cut -d: -f6)"
+SERVICE_HOME="${SERVICE_HOME:-$HOME}"
+LOCKED_INSTALL_DIR="${HIVEWRIGHT_LOCKED_INSTALL_DIR:-$SERVICE_HOME/apps/HiveWright}"
+INSTALL_DIR="${HIVEWRIGHT_INSTALL_DIR:-$LOCKED_INSTALL_DIR}"
+RUNTIME_ROOT="${HIVEWRIGHT_RUNTIME_ROOT:-$SERVICE_HOME/.hivewright}"
 ENV_FILE="${HIVEWRIGHT_ENV_FILE:-$RUNTIME_ROOT/config/.env}"
 LOG_DIR="$RUNTIME_ROOT/logs/updates"
 DEPLOYMENT_DIR="$RUNTIME_ROOT/logs/deployments"
 CUTOVER_FILE="$DEPLOYMENT_DIR/latest-runtime-cutover.json"
-SERVICE_USER="${HIVEWRIGHT_SERVICE_USER:-trent}"
 DASHBOARD_URL="${HIVEWRIGHT_DASHBOARD_HEALTH_URL:-http://127.0.0.1:3002}"
 HEALTH_RETRY_COUNT="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_COUNT:-15}"
 HEALTH_RETRY_DELAY_SECONDS="${HIVEWRIGHT_DASHBOARD_HEALTH_RETRY_DELAY_SECONDS:-2}"
@@ -95,7 +108,7 @@ ensure_root() {
 }
 
 ensure_paths() {
-  [ "$INSTALL_DIR" = "/home/trent/apps/HiveWright" ] || { echo "Refusing unexpected install path: $INSTALL_DIR" >&2; exit 20; }
+  [ "$INSTALL_DIR" = "$LOCKED_INSTALL_DIR" ] || { echo "Refusing unexpected install path: $INSTALL_DIR" >&2; exit 20; }
   [ -d "$INSTALL_DIR/.git" ] || { echo "Install dir is not a git checkout: $INSTALL_DIR" >&2; exit 21; }
   mkdir -p "$LOG_DIR" "$DEPLOYMENT_DIR"
   chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_ROOT/logs" 2>/dev/null || true

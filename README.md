@@ -53,7 +53,7 @@ npm run build:dispatcher
 ./start-dispatcher.sh
 ```
 
-If you run HiveWright as user services, keep the services pointed at the locked operational install (`/home/trent/apps/HiveWright`) and keep runtime/private state under `~/.hivewright`. Do not run dashboard or dispatcher from a writable `~/dev` checkout; updates should flow through GitHub and the privileged operational updater.
+If you run HiveWright as user services, keep the services pointed at the locked operational install (by default `~/apps/HiveWright`, or `HIVEWRIGHT_INSTALL_DIR`) and keep runtime/private state under `~/.hivewright` (or `HIVEWRIGHT_RUNTIME_ROOT`). Do not run dashboard or dispatcher from a writable `~/dev` checkout; updates should flow through GitHub and the privileged operational updater.
 
 ## Setup Walkthrough
 
@@ -117,7 +117,7 @@ systemctl --user restart hivewrightv2-dashboard
 ./scripts/deferred-restart-dispatcher.sh 10
 ```
 
-For persistent live installs, use the privileged operational updater from the locked install. It fast-forwards `/home/trent/apps/HiveWright`, rebuilds dashboard and dispatcher artifacts, restarts the user services, and verifies the running PIDs have cwd `/home/trent/apps/HiveWright`.
+For persistent live installs, use the privileged operational updater from the locked install. It fast-forwards the configured install directory, rebuilds dashboard and dispatcher artifacts, restarts the user services, and verifies the running PIDs have cwd inside that locked install.
 
 Notes:
 
