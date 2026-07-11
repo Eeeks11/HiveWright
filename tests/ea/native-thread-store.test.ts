@@ -76,6 +76,23 @@ describe("appendMessage + getThreadMessages", () => {
     expect(msgs.map((m) => m.role)).toEqual(["owner", "assistant", "owner"]);
   });
 
+  it("keeps owner before assistant when rows share a transaction-stable timestamp", async () => {
+    const t = await getOrCreateActiveThread(sql, BIZ, "chan-tied-time");
+    const owner = await appendMessage(sql, t.id, "owner", "same-timestamp owner");
+    const assistant = await appendMessage(sql, t.id, "assistant", "same-timestamp assistant");
+    const tiedCreatedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+    await sql`
+      UPDATE ea_messages
+      SET created_at = ${tiedCreatedAt}
+      WHERE id IN (${owner.id}, ${assistant.id})
+    `;
+
+    const msgs = await getThreadMessages(sql, t.id, 10);
+
+    expect(msgs.map((m) => m.id)).toEqual([owner.id, assistant.id]);
+    expect(msgs.map((m) => m.role)).toEqual(["owner", "assistant"]);
+  });
+
   it("caps results at the limit, keeping the most recent window", async () => {
     const t = await getOrCreateActiveThread(sql, BIZ, "chan-cap");
     for (let i = 0; i < 5; i++) {

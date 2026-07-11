@@ -3,6 +3,7 @@ import { sql as appSql } from "@/app/api/_lib/db";
 import {
   appendMessage,
   closeActiveThread,
+  EA_MESSAGE_NEWEST_FIRST_ORDER_SQL,
   getOrCreateActiveThread,
   getThreadMessages,
   type EaMessage,
@@ -413,7 +414,7 @@ export async function getDashboardChat(
     FROM ea_messages
     WHERE thread_id = ${thread.id}
       AND (${input.before ?? null}::timestamp IS NULL OR created_at < ${input.before ?? null}::timestamp)
-    ORDER BY created_at DESC
+    ORDER BY ${sql.unsafe(EA_MESSAGE_NEWEST_FIRST_ORDER_SQL)}
     LIMIT ${limit + 1}
   `;
 

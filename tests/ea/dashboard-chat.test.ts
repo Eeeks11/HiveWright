@@ -47,6 +47,7 @@ vi.mock("@/quality/ea-post-turn", () => ({
 import {
   DashboardEaTurnInProgressError,
   dashboardEaClient,
+  getDashboardChat,
   sendDashboardMessage,
 } from "@/ea/native/dashboard-chat";
 import type { EaMessage } from "@/ea/native/thread-store";
@@ -178,7 +179,14 @@ describe("dashboardEaClient.submit", () => {
       FROM ea_messages m
       JOIN ea_threads t ON t.id = m.thread_id
       WHERE t.hive_id = ${HIVE_ID}
-      ORDER BY m.created_at ASC
+      ORDER BY m.created_at ASC,
+        CASE m.role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        m.id ASC
     `;
 
     expect(rows).toEqual([
@@ -206,6 +214,32 @@ describe("dashboardEaClient.submit", () => {
         ownerMessage: "What active goals do I have?",
       }),
     );
+  });
+
+  it("returns dashboard history in owner-before-assistant order when created_at ties", async () => {
+    const stream = await dashboardEaClient.submit("same timestamp turn", {
+      hiveId: HIVE_ID,
+      hiveName: "Dashboard Native Hive",
+    });
+    for await (const chunk of stream) void chunk;
+
+    const tiedCreatedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+    await sql`
+      UPDATE ea_messages
+      SET created_at = ${tiedCreatedAt}
+      WHERE source = 'dashboard'
+    `;
+
+    const chat = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+
+    expect(chat.messages.map((message) => message.role)).toEqual(["owner", "assistant"]);
+    expect(chat.messages.map((message) => message.content)).toEqual([
+      "same timestamp turn",
+      "Hello, dashboard.",
+    ]);
   });
 
   it("passes dashboard attachment paths through to runEaStream", async () => {
@@ -329,7 +363,14 @@ describe("dashboardEaClient.submit", () => {
       const messages = await sql<{ role: string; content: string }[]>`
         SELECT role, content
         FROM ea_messages
-        ORDER BY created_at ASC, id ASC
+        ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
       `;
       expect(messages).toEqual([
         { role: "owner", content: "first concurrent request" },
@@ -382,7 +423,14 @@ describe("dashboardEaClient.submit", () => {
     const rows = await sql<{ role: string; content: string; status: string }[]>`
       SELECT role, content, status
       FROM ea_messages
-      ORDER BY created_at ASC, id ASC
+      ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
     `;
     expect(rows).toEqual([
       { role: "owner", content: "clean retry", status: "sent" },
@@ -520,7 +568,14 @@ describe("dashboardEaClient.submit", () => {
       SELECT id, content, status
       FROM ea_messages
       WHERE role = 'assistant'
-      ORDER BY created_at ASC, id ASC
+      ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
     `;
     expect(rows).toEqual(expect.arrayContaining([
       { id: first.id, content: "", status: "failed" },
