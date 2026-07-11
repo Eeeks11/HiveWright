@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "hive-1" }),
+  usePathname: () => "/hives/hive-1/files",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("@/components/hive-section-nav", () => ({

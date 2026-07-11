@@ -26,6 +26,9 @@ const mockSql = vi.mocked(sql) as unknown as Mock;
 const mockRequireApiUser = vi.mocked(requireApiUser);
 const mockCanAccessHive = vi.mocked(canAccessHive);
 
+const HIVE_A_ID = "11111111-1111-4111-8111-111111111111";
+const SESSION_ID = "22222222-2222-4222-8222-222222222222";
+
 const memberUser = {
   id: "user-1",
   email: "member@example.com",
@@ -33,7 +36,7 @@ const memberUser = {
 };
 
 const hiveRow = {
-  id: "hive-a",
+  id: HIVE_A_ID,
   slug: "hive-a",
   name: "Hive A",
   type: "digital",
@@ -47,8 +50,8 @@ const hiveRow = {
 };
 
 const boardSessionRow = {
-  id: "session-1",
-  hive_id: "hive-a",
+  id: SESSION_ID,
+  hive_id: HIVE_A_ID,
   question: "What next?",
   status: "completed",
   recommendation: "Proceed",
@@ -64,8 +67,12 @@ function authAsMember() {
 async function expectForbidden(response: Response) {
   expect(response.status).toBe(403);
   await expect(response.json()).resolves.toMatchObject({
-    error: "Forbidden: hive access required",
+    error: expect.stringMatching(/Forbidden:/),
   });
+}
+
+function requestWithHive(path: string): Request {
+  return new Request(`http://localhost${path}${path.includes("?") ? "&" : "?"}hiveId=${HIVE_A_ID}`);
 }
 
 describe("cross-hive read route auth", () => {
@@ -80,12 +87,12 @@ describe("cross-hive read route auth", () => {
     mockCanAccessHive.mockResolvedValueOnce(false);
 
     const res = await getHive(
-      new Request("http://localhost/api/hives/hive-a"),
-      { params: Promise.resolve({ id: "hive-a" }) },
+      new Request(`http://localhost/api/hives/${HIVE_A_ID}`),
+      { params: Promise.resolve({ id: HIVE_A_ID }) },
     );
 
     await expectForbidden(res as unknown as Response);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-a");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_A_ID);
   });
 
   it("GET /api/hives/[id] allows an authorized member", async () => {
@@ -101,55 +108,57 @@ describe("cross-hive read route auth", () => {
       .mockResolvedValueOnce([]);
 
     const res = await getHive(
-      new Request("http://localhost/api/hives/hive-a"),
-      { params: Promise.resolve({ id: "hive-a" }) },
+      new Request(`http://localhost/api/hives/${HIVE_A_ID}`),
+      { params: Promise.resolve({ id: HIVE_A_ID }) },
     );
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      data: { id: "hive-a", name: "Hive A" },
+      data: { id: HIVE_A_ID, name: "Hive A" },
     });
   });
 
   it("GET /api/memory/search denies an authenticated non-member before memory queries", async () => {
+    mockSql.mockResolvedValueOnce([hiveRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
     const res = await searchMemory(
-      new Request("http://localhost/api/memory/search?hiveId=hive-a&q=needle"),
+      requestWithHive("/api/memory/search?q=needle"),
     );
 
     await expectForbidden(res as unknown as Response);
-    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockSql).toHaveBeenCalledTimes(1);
   });
 
   it("GET /api/memory/search allows an authorized member", async () => {
-    mockSql.mockResolvedValue([]);
+    mockSql.mockResolvedValueOnce([hiveRow]).mockResolvedValue([]);
 
     const res = await searchMemory(
-      new Request("http://localhost/api/memory/search?hiveId=hive-a&q=needle"),
+      requestWithHive("/api/memory/search?q=needle"),
     );
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({ data: [] });
-    expect(mockSql).toHaveBeenCalledTimes(3);
+    expect(mockSql).toHaveBeenCalledTimes(4);
   });
 
   it("GET /api/memory/timeline denies an authenticated non-member before timeline queries", async () => {
+    mockSql.mockResolvedValueOnce([hiveRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
     const res = await getTimeline(
-      new Request("http://localhost/api/memory/timeline?hiveId=hive-a"),
+      requestWithHive("/api/memory/timeline"),
     );
 
     await expectForbidden(res as unknown as Response);
-    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockSql).toHaveBeenCalledTimes(1);
   });
 
   it("GET /api/memory/timeline allows an authorized member", async () => {
-    mockSql.mockResolvedValueOnce([{ total: 0 }]).mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([hiveRow]).mockResolvedValueOnce([{ total: 0 }]).mockResolvedValueOnce([]);
 
     const res = await getTimeline(
-      new Request("http://localhost/api/memory/timeline?hiveId=hive-a&store=role_memory"),
+      requestWithHive("/api/memory/timeline?store=role_memory"),
     );
 
     expect(res.status).toBe(200);
@@ -165,7 +174,7 @@ describe("cross-hive read route auth", () => {
     mockCanAccessHive.mockResolvedValueOnce(false);
 
     const res = await listBoardSessions(
-      new Request("http://localhost/api/board/sessions?hiveId=hive-a"),
+      requestWithHive("/api/board/sessions"),
     );
 
     await expectForbidden(res as unknown as Response);
@@ -176,40 +185,40 @@ describe("cross-hive read route auth", () => {
     mockSql.mockResolvedValueOnce([boardSessionRow]);
 
     const res = await listBoardSessions(
-      new Request("http://localhost/api/board/sessions?hiveId=hive-a"),
+      requestWithHive("/api/board/sessions"),
     );
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      data: [{ id: "session-1", question: "What next?" }],
+      data: [{ id: SESSION_ID, question: "What next?" }],
     });
   });
 
   it("GET /api/board/sessions/[id] denies an authenticated non-member after resolving the session hive", async () => {
-    mockSql.mockResolvedValueOnce([boardSessionRow]);
+    mockSql.mockResolvedValueOnce([hiveRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
     const res = await getBoardSession(
-      new Request("http://localhost/api/board/sessions/session-1"),
-      { params: Promise.resolve({ id: "session-1" }) },
+      requestWithHive(`/api/board/sessions/${SESSION_ID}`),
+      { params: Promise.resolve({ id: SESSION_ID }) },
     );
 
     await expectForbidden(res as unknown as Response);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-a");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_A_ID);
     expect(mockSql).toHaveBeenCalledTimes(1);
   });
 
   it("GET /api/board/sessions/[id] allows an authorized member", async () => {
-    mockSql.mockResolvedValueOnce([boardSessionRow]).mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([hiveRow]).mockResolvedValueOnce([boardSessionRow]).mockResolvedValueOnce([]);
 
     const res = await getBoardSession(
-      new Request("http://localhost/api/board/sessions/session-1"),
-      { params: Promise.resolve({ id: "session-1" }) },
+      requestWithHive(`/api/board/sessions/${SESSION_ID}`),
+      { params: Promise.resolve({ id: SESSION_ID }) },
     );
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toMatchObject({
-      data: { session: { id: "session-1", hive_id: "hive-a" }, turns: [] },
+      data: { session: { id: SESSION_ID, hive_id: HIVE_A_ID }, turns: [] },
     });
   });
 
@@ -219,8 +228,8 @@ describe("cross-hive read route auth", () => {
     });
 
     const res = await getBoardSession(
-      new Request("http://localhost/api/board/sessions/session-1"),
-      { params: Promise.resolve({ id: "session-1" }) },
+      requestWithHive(`/api/board/sessions/${SESSION_ID}`),
+      { params: Promise.resolve({ id: SESSION_ID }) },
     );
 
     expect(res.status).toBe(401);

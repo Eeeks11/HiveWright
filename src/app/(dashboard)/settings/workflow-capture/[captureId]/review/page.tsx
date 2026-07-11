@@ -94,7 +94,7 @@ function CaptureReviewPageContent() {
   const { selected } = useHiveContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const requestedTargetHiveId = searchParams?.get("targetHiveId") ?? null;
   const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = target.effectiveHiveId;
   const [session, setSession] = useState<CaptureSession | null>(null);

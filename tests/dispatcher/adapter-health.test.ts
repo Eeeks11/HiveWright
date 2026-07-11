@@ -194,7 +194,7 @@ describe("checkDispatcherModelRouteHealth", () => {
     const fingerprint = createRuntimeCredentialFingerprint({
       provider: "local",
       adapterType: "ollama",
-      baseUrl: null,
+      baseUrl: "http://192.168.50.68:11434",
     });
     await sql`
       INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)
@@ -218,7 +218,7 @@ describe("checkDispatcherModelRouteHealth", () => {
       modelId: "qwen3:32b",
       now: NOW,
       provisionerFor: () => ({
-        check: async () => ({ satisfied: false, fixable: true, reason: "Ollama is offline" }),
+        check: async () => ({ satisfied: false, fixable: false, reason: "Ollama is offline" }),
         provision: async function* () {},
       }),
     });

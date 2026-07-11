@@ -31,6 +31,7 @@ vi.mock("@/auth/users", async (importOriginal) => {
   return {
     ...actual,
     canAccessHive: async () => authState.canAccess,
+    canMutateHive: async () => authState.canAccess,
   };
 });
 

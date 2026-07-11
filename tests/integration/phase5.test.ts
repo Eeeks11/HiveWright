@@ -68,7 +68,7 @@ describe("Phase 5 Integration: Interfaces", () => {
     const taskId: string = created.id;
 
     // GET by ID
-    const getReq = new Request(`${BASE}/api/tasks/${taskId}`);
+    const getReq = new Request(`${BASE}/api/tasks/${taskId}?hiveId=${bizId}`);
     const getRes = await getTaskById(getReq, {
       params: Promise.resolve({ id: taskId }),
     });
@@ -102,7 +102,7 @@ describe("Phase 5 Integration: Interfaces", () => {
     const goalId: string = created.id;
 
     // GET by ID — should include taskSummary
-    const getReq = new Request(`${BASE}/api/goals/${goalId}`);
+    const getReq = new Request(`${BASE}/api/goals/${goalId}?hiveId=${bizId}`);
     const getRes = await getGoalById(getReq, {
       params: Promise.resolve({ id: goalId }),
     });
@@ -144,7 +144,7 @@ describe("Phase 5 Integration: Interfaces", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "looks good" }),
+        body: JSON.stringify({ hiveId: bizId, response: "approved", comment: "looks good" }),
       },
     );
     const respondRes = await respondDecision(respondReq, {

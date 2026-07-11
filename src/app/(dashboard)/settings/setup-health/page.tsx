@@ -31,7 +31,7 @@ const statusIcon = {
 function SetupHealthPageContent() {
   const { selected, hives, loading: hivesLoading } = useHiveContext();
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const fallbackHive = selected ?? hives[0] ?? null;
   const target = useResolvedHiveTarget(targetHiveId ?? fallbackHive?.id ?? null);
   const effectiveHiveId = targetHiveId

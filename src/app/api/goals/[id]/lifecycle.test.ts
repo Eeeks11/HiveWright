@@ -37,13 +37,14 @@ const mockPruneGoalSupervisor = pruneGoalSupervisor as unknown as ReturnType<typ
 const params = { params: Promise.resolve({ id: "goal-1" }) };
 const goalRow = {
   id: "goal-1",
-  hive_id: "hive-1",
+  hive_id: "11111111-1111-4111-8111-111111111111",
   title: "Goal",
   status: "active",
   session_id: "hw-gs-hive-1-goal-1",
 };
 
-function lifecycleRequest(body: unknown = {}, sourceHiveId = "hive-1") {
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
+function lifecycleRequest(body: Record<string, unknown> = {}, sourceHiveId = HIVE_ID) {
   return new Request("http://localhost/api/goals/goal-1/cancel", {
     method: "POST",
     headers: {
@@ -53,7 +54,7 @@ function lifecycleRequest(body: unknown = {}, sourceHiveId = "hive-1") {
       "X-HiveWright-EA-Owner-Message-Id": "message-1",
       "X-HiveWright-EA-Source": "dashboard",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ hiveId: HIVE_ID, ...body }),
   });
 }
 
@@ -69,7 +70,9 @@ describe("goal lifecycle status endpoints", () => {
   });
 
   it("abandons an active goal, clears supervisor state, and writes a goal comment", async () => {
-    mockSql.mockResolvedValueOnce([goalRow]);
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([goalRow]);
 
     const res = await abandonGoal(lifecycleRequest({ reason: "duplicate goal" }), params);
     const body = await res.json();
@@ -82,12 +85,14 @@ describe("goal lifecycle status endpoints", () => {
       supervisorSessionEnded: true,
     });
     expect(mockSql.begin).toHaveBeenCalledTimes(1);
-    expect(mockSql).toHaveBeenCalledTimes(3);
+    expect(mockSql).toHaveBeenCalledTimes(4);
     expect(mockPruneGoalSupervisor).toHaveBeenCalledWith(mockSql, "goal-1");
   });
 
   it("cancels an active goal when a reason is supplied", async () => {
-    mockSql.mockResolvedValueOnce([goalRow]);
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([goalRow]);
 
     const res = await cancelGoal(lifecycleRequest({ reason: "owner cancelled" }), params);
     const body = await res.json();
@@ -105,7 +110,9 @@ describe("goal lifecycle status endpoints", () => {
   });
 
   it("returns 404 for unknown goals", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([]);
 
     const res = await abandonGoal(lifecycleRequest({ reason: "duplicate" }), params);
 
@@ -113,7 +120,9 @@ describe("goal lifecycle status endpoints", () => {
   });
 
   it("returns 409 for terminal goals", async () => {
-    mockSql.mockResolvedValueOnce([{ ...goalRow, status: "achieved" }]);
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([{ ...goalRow, status: "achieved" }]);
 
     const res = await abandonGoal(lifecycleRequest({ reason: "duplicate" }), params);
 
@@ -133,10 +142,12 @@ describe("goal lifecycle status endpoints", () => {
   });
 
   it("rejects cross-hive EA audit headers", async () => {
-    mockSql.mockResolvedValueOnce([goalRow]);
+    mockSql
+      .mockResolvedValueOnce([{ id: HIVE_ID }])
+      .mockResolvedValueOnce([goalRow]);
 
     const res = await abandonGoal(
-      lifecycleRequest({ reason: "duplicate" }, "other-hive"),
+      lifecycleRequest({ reason: "duplicate" }, "22222222-2222-4222-8222-222222222222"),
       params,
     );
 
@@ -148,12 +159,12 @@ describe("goal lifecycle status endpoints", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([goalRow]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await abandonGoal(lifecycleRequest({ reason: "duplicate" }), params);
 
     expect(res.status).toBe(403);
-    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_ID);
   });
 });

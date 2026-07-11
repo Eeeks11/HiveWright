@@ -25,7 +25,7 @@ export async function GET(
     const rows = await sql`
       SELECT id, filename, mime_type, size_bytes, uploaded_at
       FROM task_attachments
-      WHERE goal_id = ${id} AND hive_id = ${target.hiveId}::uuid
+      WHERE goal_id = ${id}
       ORDER BY uploaded_at ASC
     `;
     return jsonOk(

@@ -22,7 +22,7 @@ async function insertGoal(opts: { archived?: boolean } = {}): Promise<string> {
 describe("POST /api/goals/[id]/archive", () => {
   it("archives a goal that's not yet archived", async () => {
     const id = await insertGoal();
-    const req = new Request(`http://x/api/goals/${id}/archive`, { method: "POST" });
+    const req = new Request(`http://x/api/goals/${id}/archive?hiveId=${BIZ}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: BIZ }) });
     const res = await archivePOST(req, { params: Promise.resolve({ id }) });
     expect(res.status).toBe(200);
 
@@ -37,7 +37,7 @@ describe("POST /api/goals/[id]/archive", () => {
     const [{ archived_at: before }] = await sql<{ archived_at: Date }[]>`
       SELECT archived_at FROM goals WHERE id = ${id}
     `;
-    const req = new Request(`http://x/api/goals/${id}/archive`, { method: "POST" });
+    const req = new Request(`http://x/api/goals/${id}/archive?hiveId=${BIZ}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: BIZ }) });
     const res = await archivePOST(req, { params: Promise.resolve({ id }) });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -51,7 +51,7 @@ describe("POST /api/goals/[id]/archive", () => {
 
   it("returns 404 for unknown goal", async () => {
     const id = "00000000-0000-0000-0000-000000000000";
-    const req = new Request(`http://x/api/goals/${id}/archive`, { method: "POST" });
+    const req = new Request(`http://x/api/goals/${id}/archive?hiveId=${BIZ}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: BIZ }) });
     const res = await archivePOST(req, { params: Promise.resolve({ id }) });
     expect(res.status).toBe(404);
   });
@@ -60,7 +60,7 @@ describe("POST /api/goals/[id]/archive", () => {
 describe("POST /api/goals/[id]/unarchive", () => {
   it("unarchives an archived goal", async () => {
     const id = await insertGoal({ archived: true });
-    const req = new Request(`http://x/api/goals/${id}/unarchive`, { method: "POST" });
+    const req = new Request(`http://x/api/goals/${id}/unarchive?hiveId=${BIZ}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: BIZ }) });
     const res = await unarchivePOST(req, { params: Promise.resolve({ id }) });
     expect(res.status).toBe(200);
 
@@ -72,7 +72,7 @@ describe("POST /api/goals/[id]/unarchive", () => {
 
   it("is idempotent for non-archived goals", async () => {
     const id = await insertGoal();
-    const req = new Request(`http://x/api/goals/${id}/unarchive`, { method: "POST" });
+    const req = new Request(`http://x/api/goals/${id}/unarchive?hiveId=${BIZ}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hiveId: BIZ }) });
     const res = await unarchivePOST(req, { params: Promise.resolve({ id }) });
     expect(res.status).toBe(200);
     const body = await res.json();

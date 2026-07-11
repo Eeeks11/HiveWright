@@ -179,7 +179,7 @@ describe("GET /api/tasks/[id] — billable usage fields", () => {
     });
 
     const res = await getTaskById(
-      new Request(`http://localhost/api/tasks/${taskId}`),
+      new Request(`http://localhost/api/tasks/${taskId}?hiveId=${hiveId}`),
       { params: Promise.resolve({ id: taskId }) },
     );
     expect(res.status).toBe(200);
@@ -204,7 +204,7 @@ describe("GET /api/tasks/[id] — billable usage fields", () => {
     });
 
     const res = await getTaskById(
-      new Request(`http://localhost/api/tasks/${taskId}`),
+      new Request(`http://localhost/api/tasks/${taskId}?hiveId=${hiveId}`),
       { params: Promise.resolve({ id: taskId }) },
     );
     const body = await res.json();

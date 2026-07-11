@@ -32,11 +32,11 @@ beforeEach(async () => {
 describe("Decision Messages API", () => {
   it("POST /api/decisions/[id]/messages — creates a message (201)", async () => {
     const req = new Request(
-      `http://localhost/api/decisions/${decisionId}/messages`,
+      `http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "What about option B?" }),
+        body: JSON.stringify({ hiveId, content: "What about option B?" }),
       },
     );
 
@@ -55,11 +55,11 @@ describe("Decision Messages API", () => {
 
   it("POST /api/decisions/[id]/messages — returns 400 without content", async () => {
     const req = new Request(
-      `http://localhost/api/decisions/${decisionId}/messages`,
+      `http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sender: "owner" }),
+        body: JSON.stringify({ hiveId, sender: "owner" }),
       },
     );
 
@@ -74,11 +74,11 @@ describe("Decision Messages API", () => {
 
   it("POST /api/decisions/[id]/messages — accepts custom sender", async () => {
     const req = new Request(
-      `http://localhost/api/decisions/${decisionId}/messages`,
+      `http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "Supervisor note", sender: "goal-supervisor" }),
+        body: JSON.stringify({ hiveId, content: "Supervisor note", sender: "goal-supervisor" }),
       },
     );
 
@@ -94,24 +94,24 @@ describe("Decision Messages API", () => {
   it("GET /api/decisions/[id]/messages — returns messages ordered by created_at ASC", async () => {
     // Seed two messages so we have something to order
     await postMessage(
-      new Request(`http://localhost/api/decisions/${decisionId}/messages`, {
+      new Request(`http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "First message" }),
+        body: JSON.stringify({ hiveId, content: "First message" }),
       }),
       { params: Promise.resolve({ id: decisionId }) },
     );
     await postMessage(
-      new Request(`http://localhost/api/decisions/${decisionId}/messages`, {
+      new Request(`http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "Second message" }),
+        body: JSON.stringify({ hiveId, content: "Second message" }),
       }),
       { params: Promise.resolve({ id: decisionId }) },
     );
 
     const req = new Request(
-      `http://localhost/api/decisions/${decisionId}/messages`,
+      `http://localhost/api/decisions/${decisionId}/messages?hiveId=${hiveId}`,
     );
 
     const res = await getMessages(req, {
@@ -139,7 +139,7 @@ describe("Decision Messages API", () => {
     `;
 
     const req = new Request(
-      `http://localhost/api/decisions/${dec2.id}/messages`,
+      `http://localhost/api/decisions/${dec2.id}/messages?hiveId=${hiveId}`,
     );
 
     const res = await getMessages(req, {
@@ -164,10 +164,10 @@ describe("Decision Messages API", () => {
     `;
 
     const res = await postMessage(
-      new Request(`http://localhost/api/decisions/${decision.id}/messages`, {
+      new Request(`http://localhost/api/decisions/${decision.id}/messages?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "Use option 3 with GCA login" }),
+        body: JSON.stringify({ hiveId, content: "Use option 3 with GCA login" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
@@ -206,10 +206,10 @@ describe("Decision Messages API", () => {
     `;
 
     const res = await postMessage(
-      new Request(`http://localhost/api/decisions/${decision.id}/messages`, {
+      new Request(`http://localhost/api/decisions/${decision.id}/messages?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "Supervisor note", sender: "goal-supervisor" }),
+        body: JSON.stringify({ hiveId, content: "Supervisor note", sender: "goal-supervisor" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
@@ -329,11 +329,11 @@ describe("Decision Respond — discussed vs resolved", () => {
 
   it("POST respond with 'discussed' keeps decision pending and creates message", async () => {
     const req = new Request(
-      `http://localhost/api/decisions/${pendingDecisionId}/respond`,
+      `http://localhost/api/decisions/${pendingDecisionId}/respond?hiveId=${hiveId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify({ hiveId,
           response: "discussed",
           comment: "Let me think about this more",
         }),
@@ -361,11 +361,11 @@ describe("Decision Respond — discussed vs resolved", () => {
 
   it("POST respond with 'approved' resolves the decision", async () => {
     const req = new Request(
-      `http://localhost/api/decisions/${pendingDecisionId}/respond`,
+      `http://localhost/api/decisions/${pendingDecisionId}/respond?hiveId=${hiveId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify({ hiveId,
           response: "approved",
           comment: "Go ahead",
         }),

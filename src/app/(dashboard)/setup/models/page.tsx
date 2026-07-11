@@ -119,7 +119,7 @@ const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
 function ModelSetupPageContent() {
   const { selected: selectedHive } = useHiveContext();
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const target = useResolvedHiveTarget(targetHiveId ?? selectedHive?.id ?? null);
   const effectiveHiveId = targetHiveId
     ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)

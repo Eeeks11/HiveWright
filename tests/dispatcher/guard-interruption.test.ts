@@ -4,6 +4,7 @@ import { Dispatcher } from "@/dispatcher";
 import { ensureRuntimeGuardDecision } from "@/decisions/runtime-guard";
 import { createGoalSupervisorRuntimeReplanTask } from "@/dispatcher/runtime-replan";
 import type { AdapterRuntimeEvent } from "@/execution-guards";
+import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 function healthyProbe(): Promise<ProbeResult> {
@@ -93,6 +94,19 @@ async function seedTask(opts: { goal?: boolean; qaRequired?: boolean } = {}) {
       ('doctor', 'Doctor', 'system', 'claude-code'),
       ('goal-supervisor', 'Goal Supervisor', 'system', 'claude-code')
     ON CONFLICT (slug) DO NOTHING
+  `;
+  const runtimeFingerprint = createRuntimeCredentialFingerprint({
+    provider: "openai",
+    adapterType: "codex",
+    baseUrl: null,
+  });
+  await sql`
+    INSERT INTO hive_models (hive_id, provider, model_id, adapter_type, enabled)
+    VALUES (${hive.id}, 'openai', 'openai-codex/gpt-5.5', 'codex', true)
+  `;
+  await sql`
+    INSERT INTO model_health (fingerprint, model_id, status, last_probed_at, next_probe_at)
+    VALUES (${runtimeFingerprint}, 'openai-codex/gpt-5.5', 'healthy', NOW(), NOW() + INTERVAL '1 hour')
   `;
   const goal = opts.goal
     ? (await sql`

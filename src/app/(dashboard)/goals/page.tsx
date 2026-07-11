@@ -35,10 +35,10 @@ function GoalsPageInner() {
   const { selected, loading: bizLoading } = useHiveContext();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const requestedTargetHiveId = searchParams.get("targetHiveId");
+  const requestedTargetHiveId = searchParams?.get("targetHiveId") ?? null;
   const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = target.effectiveHiveId;
-  const showArchived = searchParams.get("showArchived") === "1";
+  const showArchived = searchParams?.get("showArchived") === "1";
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);

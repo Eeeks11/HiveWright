@@ -48,7 +48,7 @@ const RISK_TIERS: RiskTier[] = ["low", "medium", "high", "critical"];
 function ActionPoliciesPageContent() {
   const { selected } = useHiveContext();
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = targetHiveId
     ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)

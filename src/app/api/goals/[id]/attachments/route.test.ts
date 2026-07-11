@@ -35,19 +35,20 @@ describe("GET /api/goals/[id]/attachments", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "goal-1", hive_id: "hive-1" }]);
+    mockSql.mockResolvedValueOnce([{ id: "goal-1", hive_id: "11111111-1111-4111-8111-111111111111" }]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1/attachments"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1/attachments?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(403);
     expect(mockSql).toHaveBeenCalledTimes(1);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("allows system-owner callers without hive membership lookup", async () => {
     mockSql
-      .mockResolvedValueOnce([{ id: "goal-1", hive_id: "hive-1" }])
+      .mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }])
+      .mockResolvedValueOnce([{ id: "goal-1", hive_id: "11111111-1111-4111-8111-111111111111" }])
       .mockResolvedValueOnce([
         {
           id: "att-1",
@@ -58,7 +59,7 @@ describe("GET /api/goals/[id]/attachments", () => {
         },
       ]);
 
-    const res = await GET(new Request("http://localhost/api/goals/goal-1/attachments"), params);
+    const res = await GET(new Request("http://localhost/api/goals/goal-1/attachments?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);

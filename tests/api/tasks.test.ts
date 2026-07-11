@@ -337,7 +337,7 @@ describe("GET /api/tasks", () => {
 
 describe("GET /api/tasks/[id]", () => {
   it("returns task detail by id", async () => {
-    const req = new Request(`http://localhost:3000/api/tasks/${testTaskId}`);
+    const req = new Request(`http://localhost:3000/api/tasks/${testTaskId}?hiveId=${testHiveId}`);
     const res = await getTaskById(req, { params: Promise.resolve({ id: testTaskId }) });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -348,7 +348,7 @@ describe("GET /api/tasks/[id]", () => {
 
   it("returns 404 for nonexistent task", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
-    const req = new Request(`http://localhost:3000/api/tasks/${fakeId}`);
+    const req = new Request(`http://localhost:3000/api/tasks/${fakeId}?hiveId=${testHiveId}`);
     const res = await getTaskById(req, { params: Promise.resolve({ id: fakeId }) });
     expect(res.status).toBe(404);
     const body = await res.json();

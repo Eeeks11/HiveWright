@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({
+  usePathname: () => "/quality-feedback",
   useSearchParams: () => mocks.searchParams,
 }));
 
@@ -16,6 +17,7 @@ vi.mock("@/components/hive-context", () => ({
     selected: { id: "hive-quality", name: "Quality Hive" },
     hives: [{ id: "hive-quality", name: "Quality Hive" }],
     loading: false,
+    hasProvider: true,
   }),
 }));
 

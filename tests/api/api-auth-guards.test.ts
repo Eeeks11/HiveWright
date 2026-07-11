@@ -135,6 +135,7 @@ function getActualAuthModule(): typeof import("@/app/api/_lib/auth") {
 function completeRequest(body: unknown, headers: Record<string, string> = {}): Request {
   const completionBody = typeof body === "object" && body !== null && !Array.isArray(body)
     ? {
+        hiveId,
         evidence: [
           {
             type: "artifact",
@@ -188,18 +189,26 @@ async function seedGoalReadFixtures(): Promise<void> {
 }
 
 function getRequest(path: string): Request {
-  return new Request(`http://localhost${path}`, { method: "GET" });
+  const url = new URL(`http://localhost${path}`);
+  if (!url.searchParams.has("hiveId")) url.searchParams.set("hiveId", hiveId);
+  return new Request(url, { method: "GET" });
 }
 
 function postJsonRequest(path: string, body: unknown): Request {
+  const requestBody = typeof body === "object" && body !== null && !Array.isArray(body)
+    ? { hiveId, ...body }
+    : body;
   return new Request(`http://localhost${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
 }
 
 function goalLifecycleRequest(path: string, body: unknown, targetHiveId: string): Request {
+  const requestBody = typeof body === "object" && body !== null && !Array.isArray(body)
+    ? { hiveId: targetHiveId, ...body }
+    : body;
   return new Request(`http://localhost${path}`, {
     method: "POST",
     headers: {
@@ -209,13 +218,15 @@ function goalLifecycleRequest(path: string, body: unknown, targetHiveId: string)
       "X-HiveWright-EA-Owner-Message-Id": "55555555-6666-4777-8888-999999999999",
       "X-HiveWright-EA-Source": "dashboard",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
   });
 }
 
 describe("POST /api/goals/[id]/complete — session-match guard", () => {
   it("non-owner with mismatched X-Supervisor-Session is rejected with 403", async () => {
     authState.isSystemOwner = false;
+    authState.userId = MEMBER_USER_ID;
+    await seedUserMembership(MEMBER_USER_ID, hiveId, "member");
 
     const res = await completeGoal(
       completeRequest(
@@ -237,6 +248,8 @@ describe("POST /api/goals/[id]/complete — session-match guard", () => {
 
   it("non-owner with missing X-Supervisor-Session header is rejected with 403", async () => {
     authState.isSystemOwner = false;
+    authState.userId = MEMBER_USER_ID;
+    await seedUserMembership(MEMBER_USER_ID, hiveId, "member");
 
     const res = await completeGoal(
       completeRequest({ summary: "no header at all" }),
@@ -250,6 +263,8 @@ describe("POST /api/goals/[id]/complete — session-match guard", () => {
 
   it("non-owner with matching X-Supervisor-Session completes the goal", async () => {
     authState.isSystemOwner = false;
+    authState.userId = MEMBER_USER_ID;
+    await seedUserMembership(MEMBER_USER_ID, hiveId, "member");
 
     const res = await completeGoal(
       completeRequest(

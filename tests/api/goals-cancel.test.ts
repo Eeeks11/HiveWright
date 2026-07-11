@@ -32,7 +32,7 @@ async function insertGoal(status: string): Promise<string> {
 }
 
 function cancelRequest(id: string, body: unknown = { reason: "owner cancelled" }): Request {
-  return new Request(`http://x/api/goals/${id}/cancel`, {
+  return new Request(`http://x/api/goals/${id}/cancel?hiveId=${BIZ}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -41,7 +41,7 @@ function cancelRequest(id: string, body: unknown = { reason: "owner cancelled" }
       "X-HiveWright-EA-Owner-Message-Id": "message-1",
       "X-HiveWright-EA-Source": "dashboard",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ hiveId: BIZ, ...(body as Record<string, unknown>) }),
   });
 }
 

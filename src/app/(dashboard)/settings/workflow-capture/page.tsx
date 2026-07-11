@@ -34,7 +34,7 @@ function WorkflowCapturePageContent() {
   const { selected } = useHiveContext();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const targetHiveId = searchParams.get("targetHiveId")?.trim() || null;
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
   const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
   const effectiveHiveId = targetHiveId
     ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
