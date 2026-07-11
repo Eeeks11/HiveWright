@@ -130,9 +130,11 @@ describe("dashboardEaClient.submit", () => {
         role: string;
         content: string;
         source: string;
+        status: string;
+        error: string | null;
       }[]
     >`
-      SELECT t.channel_id, m.role, m.content, m.source
+      SELECT t.channel_id, m.role, m.content, m.source, m.status, m.error
       FROM ea_messages m
       JOIN ea_threads t ON t.id = m.thread_id
       WHERE t.hive_id = ${HIVE_ID}
@@ -145,12 +147,16 @@ describe("dashboardEaClient.submit", () => {
         role: "owner",
         content: "What active goals do I have?",
         source: "dashboard",
+        status: "sent",
+        error: null,
       },
       {
         channel_id: `dashboard:${HIVE_ID}`,
         role: "assistant",
         content: "Hello, dashboard.",
         source: "dashboard",
+        status: "sent",
+        error: null,
       },
     ]);
     expect(mocks.scheduleImplicitQualityExtraction).toHaveBeenCalledWith(
@@ -208,5 +214,169 @@ describe("dashboardEaClient.submit", () => {
     expect(runOptions?.signal?.aborted).toBe(true);
     expect(controller.signal.aborted).toBe(false);
     expect(mocks.state.streamReturned).toBe(true);
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error
+      FROM ea_messages
+      WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "Hello",
+      status: "failed",
+      error: "EA response was interrupted before completion.",
+    });
+  });
+
+  it("persists the assistant as streaming before the first chunk is consumed", async () => {
+    const stream = await dashboardEaClient.submit("show pending state", {
+      hiveId: HIVE_ID,
+    });
+
+    const [assistant] = await sql<{ id: string; content: string; status: string; error: string | null }[]>`
+      SELECT id, content, status, error
+      FROM ea_messages
+      WHERE role = 'assistant'
+    `;
+    expect(assistant).toMatchObject({ content: "", status: "streaming", error: null });
+
+    for await (const chunk of stream) void chunk;
+  });
+
+  it("marks an aborted run failed with a safe error and a fresh updated timestamp", async () => {
+    const controller = new AbortController();
+    mocks.runEaStream.mockImplementationOnce(async function* (_prompt, options) {
+      controller.abort();
+      const error = new Error("request aborted with secret provider detail");
+      error.name = "AbortError";
+      expect(options?.signal?.aborted).toBe(true);
+      throw error;
+    });
+    const stream = await dashboardEaClient.submit("abort this", {
+      hiveId: HIVE_ID,
+      signal: controller.signal,
+    });
+    const [before] = await sql<{ updated_at: Date }[]>`
+      SELECT updated_at FROM ea_messages WHERE role = 'assistant'
+    `;
+    await sql`SELECT pg_sleep(0.01)`;
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [after] = await sql<{ content: string; status: string; error: string | null; updated_at: Date }[]>`
+      SELECT content, status, error, updated_at FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(after).toMatchObject({
+      content: "",
+      status: "failed",
+      error: "EA response was interrupted before completion.",
+    });
+    expect(after.updated_at.getTime()).toBeGreaterThan(before.updated_at.getTime());
+    expect(after.error).not.toContain("secret provider detail");
+  });
+
+  it("marks a thrown runner error failed without persisting raw error detail", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      throw new Error("provider token sk-secret must never persist");
+    });
+    const stream = await dashboardEaClient.submit("runner failure", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "",
+      status: "failed",
+      error: "EA response failed before completion.",
+    });
+  });
+
+  it("marks whitespace-only successful output failed", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      yield "  \n";
+    });
+    const stream = await dashboardEaClient.submit("empty response", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow("EA returned an empty response");
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "  \n",
+      status: "failed",
+      error: "EA returned no response.",
+    });
+  });
+
+  it("retains partial output but marks it terminally failed", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      yield "Partial owner-visible answer";
+      throw new Error("runner exited 1");
+    });
+    const stream = await dashboardEaClient.submit("partial failure", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "Partial owner-visible answer",
+      status: "failed",
+      error: "EA response failed before completion.",
+    });
+
+    const retryStream = await dashboardEaClient.submit("retry after partial", { hiveId: HIVE_ID });
+    for await (const chunk of retryStream) void chunk;
+    const promptCalls = mocks.buildEaPrompt.mock.calls as unknown as Array<
+      [unknown, { history: EaMessage[] }]
+    >;
+    expect(promptCalls.at(-1)?.[1].history).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "assistant",
+        content: "Partial owner-visible answer",
+        status: "failed",
+      }),
+    ]));
+  });
+
+  it("does not let a stale completion overwrite a failed turn after a retry starts", async () => {
+    const stream = await dashboardEaClient.submit("first attempt", { hiveId: HIVE_ID });
+    const [first] = await sql<{ id: string; thread_id: string }[]>`
+      SELECT id, thread_id FROM ea_messages WHERE role = 'assistant'
+    `;
+    await sql`
+      UPDATE ea_messages
+      SET status = 'failed', error = 'EA response was interrupted before completion.', updated_at = NOW()
+      WHERE id = ${first.id}
+    `;
+    const [retry] = await sql<{ id: string }[]>`
+      INSERT INTO ea_messages (thread_id, role, content, source, status)
+      VALUES (${first.thread_id}, 'assistant', '', 'dashboard', 'streaming')
+      RETURNING id
+    `;
+
+    for await (const chunk of stream) void chunk;
+
+    const rows = await sql<{ id: string; content: string; status: string }[]>`
+      SELECT id, content, status
+      FROM ea_messages
+      WHERE role = 'assistant'
+      ORDER BY created_at ASC, id ASC
+    `;
+    expect(rows).toEqual(expect.arrayContaining([
+      { id: first.id, content: "", status: "failed" },
+      { id: retry.id, content: "", status: "streaming" },
+    ]));
   });
 });
