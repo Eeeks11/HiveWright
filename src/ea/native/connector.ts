@@ -29,6 +29,12 @@ import {
   renderEaAttachmentSection,
   sanitizeEaAttachmentFilename,
 } from "./attachments";
+import {
+  authorizeDiscordOwnerInput,
+  buildDiscordOwnerAuthConfig,
+  interactionAuthInput,
+  messageAuthInput,
+} from "./discord-auth";
 
 /**
  * Save Discord attachments for a single owner message to a per-message
@@ -85,14 +91,24 @@ export interface NativeEaConfig {
   discordToken: string;
   /** The hive this EA speaks for. Multi-hive routing is future work. */
   hiveId: string;
-  /** Channel ID the EA listens to. DMs from any user also reach this hive. */
+  /** Channel ID the EA listens to. */
   channelId: string;
+  /** Optional guild/server ID. When set, non-DM traffic must come from this guild. */
+  guildId?: string;
+  /** Mandatory Discord owner user IDs allowed to talk to this EA. */
+  ownerUserIds: string[];
+  /** Direct messages are off by default and must be explicitly enabled. */
+  directMessagesEnabled?: boolean;
   /** HiveWright API base URL (passed into prompts so the EA can curl it). */
   apiBaseUrl: string;
   /** Optional model for the EA runtime. When unset, the runtime uses its configured default. */
   model?: string;
-  /** Working directory for shell access — usually the hivewrightv2 repo. */
-  workspacePath?: string;
+  /** Isolated runtime directory for the Discord-originated Codex subprocess. */
+  runtimeDir?: string;
+  /** Isolated HOME/XDG directory for the Discord-originated Codex subprocess. */
+  runtimeHome?: string;
+  /** Test seam: observe authorized inputs crossing into the per-channel queue. */
+  onAuthorizedQueued?: (scope: "message" | "slash") => void;
 }
 
 export interface NativeEaHandle {
@@ -104,6 +120,10 @@ export async function startNativeEa(
   sql: Sql,
   config: NativeEaConfig,
 ): Promise<NativeEaHandle> {
+  const authConfig = buildDiscordOwnerAuthConfig(config);
+  if (!authConfig) {
+    throw new Error("ea-discord requires channelId and at least one valid ownerUserIds Discord snowflake");
+  }
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -133,16 +153,23 @@ export async function startNativeEa(
   });
 
   client.on(Events.MessageCreate, (message) => {
-    // Skip bot messages (including our own) to avoid echo loops.
-    if (message.author.bot) return;
-    // Only respond in DMs or the configured channel for this MVP.
-    const isDm = !message.guildId;
-    if (!isDm && message.channelId !== config.channelId) return;
+    const decision = authorizeDiscordOwnerInput(authConfig, messageAuthInput(message));
+    if (!decision.allowed) {
+      console.warn(`[ea-native] rejected Discord message before side effects: ${decision.reason}`);
+      return;
+    }
+    config.onAuthorizedQueued?.("message");
     onChannel(message.channelId, () => handleMessage(sql, config, client, message));
   });
 
   client.on(Events.InteractionCreate, (interaction) => {
     if (!interaction.isChatInputCommand()) return;
+    const decision = authorizeDiscordOwnerInput(authConfig, interactionAuthInput(interaction));
+    if (!decision.allowed) {
+      console.warn(`[ea-native] rejected Discord slash command before side effects: ${decision.reason}`);
+      return;
+    }
+    config.onAuthorizedQueued?.("slash");
     onChannel(interaction.channelId ?? "dm", () => handleSlashCommand(sql, config, interaction));
   });
 
@@ -253,7 +280,10 @@ async function handleMessage(
     try {
       result = await runEa(prompt, {
         model: config.model,
-        cwd: config.workspacePath,
+        cwd: config.runtimeDir,
+        runtimeHome: config.runtimeHome,
+        sandbox: "workspace-write",
+        approvalPolicy: "on-request",
         attachmentPaths: attachments.map((attachment) => attachment.absolutePath),
       });
     } finally {

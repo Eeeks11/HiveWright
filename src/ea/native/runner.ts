@@ -1,4 +1,7 @@
 import { spawn } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { CodexJsonChunker } from "../../adapters/codex-stream-parser";
 import { cleanOwnerVisibleEaReply } from "./output-hygiene";
 
@@ -22,6 +25,18 @@ export interface RunEaOptions {
   timeoutMs?: number;
   onChunk?: (delta: string) => void;
   attachmentPaths?: string[];
+  /** Explicit environment variables to pass to Codex in addition to the safe base allowlist. */
+  env?: Record<string, string | undefined>;
+  /**
+   * Codex sandbox mode. Defaults to workspace-write; callers must opt out explicitly.
+   */
+  sandbox?: "read-only" | "workspace-write" | "danger-full-access";
+  /**
+   * Codex approval policy. Defaults to on-request; callers must opt out explicitly.
+   */
+  approvalPolicy?: "untrusted" | "on-failure" | "on-request" | "never";
+  /** Runtime home used for Codex config/cache isolation. Defaults under /tmp. */
+  runtimeHome?: string;
   /**
    * When aborted, the spawned `codex` subprocess is sent SIGTERM. Used
    * by `runEaStream` to cancel the underlying run when a consumer breaks
@@ -49,10 +64,17 @@ export async function runEa(
   options: RunEaOptions = {},
 ): Promise<RunEaResult> {
   const model = normalizeEaModel(options.model);
+  const cwd = ensureRuntimeDirectory(options.cwd ?? process.cwd());
+  const runtimeHome = options.runtimeHome ? ensureRuntimeDirectory(options.runtimeHome) : undefined;
+  const sandbox = options.sandbox ?? "workspace-write";
+  const approvalPolicy = options.approvalPolicy ?? "on-request";
   const args = [
     "exec",
     "--json",
-    "--dangerously-bypass-approvals-and-sandbox",
+    "--sandbox",
+    sandbox,
+    "--ask-for-approval",
+    approvalPolicy,
     "--skip-git-repo-check",
     // No --max-turns cap. Owner subscriptions bound cost externally;
     // arbitrary turn caps were forcing the EA into premature stop on
@@ -63,25 +85,19 @@ export async function runEa(
     const modelName = model.includes("/") ? model.split("/")[1] : model;
     args.push("-m", modelName);
   }
-  const cwd = options.cwd ?? process.cwd();
   args.push("-C", cwd);
 
-  // Mirror the Codex task adapter's env hygiene — strip lingering API-key
-  // env vars so the CLI falls back to the owner's ChatGPT OAuth.
-  const env: Record<string, string | undefined> = { ...process.env };
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
+  const env = buildEaRuntimeEnv(runtimeHome, options.env);
 
   return new Promise((resolve) => {
     const proc = spawn("codex", args, {
       cwd,
       env: env as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
-      // 4-hour wall-clock cap — matches the executor adapters so EA
-      // turns can take as long as they legitimately need. Typical EA
-      // turns finish in seconds; this only matters for deep
-      // investigations.
-      timeout: options.timeoutMs ?? 14_400_000,
+      // 30-minute default. Discord/dashboard/voice EA turns should route
+      // long work into HiveWright roles instead of holding an owner chat
+      // subprocess for hours.
+      timeout: options.timeoutMs ?? 1_800_000,
     });
 
     // Wire up AbortSignal -> SIGTERM so `runEaStream` (and any other
@@ -165,6 +181,83 @@ export function normalizeEaModel(model: string | undefined): string | undefined 
   if (!model) return undefined;
   const trimmed = model.trim();
   return trimmed || undefined;
+}
+
+function ensureRuntimeDirectory(dir: string): string {
+  const resolved = path.resolve(dir);
+  fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
+  return resolved;
+}
+
+const BASE_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TERM",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_DATA_HOME",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+] as const;
+
+function buildEaRuntimeEnv(
+  runtimeHome: string | undefined,
+  extraEnv: Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const key of BASE_ENV_ALLOWLIST) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  const internalServiceToken = process.env.INTERNAL_SERVICE_TOKEN;
+  if (internalServiceToken !== undefined) {
+    // EA prompts intentionally reference this variable rather than embedding
+    // the secret. Pass only this explicit service credential through; do not
+    // inherit arbitrary dispatcher/model/provider secrets.
+    env.INTERNAL_SERVICE_TOKEN = internalServiceToken;
+  }
+  if (runtimeHome) {
+    env.HOME = runtimeHome;
+    env.XDG_CONFIG_HOME = path.join(runtimeHome, ".config");
+    env.XDG_CACHE_HOME = path.join(runtimeHome, ".cache");
+    env.XDG_DATA_HOME = path.join(runtimeHome, ".local", "share");
+    env.CODEX_HOME = prepareIsolatedCodexHome(runtimeHome);
+  }
+  env.TMPDIR = process.env.TMPDIR ?? os.tmpdir();
+  for (const [key, value] of Object.entries(extraEnv ?? {})) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+
+function prepareIsolatedCodexHome(runtimeHome: string): string {
+  const codexHome = path.join(runtimeHome, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+
+  const sourceCodexHome = process.env.CODEX_HOME
+    ? path.resolve(process.env.CODEX_HOME)
+    : process.env.HOME
+      ? path.join(process.env.HOME, ".codex")
+      : undefined;
+  if (!sourceCodexHome) return codexHome;
+
+  const sourceAuth = path.join(sourceCodexHome, "auth.json");
+  const destAuth = path.join(codexHome, "auth.json");
+  if (path.resolve(sourceAuth) === path.resolve(destAuth)) return codexHome;
+  try {
+    if (fs.existsSync(sourceAuth) && !fs.existsSync(destAuth)) {
+      fs.symlinkSync(sourceAuth, destAuth);
+    }
+  } catch (err) {
+    console.warn("[ea-native] could not link Codex auth into isolated runtime home", err);
+  }
+  return codexHome;
 }
 
 function withAttachmentReferences(prompt: string, attachmentPaths: string[]): string {

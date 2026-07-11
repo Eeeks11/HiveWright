@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import { startNativeEa, type NativeEaHandle } from "./connector";
+import { buildDiscordOwnerAuthConfig, normalizeDiscordSnowflake } from "./discord-auth";
 import { normalizeEaModel } from "./runner";
 import { decrypt } from "../../credentials/encryption";
 
@@ -25,6 +26,8 @@ interface EaInstallRow {
     applicationId?: string;
     channelId?: string;
     guildId?: string;
+    ownerUserIds?: string[] | string;
+    directMessagesEnabled?: boolean | string;
     model?: string;
   };
   credential_id: string | null;
@@ -49,15 +52,15 @@ export async function maybeStartNativeEa(sql: Sql): Promise<NativeEaHandle[]> {
 
   const apiBaseUrl =
     process.env.NEXT_PUBLIC_DASHBOARD_URL ?? `http://localhost:${process.env.PORT ?? 3002}`;
-  const workspacePath = process.env.EA_WORKSPACE_PATH ?? process.cwd();
+  const runtimeRoot = process.env.EA_RUNTIME_ROOT ?? "/tmp/hivewright-ea-runtime";
 
   const handles: NativeEaHandle[] = [];
   for (const install of installs) {
-    const appId = install.config?.applicationId;
-    const channelId = install.config?.channelId;
-    if (!appId || !channelId) {
+    const appId = normalizeDiscordSnowflake(install.config?.applicationId);
+    const authConfig = buildDiscordOwnerAuthConfig(install.config ?? {});
+    if (!appId || !authConfig) {
       console.error(
-        `[ea-native] install ${install.id.slice(0, 8)} missing applicationId or channelId; skipping.`,
+        `[ea-native] install ${install.id.slice(0, 8)} missing valid applicationId/channelId/ownerUserIds; skipping fail-closed.`,
       );
       continue;
     }
@@ -92,7 +95,7 @@ export async function maybeStartNativeEa(sql: Sql): Promise<NativeEaHandle[]> {
     // Guild-scoped registration if guildId set (dev-friendly, instant
     // propagation), otherwise global (~1h propagation).
     try {
-      await registerSlashCommands(botToken, appId, install.config.guildId);
+      await registerSlashCommands(botToken, appId, authConfig.guildId);
     } catch (err) {
       console.error(
         `[ea-native] slash command registration failed for install ${install.id.slice(0, 8)}:`,
@@ -103,16 +106,22 @@ export async function maybeStartNativeEa(sql: Sql): Promise<NativeEaHandle[]> {
 
     const model = normalizeEaModel(install.config.model);
     console.log(
-      `[ea-native] starting install ${install.id.slice(0, 8)} (hive=${install.hive_id.slice(0, 8)}..., channel=${channelId}, model=${model ?? "runtime-default"})`,
+      `[ea-native] starting install ${install.id.slice(0, 8)} (hive=${install.hive_id.slice(0, 8)}..., channel=${authConfig.channelId}, guild=${authConfig.guildId ?? "any"}, dms=${authConfig.directMessagesEnabled ? "enabled" : "disabled"}, model=${model ?? "runtime-default"})`,
     );
     try {
+      const runtimeDir = `${runtimeRoot}/${install.hive_id}/${install.id}/workspace`;
+      const runtimeHome = `${runtimeRoot}/${install.hive_id}/${install.id}/home`;
       const handle = await startNativeEa(sql, {
         discordToken: botToken,
         hiveId: install.hive_id,
-        channelId,
+        channelId: authConfig.channelId,
+        guildId: authConfig.guildId,
+        ownerUserIds: authConfig.ownerUserIds,
+        directMessagesEnabled: authConfig.directMessagesEnabled,
         apiBaseUrl,
         model,
-        workspacePath,
+        runtimeDir,
+        runtimeHome,
       });
       handles.push(handle);
     } catch (err) {

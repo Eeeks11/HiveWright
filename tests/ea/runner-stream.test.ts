@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // Mock the real `child_process.spawn` so we can drive a fake `codex`
 // subprocess by hand. Hoisted by vitest above the SUT import below.
@@ -63,7 +66,113 @@ describe("runEa", () => {
     expect(command).toBe("codex");
     expect(args).toContain("exec");
     expect(args).toContain("--json");
+    expect(args).toContain("--sandbox");
+    expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
+    expect(args).toContain("--ask-for-approval");
+    expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("on-request");
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(args).not.toContain("-m");
+  });
+
+  it("defaults the Codex cwd to the app process workspace", async () => {
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    const run = runEa("test prompt");
+    queueMicrotask(() => proc.emit("close", 0));
+
+    await expect(run).resolves.toMatchObject({ success: true });
+    const args = mockSpawn.mock.calls[0]?.[1] as string[];
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { cwd: string };
+    expect(args[args.indexOf("-C") + 1]).toBe(process.cwd());
+    expect(spawnOptions.cwd).toBe(process.cwd());
+  });
+
+  it("uses a caller-provided cwd for explicitly isolated Discord workspaces", async () => {
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+    const isolatedWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "hivewright-ea-workspace-"));
+
+    const run = runEa("test prompt", { cwd: isolatedWorkspace });
+    queueMicrotask(() => proc.emit("close", 0));
+
+    await expect(run).resolves.toMatchObject({ success: true });
+    const args = mockSpawn.mock.calls[0]?.[1] as string[];
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { cwd: string };
+    expect(args[args.indexOf("-C") + 1]).toBe(isolatedWorkspace);
+    expect(spawnOptions.cwd).toBe(isolatedWorkspace);
+  });
+
+  it("uses a minimal allowlisted environment instead of inheriting dispatcher secrets", async () => {
+    const previousInternalToken = process.env.INTERNAL_SERVICE_TOKEN;
+    process.env.HIVEWRIGHT_EA_SENTINEL_SECRET = "do-not-pass";
+    process.env.INTERNAL_SERVICE_TOKEN = "ea-internal-token";
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    try {
+      const run = runEa("test prompt");
+      queueMicrotask(() => proc.emit("close", 0));
+
+      await expect(run).resolves.toMatchObject({ success: true });
+      const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string | undefined> };
+      expect(spawnOptions.env.INTERNAL_SERVICE_TOKEN).toBe("ea-internal-token");
+      expect(spawnOptions.env.HIVEWRIGHT_EA_SENTINEL_SECRET).toBeUndefined();
+      expect(spawnOptions.env.OPENAI_API_KEY).toBeUndefined();
+      expect(spawnOptions.env.OPENAI_BASE_URL).toBeUndefined();
+      expect(spawnOptions.env.HOME).toBe(process.env.HOME);
+    } finally {
+      delete process.env.HIVEWRIGHT_EA_SENTINEL_SECRET;
+      if (previousInternalToken === undefined) delete process.env.INTERNAL_SERVICE_TOKEN;
+      else process.env.INTERNAL_SERVICE_TOKEN = previousInternalToken;
+    }
+  });
+
+  it("uses isolated HOME/XDG directories when a caller provides runtimeHome", async () => {
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    const run = runEa("test prompt", { runtimeHome: "/tmp/hivewright-ea-test-home" });
+    queueMicrotask(() => proc.emit("close", 0));
+
+    await expect(run).resolves.toMatchObject({ success: true });
+    const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string | undefined> };
+    expect(spawnOptions.env.HOME).toBe("/tmp/hivewright-ea-test-home");
+    expect(spawnOptions.env.XDG_CONFIG_HOME).toBe("/tmp/hivewright-ea-test-home/.config");
+    expect(spawnOptions.env.CODEX_HOME).toBe("/tmp/hivewright-ea-test-home/.codex");
+  });
+
+  it("links existing Codex OAuth into the isolated runtime home without inheriting the real config home", async () => {
+    const previousHome = process.env.HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const realHome = fs.mkdtempSync(path.join(os.tmpdir(), "hivewright-real-home-"));
+    const runtimeHome = fs.mkdtempSync(path.join(os.tmpdir(), "hivewright-runtime-home-"));
+    const realCodexHome = path.join(realHome, ".codex");
+    fs.mkdirSync(realCodexHome, { recursive: true });
+    fs.writeFileSync(path.join(realCodexHome, "auth.json"), "{}\n");
+    process.env.HOME = realHome;
+    delete process.env.CODEX_HOME;
+    const proc = makeFakeProc();
+    mockSpawn.mockReturnValue(proc);
+
+    try {
+      const run = runEa("test prompt", { runtimeHome });
+      queueMicrotask(() => proc.emit("close", 0));
+
+      await expect(run).resolves.toMatchObject({ success: true });
+      const spawnOptions = mockSpawn.mock.calls[0]?.[2] as { env: Record<string, string | undefined> };
+      const isolatedCodexHome = path.join(runtimeHome, ".codex");
+      const linkedAuth = path.join(isolatedCodexHome, "auth.json");
+      expect(spawnOptions.env.HOME).toBe(runtimeHome);
+      expect(spawnOptions.env.CODEX_HOME).toBe(isolatedCodexHome);
+      expect(fs.lstatSync(linkedAuth).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(linkedAuth)).toBe(path.join(realCodexHome, "auth.json"));
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+    }
   });
 
   it("passes a configured EA model through to Codex", async () => {
