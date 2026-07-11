@@ -49,6 +49,7 @@ import {
   dashboardEaClient,
   getDashboardChat,
   sendDashboardMessage,
+  startFreshDashboardThread,
 } from "@/ea/native/dashboard-chat";
 import type { EaMessage } from "@/ea/native/thread-store";
 
@@ -382,6 +383,200 @@ describe("dashboardEaClient.submit", () => {
       releaseFirstActiveTurnCheck.resolve();
       if (firstRequest) await Promise.allSettled([firstRequest]);
     }
+  });
+
+  it("keeps a claimed thread active and visible when replacement conflicts, then replaces after claim completion", async () => {
+    const activeThread = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+    const claimReachedActiveTurnCheck = deferred();
+    const releaseClaim = deferred();
+    let delayedClaim = false;
+    const claimSql = interceptQueries(sql, async (query) => {
+      if (!delayedClaim && query.includes("FROM ea_messages") && query.includes("status = 'streaming'")) {
+        delayedClaim = true;
+        claimReachedActiveTurnCheck.resolve();
+        await releaseClaim.promise;
+      }
+    });
+    let claim: Promise<unknown> | undefined;
+
+    try {
+      claim = sendDashboardMessage(claimSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim wins before replacement",
+      });
+      await claimReachedActiveTurnCheck.promise;
+
+      await expect(startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      })).rejects.toBeInstanceOf(DashboardEaTurnInProgressError);
+
+      const [duringConflict] = await sql<{ id: string; status: string }[]>`
+        SELECT id, status FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+          AND status = 'active'
+      `;
+      expect(duringConflict).toEqual({ id: activeThread.thread.id, status: "active" });
+
+      releaseClaim.resolve();
+      await claim;
+
+      const visibleClaim = await getDashboardChat(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+      });
+      expect(visibleClaim.thread.id).toBe(activeThread.thread.id);
+      expect(visibleClaim.messages.map((message) => message.content)).toEqual([
+        "claim wins before replacement",
+        "Hello, dashboard.",
+      ]);
+
+      const replacement = await startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      });
+      expect(replacement.id).not.toBe(activeThread.thread.id);
+      const rows = await sql<{ id: string; status: string }[]>`
+        SELECT id, status FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+        ORDER BY status, id
+      `;
+      expect(rows.filter((row) => row.status === "active")).toEqual([
+        { id: replacement.id, status: "active" },
+      ]);
+      expect(rows.filter((row) => row.status === "closed")).toEqual([
+        { id: activeThread.thread.id, status: "closed" },
+      ]);
+    } finally {
+      releaseClaim.resolve();
+      if (claim) await Promise.allSettled([claim]);
+    }
+  });
+
+  it("keeps the old thread visible while replacement holds the lock and permits a clean claim retry", async () => {
+    const initial = await sendDashboardMessage(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+      content: "old visible turn",
+    });
+    const replacementReachedCreate = deferred();
+    const releaseReplacement = deferred();
+    let delayedCreate = false;
+    const replacementSql = interceptQueries(sql, async (query) => {
+      if (!delayedCreate && query.includes("INSERT INTO ea_threads")) {
+        delayedCreate = true;
+        replacementReachedCreate.resolve();
+        await releaseReplacement.promise;
+      }
+    });
+    let replacement: Promise<unknown> | undefined;
+
+    try {
+      replacement = startFreshDashboardThread(replacementSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      });
+      await replacementReachedCreate.promise;
+
+      await expect(sendDashboardMessage(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim conflicts during replacement",
+      })).rejects.toBeInstanceOf(DashboardEaTurnInProgressError);
+
+      const visibleDuringReplacement = await getDashboardChat(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+      });
+      expect(visibleDuringReplacement.thread.id).toBe(initial.thread.id);
+      expect(visibleDuringReplacement.messages.map((message) => message.content)).toEqual([
+        "old visible turn",
+        "Hello, dashboard.",
+      ]);
+
+      releaseReplacement.resolve();
+      const fresh = await replacement as Awaited<ReturnType<typeof startFreshDashboardThread>>;
+
+      const retry = await sendDashboardMessage(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim retry after replacement",
+      });
+      expect(retry.thread.id).toBe(fresh.id);
+
+      const threadCounts = await sql<{ active: number; closed: number }[]>`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'active')::int AS active,
+          COUNT(*) FILTER (WHERE status = 'closed')::int AS closed
+        FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+      `;
+      expect(threadCounts).toEqual([{ active: 1, closed: 1 }]);
+      const messages = await sql<{ thread_id: string; role: string; content: string }[]>`
+        SELECT thread_id, role, content FROM ea_messages
+        WHERE thread_id IN (${initial.thread.id}, ${fresh.id})
+        ORDER BY content
+      `;
+      expect(messages).toHaveLength(4);
+      expect(messages.filter((message) => message.thread_id === initial.thread.id)).toHaveLength(2);
+      expect(messages.filter((message) => message.thread_id === fresh.id)).toHaveLength(2);
+      expect(messages.some((message) => message.content === "claim conflicts during replacement")).toBe(false);
+    } finally {
+      releaseReplacement.resolve();
+      if (replacement) await Promise.allSettled([replacement]);
+    }
+  });
+
+  it("rolls back replacement when new-thread creation fails and leaves the old thread visible", async () => {
+    const oldTurn = await sendDashboardMessage(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+      content: "must survive replacement rollback",
+    });
+    await sql.unsafe(`
+      CREATE FUNCTION fail_dashboard_thread_replacement() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.channel_id = 'dashboard:${HIVE_ID}' AND NEW.status = 'active' THEN
+          RAISE EXCEPTION 'forced replacement thread insert failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER fail_dashboard_thread_replacement
+      BEFORE INSERT ON ea_threads
+      FOR EACH ROW EXECUTE FUNCTION fail_dashboard_thread_replacement();
+    `);
+
+    try {
+      await expect(startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      })).rejects.toThrow("forced replacement thread insert failure");
+    } finally {
+      await sql.unsafe(`
+        DROP TRIGGER fail_dashboard_thread_replacement ON ea_threads;
+        DROP FUNCTION fail_dashboard_thread_replacement();
+      `);
+    }
+
+    const [oldThread] = await sql<{ status: string; closed_at: Date | null }[]>`
+      SELECT status, closed_at FROM ea_threads WHERE id = ${oldTurn.thread.id}
+    `;
+    expect(oldThread).toEqual({ status: "active", closed_at: null });
+    const visible = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+    expect(visible.thread.id).toBe(oldTurn.thread.id);
+    expect(visible.messages.map((message) => message.content)).toEqual([
+      "must survive replacement rollback",
+      "Hello, dashboard.",
+    ]);
   });
 
   it("does not falsely conflict across hives whose legacy 32-bit hashes collide", async () => {

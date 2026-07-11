@@ -216,7 +216,10 @@ export async function DELETE(request: Request): Promise<Response> {
       userId: authz.user.id,
     });
     return jsonOk({ thread, messages: [], hasMore: false });
-  } catch {
+  } catch (error) {
+    if (error instanceof DashboardEaTurnInProgressError) {
+      return jsonError("EA is already responding", 409);
+    }
     return jsonError("Failed to start fresh EA thread", 500);
   }
 }

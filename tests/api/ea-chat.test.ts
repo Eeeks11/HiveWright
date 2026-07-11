@@ -417,4 +417,28 @@ describe("/api/ea/chat", () => {
       { hive_id: HIVE_B, status: "active" },
     ]);
   });
+
+  it("DELETE returns a clear conflict without closing a thread with an in-flight turn", async () => {
+    const getRes = await callGet(
+      new Request(`http://localhost/api/ea/chat?hiveId=${HIVE_A}`),
+    );
+    const threadId = (await getRes.json()).data.thread.id;
+    await sql`
+      INSERT INTO ea_messages (thread_id, role, content, source, status)
+      VALUES (${threadId}, 'assistant', '', 'dashboard', 'streaming')
+    `;
+
+    const res = await callDelete(
+      new Request(`http://localhost/api/ea/chat?hiveId=${HIVE_A}`, {
+        method: "DELETE",
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "EA is already responding" });
+    const rows = await sql<{ id: string; status: string }[]>`
+      SELECT id, status FROM ea_threads WHERE hive_id = ${HIVE_A}
+    `;
+    expect(rows).toEqual([{ id: threadId, status: "active" }]);
+  });
 });

@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { sql as appSql } from "@/app/api/_lib/db";
 import {
   appendMessage,
@@ -87,6 +87,65 @@ const SAFE_FAILURE_MESSAGES: Record<DashboardEaFailureCategory, string> = {
 
 export function dashboardChannelId(hiveId: string): string {
   return `dashboard:${hiveId}`.slice(0, 64);
+}
+
+function dashboardTurnLockKey(hiveId: string, channelId: string): string {
+  return `${DASHBOARD_TURN_LOCK_PREFIX}:${hiveId}:${channelId}`;
+}
+
+async function acquireDashboardTurnLock(
+  tx: TransactionSql,
+  hiveId: string,
+  channelId: string,
+): Promise<void> {
+  const [lock] = await tx<{ acquired: boolean }[]>`
+    SELECT pg_try_advisory_xact_lock(
+      hashtextextended(${dashboardTurnLockKey(hiveId, channelId)}, 0)
+    ) AS acquired
+  `;
+  if (lock?.acquired) return;
+
+  const [running] = await tx<{ threadId: string; assistantMessageId: string | null }[]>`
+    SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
+    FROM ea_threads AS thread
+    LEFT JOIN ea_messages AS message
+      ON message.thread_id = thread.id
+      AND message.role = 'assistant'
+      AND message.status = 'streaming'
+    WHERE thread.hive_id = ${hiveId}
+      AND thread.channel_id = ${channelId}
+      AND thread.status = 'active'
+    LIMIT 1
+  `;
+  throw new DashboardEaTurnInProgressError(
+    running?.threadId ?? "",
+    running?.assistantMessageId ?? "",
+  );
+}
+
+async function rejectStreamingDashboardTurn(
+  tx: TransactionSql,
+  hiveId: string,
+  channelId: string,
+): Promise<void> {
+  const [running] = await tx<{ threadId: string; assistantMessageId: string }[]>`
+    SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
+    FROM ea_threads AS thread
+    JOIN ea_messages AS message
+      ON message.thread_id = thread.id
+      AND message.role = 'assistant'
+      AND message.status = 'streaming'
+    WHERE thread.hive_id = ${hiveId}
+      AND thread.channel_id = ${channelId}
+      AND thread.status = 'active'
+    LIMIT 1
+  `;
+  if (running) {
+    throw new DashboardEaTurnInProgressError(
+      running.threadId,
+      running.assistantMessageId,
+    );
+  }
 }
 
 async function prepareDashboardTurn(
@@ -263,30 +322,9 @@ async function claimDashboardTurn(
   assistantMessage: EaMessage;
 }> {
   const channelId = dashboardChannelId(input.hiveId);
-  const lockKey = `${DASHBOARD_TURN_LOCK_PREFIX}:${input.hiveId}:${channelId}`;
 
   return sql.begin(async (tx) => {
-    const [lock] = await tx<{ acquired: boolean }[]>`
-      SELECT pg_try_advisory_xact_lock(hashtextextended(${lockKey}, 0)) AS acquired
-    `;
-    if (!lock?.acquired) {
-      const [running] = await tx<{ threadId: string; assistantMessageId: string }[]>`
-        SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
-        FROM ea_threads AS thread
-        LEFT JOIN ea_messages AS message
-          ON message.thread_id = thread.id
-          AND message.role = 'assistant'
-          AND message.status = 'streaming'
-        WHERE thread.hive_id = ${input.hiveId}
-          AND thread.channel_id = ${channelId}
-          AND thread.status = 'active'
-        LIMIT 1
-      `;
-      throw new DashboardEaTurnInProgressError(
-        running?.threadId ?? "",
-        running?.assistantMessageId ?? "",
-      );
-    }
+    await acquireDashboardTurnLock(tx, input.hiveId, channelId);
 
     const thread = await getOrCreateActiveThread(tx, input.hiveId, channelId);
     const [running] = await tx<{ id: string }[]>`
@@ -432,8 +470,12 @@ export async function startFreshDashboardThread(
   input: { hiveId: string; userId: string },
 ): Promise<EaThread> {
   const channelId = dashboardChannelId(input.hiveId);
-  await closeActiveThread(sql, input.hiveId, channelId);
-  return getOrCreateActiveThread(sql, input.hiveId, channelId);
+  return sql.begin(async (tx) => {
+    await acquireDashboardTurnLock(tx, input.hiveId, channelId);
+    await rejectStreamingDashboardTurn(tx, input.hiveId, channelId);
+    await closeActiveThread(tx, input.hiveId, channelId);
+    return getOrCreateActiveThread(tx, input.hiveId, channelId);
+  });
 }
 
 export async function sendDashboardMessage(

@@ -77,7 +77,7 @@ export async function getOrCreateActiveThread(
 }
 
 export async function closeActiveThread(
-  sql: Sql,
+  sql: QuerySql,
   hiveId: string,
   channelId: string,
 ): Promise<void> {
