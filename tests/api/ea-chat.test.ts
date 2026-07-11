@@ -55,6 +55,17 @@ function jsonRequest(body: Record<string, unknown>) {
   });
 }
 
+function sseRequest(body: Record<string, unknown>) {
+  return new Request("http://localhost/api/ea/chat", {
+    method: "POST",
+    headers: {
+      "Accept": "text/event-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 function multipartRequest(input: { hiveId: string; content: string; files: File[] }) {
   const body = new FormData();
   body.append("hiveId", input.hiveId);
@@ -302,8 +313,35 @@ describe("/api/ea/chat", () => {
       role: "assistant",
       content: "partial",
       source: "dashboard",
-      status: "sent",
+      status: "failed",
+      error: "EA response failed before completion.",
     });
+  });
+
+  it("emits a terminal SSE error and logs only safe stream identifiers and category", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockRunEaStream.mockImplementationOnce(async function* () {
+      throw new Error("provider secret: sk-never-log");
+    });
+
+    const res = await callPost(sseRequest({ hiveId: HIVE_A, content: "secret owner prompt" }));
+
+    expect(res.status).toBe(201);
+    const frames = (await res.text()).trim().split("\n\n").map((frame) =>
+      JSON.parse(frame.replace(/^data: /, "")) as Record<string, unknown>
+    );
+    expect(frames[0]).toEqual({ type: "start" });
+    expect(frames.at(-1)).toEqual({ type: "error", category: "runner_failure" });
+    expect(frames.some((frame) => frame.type === "done")).toBe(false);
+
+    expect(errorSpy).toHaveBeenCalledWith("[api/ea/chat] stream failed", {
+      threadId: expect.any(String),
+      messageId: expect.any(String),
+      category: "runner_failure",
+    });
+    const renderedLog = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(renderedLog).not.toContain("secret owner prompt");
+    expect(renderedLog).not.toContain("sk-never-log");
   });
 
   it("does not write raw owner chat content to console logs on EA stream failure", async () => {
@@ -378,5 +416,29 @@ describe("/api/ea/chat", () => {
     expect(rows.filter((row) => row.hive_id === HIVE_B)).toEqual([
       { hive_id: HIVE_B, status: "active" },
     ]);
+  });
+
+  it("DELETE returns a clear conflict without closing a thread with an in-flight turn", async () => {
+    const getRes = await callGet(
+      new Request(`http://localhost/api/ea/chat?hiveId=${HIVE_A}`),
+    );
+    const threadId = (await getRes.json()).data.thread.id;
+    await sql`
+      INSERT INTO ea_messages (thread_id, role, content, source, status)
+      VALUES (${threadId}, 'assistant', '', 'dashboard', 'streaming')
+    `;
+
+    const res = await callDelete(
+      new Request(`http://localhost/api/ea/chat?hiveId=${HIVE_A}`, {
+        method: "DELETE",
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "EA is already responding" });
+    const rows = await sql<{ id: string; status: string }[]>`
+      SELECT id, status FROM ea_threads WHERE hive_id = ${HIVE_A}
+    `;
+    expect(rows).toEqual([{ id: threadId, status: "active" }]);
   });
 });

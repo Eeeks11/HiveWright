@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Sql, TransactionSql } from "postgres";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 vi.mock("@/app/api/_lib/db", () => ({ sql }));
@@ -43,10 +44,53 @@ vi.mock("@/quality/ea-post-turn", () => ({
   scheduleImplicitQualityExtraction: mocks.scheduleImplicitQualityExtraction,
 }));
 
-import { dashboardEaClient } from "@/ea/native/dashboard-chat";
+import {
+  DashboardEaTurnInProgressError,
+  dashboardEaClient,
+  getDashboardChat,
+  sendDashboardMessage,
+  startFreshDashboardThread,
+} from "@/ea/native/dashboard-chat";
 import type { EaMessage } from "@/ea/native/thread-store";
 
 const HIVE_ID = "99999999-9999-4999-8999-999999999999";
+const COLLIDING_HIVE_ID_ONE = "9fec36b0-c867-4804-815e-81970934980c";
+const COLLIDING_HIVE_ID_TWO = "38a4cfb7-d7c2-4d79-947b-01137897c369";
+
+type QuerySql = Sql | TransactionSql;
+
+function interceptQueries(
+  base: QuerySql,
+  beforeQuery: (query: string) => Promise<void>,
+  onTransaction?: (tx: TransactionSql) => Promise<void>,
+): Sql {
+  return new Proxy(base as Sql, {
+    apply(target, thisArg, args: [TemplateStringsArray, ...unknown[]]) {
+      const query = args[0].join("?");
+      return beforeQuery(query).then(() => Reflect.apply(target, thisArg, args));
+    },
+    get(target, property, receiver) {
+      if (property === "begin") {
+        return (callback: (tx: TransactionSql) => Promise<unknown>) =>
+          target.begin(async (tx) => {
+            await onTransaction?.(tx);
+            return callback(
+              interceptQueries(tx, beforeQuery) as unknown as TransactionSql,
+            );
+          });
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(async () => {
   await truncateAll(sql);
@@ -130,13 +174,22 @@ describe("dashboardEaClient.submit", () => {
         role: string;
         content: string;
         source: string;
+        status: string;
+        error: string | null;
       }[]
     >`
-      SELECT t.channel_id, m.role, m.content, m.source
+      SELECT t.channel_id, m.role, m.content, m.source, m.status, m.error
       FROM ea_messages m
       JOIN ea_threads t ON t.id = m.thread_id
       WHERE t.hive_id = ${HIVE_ID}
-      ORDER BY m.created_at ASC
+      ORDER BY m.created_at ASC,
+        CASE m.role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        m.id ASC
     `;
 
     expect(rows).toEqual([
@@ -145,12 +198,16 @@ describe("dashboardEaClient.submit", () => {
         role: "owner",
         content: "What active goals do I have?",
         source: "dashboard",
+        status: "sent",
+        error: null,
       },
       {
         channel_id: `dashboard:${HIVE_ID}`,
         role: "assistant",
         content: "Hello, dashboard.",
         source: "dashboard",
+        status: "sent",
+        error: null,
       },
     ]);
     expect(mocks.scheduleImplicitQualityExtraction).toHaveBeenCalledWith(
@@ -160,6 +217,32 @@ describe("dashboardEaClient.submit", () => {
         ownerMessage: "What active goals do I have?",
       }),
     );
+  });
+
+  it("returns dashboard history in owner-before-assistant order when created_at ties", async () => {
+    const stream = await dashboardEaClient.submit("same timestamp turn", {
+      hiveId: HIVE_ID,
+      hiveName: "Dashboard Native Hive",
+    });
+    for await (const chunk of stream) void chunk;
+
+    const tiedCreatedAt = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+    await sql`
+      UPDATE ea_messages
+      SET created_at = ${tiedCreatedAt}
+      WHERE source = 'dashboard'
+    `;
+
+    const chat = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+
+    expect(chat.messages.map((message) => message.role)).toEqual(["owner", "assistant"]);
+    expect(chat.messages.map((message) => message.content)).toEqual([
+      "same timestamp turn",
+      "Hello, dashboard.",
+    ]);
   });
 
   it("passes dashboard attachment paths through to runEaStream", async () => {
@@ -208,5 +291,550 @@ describe("dashboardEaClient.submit", () => {
     expect(runOptions?.signal?.aborted).toBe(true);
     expect(controller.signal.aborted).toBe(false);
     expect(mocks.state.streamReturned).toBe(true);
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error
+      FROM ea_messages
+      WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "Hello",
+      status: "failed",
+      error: "EA response was interrupted before completion.",
+    });
+  });
+
+  it("persists the assistant as streaming before the first chunk is consumed", async () => {
+    const stream = await dashboardEaClient.submit("show pending state", {
+      hiveId: HIVE_ID,
+    });
+
+    const [assistant] = await sql<{ id: string; content: string; status: string; error: string | null }[]>`
+      SELECT id, content, status, error
+      FROM ea_messages
+      WHERE role = 'assistant'
+    `;
+    expect(assistant).toMatchObject({ content: "", status: "streaming", error: null });
+
+    for await (const chunk of stream) void chunk;
+  });
+
+  it("allows exactly one of two coordinated connections to claim and start a turn", async () => {
+    const firstReachedActiveTurnCheck = deferred();
+    const releaseFirstActiveTurnCheck = deferred();
+    const backendPids: number[] = [];
+    let delayedFirstCheck = false;
+    const recordBackendPid = async (tx: TransactionSql) => {
+      const [row] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+      backendPids.push(row.pid);
+    };
+
+    const firstSql = interceptQueries(sql, async (query) => {
+      if (!delayedFirstCheck && query.includes("FROM ea_messages") && query.includes("status = 'streaming'")) {
+        delayedFirstCheck = true;
+        firstReachedActiveTurnCheck.resolve();
+        await releaseFirstActiveTurnCheck.promise;
+      }
+    }, recordBackendPid);
+    const secondSql = interceptQueries(sql, async () => {}, recordBackendPid);
+    let firstRequest: Promise<unknown> | undefined;
+
+    try {
+      firstRequest = sendDashboardMessage(firstSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "first concurrent request",
+      });
+      await firstReachedActiveTurnCheck.promise;
+
+      const secondRequest = sendDashboardMessage(secondSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+        content: "second concurrent request",
+      });
+      const secondOutcome = await secondRequest.then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      releaseFirstActiveTurnCheck.resolve();
+      await firstRequest;
+
+      expect(secondOutcome).toBeInstanceOf(DashboardEaTurnInProgressError);
+      expect(new Set(backendPids).size).toBe(2);
+      expect(mocks.runEaStream).toHaveBeenCalledTimes(1);
+      const messages = await sql<{ role: string; content: string }[]>`
+        SELECT role, content
+        FROM ea_messages
+        ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
+      `;
+      expect(messages).toEqual([
+        { role: "owner", content: "first concurrent request" },
+        { role: "assistant", content: "Hello, dashboard." },
+      ]);
+    } finally {
+      releaseFirstActiveTurnCheck.resolve();
+      if (firstRequest) await Promise.allSettled([firstRequest]);
+    }
+  });
+
+  it("keeps a claimed thread active and visible when replacement conflicts, then replaces after claim completion", async () => {
+    const activeThread = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+    const claimReachedActiveTurnCheck = deferred();
+    const releaseClaim = deferred();
+    let delayedClaim = false;
+    const claimSql = interceptQueries(sql, async (query) => {
+      if (!delayedClaim && query.includes("FROM ea_messages") && query.includes("status = 'streaming'")) {
+        delayedClaim = true;
+        claimReachedActiveTurnCheck.resolve();
+        await releaseClaim.promise;
+      }
+    });
+    let claim: Promise<unknown> | undefined;
+
+    try {
+      claim = sendDashboardMessage(claimSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim wins before replacement",
+      });
+      await claimReachedActiveTurnCheck.promise;
+
+      await expect(startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      })).rejects.toBeInstanceOf(DashboardEaTurnInProgressError);
+
+      const [duringConflict] = await sql<{ id: string; status: string }[]>`
+        SELECT id, status FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+          AND status = 'active'
+      `;
+      expect(duringConflict).toEqual({ id: activeThread.thread.id, status: "active" });
+
+      releaseClaim.resolve();
+      await claim;
+
+      const visibleClaim = await getDashboardChat(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+      });
+      expect(visibleClaim.thread.id).toBe(activeThread.thread.id);
+      expect(visibleClaim.messages.map((message) => message.content)).toEqual([
+        "claim wins before replacement",
+        "Hello, dashboard.",
+      ]);
+
+      const replacement = await startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      });
+      expect(replacement.id).not.toBe(activeThread.thread.id);
+      const rows = await sql<{ id: string; status: string }[]>`
+        SELECT id, status FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+        ORDER BY status, id
+      `;
+      expect(rows.filter((row) => row.status === "active")).toEqual([
+        { id: replacement.id, status: "active" },
+      ]);
+      expect(rows.filter((row) => row.status === "closed")).toEqual([
+        { id: activeThread.thread.id, status: "closed" },
+      ]);
+    } finally {
+      releaseClaim.resolve();
+      if (claim) await Promise.allSettled([claim]);
+    }
+  });
+
+  it("keeps the old thread visible while replacement holds the lock and permits a clean claim retry", async () => {
+    const initial = await sendDashboardMessage(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+      content: "old visible turn",
+    });
+    const replacementReachedCreate = deferred();
+    const releaseReplacement = deferred();
+    let delayedCreate = false;
+    const replacementSql = interceptQueries(sql, async (query) => {
+      if (!delayedCreate && query.includes("INSERT INTO ea_threads")) {
+        delayedCreate = true;
+        replacementReachedCreate.resolve();
+        await releaseReplacement.promise;
+      }
+    });
+    let replacement: Promise<unknown> | undefined;
+
+    try {
+      replacement = startFreshDashboardThread(replacementSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      });
+      await replacementReachedCreate.promise;
+
+      await expect(sendDashboardMessage(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim conflicts during replacement",
+      })).rejects.toBeInstanceOf(DashboardEaTurnInProgressError);
+
+      const visibleDuringReplacement = await getDashboardChat(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+      });
+      expect(visibleDuringReplacement.thread.id).toBe(initial.thread.id);
+      expect(visibleDuringReplacement.messages.map((message) => message.content)).toEqual([
+        "old visible turn",
+        "Hello, dashboard.",
+      ]);
+
+      releaseReplacement.resolve();
+      const fresh = await replacement as Awaited<ReturnType<typeof startFreshDashboardThread>>;
+
+      const retry = await sendDashboardMessage(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "claim retry after replacement",
+      });
+      expect(retry.thread.id).toBe(fresh.id);
+
+      const threadCounts = await sql<{ active: number; closed: number }[]>`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'active')::int AS active,
+          COUNT(*) FILTER (WHERE status = 'closed')::int AS closed
+        FROM ea_threads
+        WHERE hive_id = ${HIVE_ID} AND channel_id = ${`dashboard:${HIVE_ID}`}
+      `;
+      expect(threadCounts).toEqual([{ active: 1, closed: 1 }]);
+      const messages = await sql<{ thread_id: string; role: string; content: string }[]>`
+        SELECT thread_id, role, content FROM ea_messages
+        WHERE thread_id IN (${initial.thread.id}, ${fresh.id})
+        ORDER BY content
+      `;
+      expect(messages).toHaveLength(4);
+      expect(messages.filter((message) => message.thread_id === initial.thread.id)).toHaveLength(2);
+      expect(messages.filter((message) => message.thread_id === fresh.id)).toHaveLength(2);
+      expect(messages.some((message) => message.content === "claim conflicts during replacement")).toBe(false);
+    } finally {
+      releaseReplacement.resolve();
+      if (replacement) await Promise.allSettled([replacement]);
+    }
+  });
+
+  it("rolls back replacement when new-thread creation fails and leaves the old thread visible", async () => {
+    const oldTurn = await sendDashboardMessage(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+      content: "must survive replacement rollback",
+    });
+    await sql.unsafe(`
+      CREATE FUNCTION fail_dashboard_thread_replacement() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.channel_id = 'dashboard:${HIVE_ID}' AND NEW.status = 'active' THEN
+          RAISE EXCEPTION 'forced replacement thread insert failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER fail_dashboard_thread_replacement
+      BEFORE INSERT ON ea_threads
+      FOR EACH ROW EXECUTE FUNCTION fail_dashboard_thread_replacement();
+    `);
+
+    try {
+      await expect(startFreshDashboardThread(sql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+      })).rejects.toThrow("forced replacement thread insert failure");
+    } finally {
+      await sql.unsafe(`
+        DROP TRIGGER fail_dashboard_thread_replacement ON ea_threads;
+        DROP FUNCTION fail_dashboard_thread_replacement();
+      `);
+    }
+
+    const [oldThread] = await sql<{ status: string; closed_at: Date | null }[]>`
+      SELECT status, closed_at FROM ea_threads WHERE id = ${oldTurn.thread.id}
+    `;
+    expect(oldThread).toEqual({ status: "active", closed_at: null });
+    const visible = await getDashboardChat(sql, {
+      hiveId: HIVE_ID,
+      userId: "owner-one",
+    });
+    expect(visible.thread.id).toBe(oldTurn.thread.id);
+    expect(visible.messages.map((message) => message.content)).toEqual([
+      "must survive replacement rollback",
+      "Hello, dashboard.",
+    ]);
+  });
+
+  it("does not falsely conflict across hives whose legacy 32-bit hashes collide", async () => {
+    await sql`
+      INSERT INTO hives (id, slug, name, type)
+      VALUES
+        (${COLLIDING_HIVE_ID_ONE}, 'dashboard-hash-collision-one', 'Collision Hive One', 'digital'),
+        (${COLLIDING_HIVE_ID_TWO}, 'dashboard-hash-collision-two', 'Collision Hive Two', 'digital')
+    `;
+    const firstLockKey = `dashboard-ea-turn:${COLLIDING_HIVE_ID_ONE}:dashboard:${COLLIDING_HIVE_ID_ONE}`;
+    const secondLockKey = `dashboard-ea-turn:${COLLIDING_HIVE_ID_TWO}:dashboard:${COLLIDING_HIVE_ID_TWO}`;
+    const [hashes] = await sql<{
+      legacyFirst: number;
+      legacySecond: number;
+      extendedKeysDiffer: boolean;
+    }[]>`
+      SELECT
+        hashtext(${firstLockKey}) AS "legacyFirst",
+        hashtext(${secondLockKey}) AS "legacySecond",
+        hashtextextended(${firstLockKey}, 0) <> hashtextextended(${secondLockKey}, 0)
+          AS "extendedKeysDiffer"
+    `;
+    expect(hashes).toEqual({
+      legacyFirst: 1789377752,
+      legacySecond: 1789377752,
+      extendedKeysDiffer: true,
+    });
+
+    const firstLocksAcquired = deferred();
+    const releaseFirstLocks = deferred();
+    const heldLocks = sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${firstLockKey}))`;
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${firstLockKey}, 0))`;
+      firstLocksAcquired.resolve();
+      await releaseFirstLocks.promise;
+    });
+
+    try {
+      await firstLocksAcquired.promise;
+
+      await sendDashboardMessage(sql, {
+        hiveId: COLLIDING_HIVE_ID_TWO,
+        userId: "owner-two",
+        content: "second colliding-hash hive request",
+      });
+
+      const messages = await sql<{ roles: string[] }[]>`
+        SELECT array_agg(message.role ORDER BY message.role) AS roles
+        FROM ea_messages AS message
+        JOIN ea_threads AS thread ON thread.id = message.thread_id
+        WHERE thread.hive_id = ${COLLIDING_HIVE_ID_TWO}
+      `;
+      expect(messages).toEqual([{ roles: ["assistant", "owner"] }]);
+      expect(mocks.runEaStream).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirstLocks.resolve();
+      await heldLocks;
+    }
+  });
+
+  it("rolls back a partial claim and permits one clean retry", async () => {
+    await sql.unsafe(`
+      CREATE FUNCTION fail_dashboard_assistant_insert() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.role = 'assistant' AND NEW.source = 'dashboard' THEN
+          RAISE EXCEPTION 'forced assistant insert failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER fail_dashboard_assistant_insert
+      BEFORE INSERT ON ea_messages
+      FOR EACH ROW EXECUTE FUNCTION fail_dashboard_assistant_insert();
+    `);
+
+    let messageCountAfterFailure = -1;
+    try {
+      await expect(
+        dashboardEaClient.submit("claim that must roll back", { hiveId: HIVE_ID }),
+      ).rejects.toThrow("forced assistant insert failure");
+
+      const [row] = await sql<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM ea_messages
+      `;
+      messageCountAfterFailure = row.count;
+    } finally {
+      await sql.unsafe(`
+        DROP TRIGGER fail_dashboard_assistant_insert ON ea_messages;
+        DROP FUNCTION fail_dashboard_assistant_insert();
+      `);
+    }
+
+    expect(messageCountAfterFailure).toBe(0);
+
+    const retry = await dashboardEaClient.submit("clean retry", { hiveId: HIVE_ID });
+    for await (const chunk of retry) void chunk;
+
+    const rows = await sql<{ role: string; content: string; status: string }[]>`
+      SELECT role, content, status
+      FROM ea_messages
+      ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
+    `;
+    expect(rows).toEqual([
+      { role: "owner", content: "clean retry", status: "sent" },
+      { role: "assistant", content: "Hello, dashboard.", status: "sent" },
+    ]);
+  });
+
+  it("marks an aborted run failed with a safe error and a fresh updated timestamp", async () => {
+    const controller = new AbortController();
+    mocks.runEaStream.mockImplementationOnce(async function* (_prompt, options) {
+      controller.abort();
+      const error = new Error("request aborted with secret provider detail");
+      error.name = "AbortError";
+      expect(options?.signal?.aborted).toBe(true);
+      throw error;
+    });
+    const stream = await dashboardEaClient.submit("abort this", {
+      hiveId: HIVE_ID,
+      signal: controller.signal,
+    });
+    const [before] = await sql<{ updated_at: Date }[]>`
+      SELECT updated_at FROM ea_messages WHERE role = 'assistant'
+    `;
+    await sql`SELECT pg_sleep(0.01)`;
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [after] = await sql<{ content: string; status: string; error: string | null; updated_at: Date }[]>`
+      SELECT content, status, error, updated_at FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(after).toMatchObject({
+      content: "",
+      status: "failed",
+      error: "EA response was interrupted before completion.",
+    });
+    expect(after.updated_at.getTime()).toBeGreaterThan(before.updated_at.getTime());
+    expect(after.error).not.toContain("secret provider detail");
+  });
+
+  it("marks a thrown runner error failed without persisting raw error detail", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      throw new Error("provider token sk-secret must never persist");
+    });
+    const stream = await dashboardEaClient.submit("runner failure", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "",
+      status: "failed",
+      error: "EA response failed before completion.",
+    });
+  });
+
+  it("marks whitespace-only successful output failed", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      yield "  \n";
+    });
+    const stream = await dashboardEaClient.submit("empty response", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow("EA returned an empty response");
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "  \n",
+      status: "failed",
+      error: "EA returned no response.",
+    });
+  });
+
+  it("retains partial output but marks it terminally failed", async () => {
+    mocks.runEaStream.mockImplementationOnce(async function* () {
+      yield "Partial owner-visible answer";
+      throw new Error("runner exited 1");
+    });
+    const stream = await dashboardEaClient.submit("partial failure", { hiveId: HIVE_ID });
+
+    await expect(async () => {
+      for await (const chunk of stream) void chunk;
+    }).rejects.toThrow();
+
+    const [assistant] = await sql<{ content: string; status: string; error: string | null }[]>`
+      SELECT content, status, error FROM ea_messages WHERE role = 'assistant'
+    `;
+    expect(assistant).toEqual({
+      content: "Partial owner-visible answer",
+      status: "failed",
+      error: "EA response failed before completion.",
+    });
+
+    const retryStream = await dashboardEaClient.submit("retry after partial", { hiveId: HIVE_ID });
+    for await (const chunk of retryStream) void chunk;
+    const promptCalls = mocks.buildEaPrompt.mock.calls as unknown as Array<
+      [unknown, { history: EaMessage[] }]
+    >;
+    expect(promptCalls.at(-1)?.[1].history).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "assistant",
+        content: "Partial owner-visible answer",
+        status: "failed",
+      }),
+    ]));
+  });
+
+  it("does not let a stale completion overwrite a failed turn after a retry starts", async () => {
+    const stream = await dashboardEaClient.submit("first attempt", { hiveId: HIVE_ID });
+    const [first] = await sql<{ id: string; thread_id: string }[]>`
+      SELECT id, thread_id FROM ea_messages WHERE role = 'assistant'
+    `;
+    await sql`
+      UPDATE ea_messages
+      SET status = 'failed', error = 'EA response was interrupted before completion.', updated_at = NOW()
+      WHERE id = ${first.id}
+    `;
+    const [retry] = await sql<{ id: string }[]>`
+      INSERT INTO ea_messages (thread_id, role, content, source, status)
+      VALUES (${first.thread_id}, 'assistant', '', 'dashboard', 'streaming')
+      RETURNING id
+    `;
+
+    for await (const chunk of stream) void chunk;
+
+    const rows = await sql<{ id: string; content: string; status: string }[]>`
+      SELECT id, content, status
+      FROM ea_messages
+      WHERE role = 'assistant'
+      ORDER BY created_at ASC,
+        CASE role
+          WHEN 'system' THEN 0
+          WHEN 'owner' THEN 1
+          WHEN 'assistant' THEN 2
+          ELSE 3
+        END ASC,
+        id ASC
+    `;
+    expect(rows).toEqual(expect.arrayContaining([
+      { id: first.id, content: "", status: "failed" },
+      { id: retry.id, content: "", status: "streaming" },
+    ]));
   });
 });

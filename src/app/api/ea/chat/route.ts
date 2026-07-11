@@ -4,6 +4,7 @@ import { jsonError, jsonOk } from "@/app/api/_lib/responses";
 import { canAccessHive } from "@/auth/users";
 import {
   DashboardEaTurnInProgressError,
+  DashboardEaStreamError,
   dashboardEaClient,
   getDashboardChat,
   sendDashboardMessage,
@@ -145,8 +146,18 @@ export async function POST(request: Request): Promise<Response> {
                 controller.enqueue(sseFrame({ type: "delta", delta: chunk }));
               }
               controller.enqueue(sseFrame({ type: "done" }));
-            } catch {
-              controller.enqueue(sseFrame({ type: "error" }));
+            } catch (error) {
+              const category = error instanceof DashboardEaStreamError
+                ? error.category
+                : "runner_failure";
+              console.error("[api/ea/chat] stream failed", {
+                threadId: error instanceof DashboardEaStreamError ? error.threadId : stream.threadId,
+                messageId: error instanceof DashboardEaStreamError
+                  ? error.assistantMessageId
+                  : stream.assistantMessageId,
+                category,
+              });
+              controller.enqueue(sseFrame({ type: "error", category }));
             } finally {
               controller.close();
             }
@@ -176,6 +187,13 @@ export async function POST(request: Request): Promise<Response> {
     if (error instanceof DashboardEaTurnInProgressError) {
       return jsonError("EA is already responding", 409);
     }
+    if (error instanceof DashboardEaStreamError) {
+      console.error("[api/ea/chat] send failed", {
+        threadId: error.threadId,
+        messageId: error.assistantMessageId,
+        category: error.category,
+      });
+    }
     return jsonError("Failed to send EA message", 500);
   }
 }
@@ -198,7 +216,10 @@ export async function DELETE(request: Request): Promise<Response> {
       userId: authz.user.id,
     });
     return jsonOk({ thread, messages: [], hasMore: false });
-  } catch {
+  } catch (error) {
+    if (error instanceof DashboardEaTurnInProgressError) {
+      return jsonError("EA is already responding", 409);
+    }
     return jsonError("Failed to start fresh EA thread", 500);
   }
 }

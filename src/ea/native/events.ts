@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 export type EaChatEventType =
   | "ea_message_created"
@@ -13,7 +13,7 @@ export interface EaChatEvent {
 }
 
 export async function emitEaChatEvent(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   event: EaChatEvent,
 ): Promise<void> {
   const payload = JSON.stringify({
