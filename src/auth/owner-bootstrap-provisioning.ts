@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Sql } from "postgres";
-import { hashOwnerBootstrapToken, OWNER_BOOTSTRAP_LOCK_KEY } from "./owner-bootstrap";
+import {
+  hashOwnerBootstrapToken,
+  OWNER_BOOTSTRAP_DISABLED_TOKEN_HASH,
+  OWNER_BOOTSTRAP_LOCK_KEY,
+} from "./owner-bootstrap";
 
 export const OWNER_SETUP_TOKEN_ENV = "HIVEWRIGHT_OWNER_SETUP_TOKEN";
 
@@ -74,42 +78,64 @@ export async function provisionOwnerBootstrap(
   sql: Sql,
   secretsFile = runtimeSecretsPath(),
 ): Promise<"provisioned" | "active" | "disabled"> {
-  const result = await sql.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${OWNER_BOOTSTRAP_LOCK_KEY}))`;
-    const [users] = await tx<{ count: number }[]>`
-      SELECT COUNT(*)::int AS count FROM users WHERE is_active = true
-    `;
-    const [state] = await tx<{ consumedAt: Date | null; tokenHash: string }[]>`
-      SELECT consumed_at AS "consumedAt", token_hash AS "tokenHash"
-      FROM owner_bootstrap_state
-      WHERE id = true FOR UPDATE
-    `;
-    if ((users?.count ?? 0) > 0) {
-      if (state && !state.consumedAt) {
-        await tx`
-          UPDATE owner_bootstrap_state SET consumed_at = NOW()
-          WHERE id = true AND consumed_at IS NULL
-        `;
+  let removeTokenAfterFailure = false;
+  try {
+    const result = await sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${OWNER_BOOTSTRAP_LOCK_KEY}))`;
+      const [users] = await tx<{ exists: boolean }[]>`
+        SELECT EXISTS (SELECT 1 FROM users) AS exists
+      `;
+      const [state] = await tx<{ consumedAt: Date | null; tokenHash: string }[]>`
+        SELECT consumed_at AS "consumedAt", token_hash AS "tokenHash"
+        FROM owner_bootstrap_state
+        WHERE id = true FOR UPDATE
+      `;
+      if (users?.exists) {
+        removeTokenAfterFailure = true;
+        if (!state) {
+          await tx`
+            INSERT INTO owner_bootstrap_state (id, token_hash, consumed_at)
+            VALUES (true, ${OWNER_BOOTSTRAP_DISABLED_TOKEN_HASH}, NOW())
+          `;
+        } else if (!state.consumedAt) {
+          await tx`
+            UPDATE owner_bootstrap_state SET consumed_at = NOW()
+            WHERE id = true AND consumed_at IS NULL
+          `;
+        }
+        return { status: "disabled" as const };
       }
-      return { status: "disabled" as const };
-    }
-    if (state) {
-      return state.consumedAt
-        ? { status: "disabled" as const }
-        : { status: "active" as const, tokenHash: state.tokenHash };
-    }
+      if (state) {
+        return state.consumedAt
+          ? { status: "disabled" as const }
+          : { status: "active" as const, tokenHash: state.tokenHash };
+      }
 
-    const token = randomBytes(32).toString("base64url");
-    const current = fs.existsSync(secretsFile) ? fs.readFileSync(secretsFile, "utf8") : "";
-    writeSecretsFile(secretsFile, replaceSecret(current, token));
-    await tx`
-      INSERT INTO owner_bootstrap_state (id, token_hash)
-      VALUES (true, ${hashOwnerBootstrapToken(token)})
-    `;
-    return { status: "provisioned" as const };
-  });
-  const normalized = result.status;
-  if (normalized === "disabled") removeOwnerSetupTokenFromSecrets(secretsFile);
-  if (normalized === "active") secureExistingActiveSecret(secretsFile, result.tokenHash);
-  return normalized;
+      const token = randomBytes(32).toString("base64url");
+      const current = fs.existsSync(secretsFile) ? fs.readFileSync(secretsFile, "utf8") : "";
+      writeSecretsFile(secretsFile, replaceSecret(current, token));
+      removeTokenAfterFailure = true;
+      await tx`
+        INSERT INTO owner_bootstrap_state (id, token_hash)
+        VALUES (true, ${hashOwnerBootstrapToken(token)})
+      `;
+      return { status: "provisioned" as const };
+    });
+    const normalized = result.status;
+    if (normalized === "disabled") removeOwnerSetupTokenFromSecrets(secretsFile);
+    if (normalized === "active") secureExistingActiveSecret(secretsFile, result.tokenHash);
+    return normalized;
+  } catch (error) {
+    if (removeTokenAfterFailure) {
+      try {
+        removeOwnerSetupTokenFromSecrets(secretsFile);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Owner bootstrap provisioning failed and setup token cleanup also failed",
+        );
+      }
+    }
+    throw error;
+  }
 }

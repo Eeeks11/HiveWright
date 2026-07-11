@@ -11,7 +11,7 @@ export const OWNER_BOOTSTRAP_GLOBAL_RATE_LIMIT = 50;
 export const OWNER_BOOTSTRAP_RATE_WINDOW_MINUTES = 15;
 const OWNER_BOOTSTRAP_AUDIT_RETENTION_HOURS = 24;
 const OWNER_BOOTSTRAP_AUDIT_MAX_ROWS = 10_000;
-const DUMMY_TOKEN_HASH = createHash("sha256")
+export const OWNER_BOOTSTRAP_DISABLED_TOKEN_HASH = createHash("sha256")
   .update("hivewright-owner-bootstrap-disabled")
   .digest("hex");
 
@@ -39,7 +39,7 @@ export function ownerBootstrapSourceKey(source: string): string {
 
 function constantTimeHashEqual(candidateHash: string, expectedHash?: string): boolean {
   const candidate = Buffer.from(candidateHash, "hex");
-  const expected = Buffer.from(expectedHash ?? DUMMY_TOKEN_HASH, "hex");
+  const expected = Buffer.from(expectedHash ?? OWNER_BOOTSTRAP_DISABLED_TOKEN_HASH, "hex");
   return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
 
