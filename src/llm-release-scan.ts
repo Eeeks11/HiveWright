@@ -145,6 +145,7 @@ async function findRecentLiveReleaseScanProposal(
   created_decision_id: string | null;
   decision_status: string | null;
   owner_response: string | null;
+  selected_option_key: string | null;
 } | null> {
   const [row] = await sql<Array<{
     id: string;
@@ -153,6 +154,7 @@ async function findRecentLiveReleaseScanProposal(
     created_decision_id: string | null;
     decision_status: string | null;
     owner_response: string | null;
+    selected_option_key: string | null;
   }>>`
     SELECT
       ird.id,
@@ -160,7 +162,8 @@ async function findRecentLiveReleaseScanProposal(
       ird.created_at,
       ird.created_decision_id,
       d.status AS decision_status,
-      d.owner_response
+      d.owner_response,
+      d.selected_option_key
     FROM initiative_run_decisions ird
     LEFT JOIN decisions d
       ON d.id = ird.created_decision_id
@@ -172,7 +175,11 @@ async function findRecentLiveReleaseScanProposal(
         d.status IN ('pending', 'ea_review')
         OR (
           d.status = 'resolved'
-          AND d.owner_response = 'approved'
+          AND (
+            d.owner_response = 'approved'
+            OR d.owner_response LIKE 'approved:%'
+            OR d.selected_option_key = 'approve'
+          )
           AND EXISTS (
             SELECT 1
             FROM tasks t
