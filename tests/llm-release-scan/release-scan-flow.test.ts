@@ -238,6 +238,13 @@ describe("LLM release scan owner-gated flow", () => {
     expect(approval.status).toBe(200);
     expect(await countReleasePatchTasks()).toBe(1);
 
+    await sql`
+      UPDATE tasks
+      SET status = 'running'
+      WHERE hive_id = ${HIVE}
+        AND created_by = 'decision-release-scan'
+    `;
+
     const [resolvedDecision] = await sql<Array<{
       owner_response: string | null;
       selected_option_key: string | null;

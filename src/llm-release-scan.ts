@@ -185,7 +185,7 @@ async function findRecentLiveReleaseScanProposal(
             FROM tasks t
             WHERE t.hive_id = ird.hive_id
               AND t.created_by = 'decision-release-scan'
-              AND t.status IN ('pending', 'active', 'blocked', 'in_review')
+              AND t.status IN ('pending', 'active', 'claimed', 'running', 'blocked', 'in_review')
               AND t.brief LIKE ${"%release-scan-decision:"} || d.id::text || '%'
           )
         )
