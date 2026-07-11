@@ -329,28 +329,257 @@ function callWithin(expression: ts.Node, context: AnalysisContext): { call: ts.C
   return result;
 }
 
+function expressionHasImportedHelper(expression: ts.Node, context: AnalysisContext, exports: Set<string>): boolean {
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found || (node !== expression && ts.isFunctionLike(node))) return;
+    if (ts.isCallExpression(node)) {
+      const called = unwrapParentheses(node.expression);
+      if (ts.isIdentifier(called)) {
+        const binding = context.imports.get(called.text);
+        if (binding && !binding.namespace && exports.has(binding.exported) && !context.invalidBindings.has(called.text) && !declarationShadows(node, called.text)) {
+          found = true;
+          return;
+        }
+      } else if (ts.isPropertyAccessExpression(called) && ts.isIdentifier(called.expression)) {
+        const binding = context.imports.get(called.expression.text);
+        if (binding?.namespace && exports.has(called.name.text) && !context.invalidBindings.has(called.expression.text) && !declarationShadows(node, called.expression.text)) {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(expression);
+  return found;
+}
+
+function expressionHasImportedMutationGate(expression: ts.Node, context: AnalysisContext): boolean {
+  return expressionHasImportedHelper(expression, context, MUTATION_HELPER_EXPORTS);
+}
+
+function expressionHasImportedAccessGate(expression: ts.Node, context: AnalysisContext): boolean {
+  return expressionHasImportedHelper(expression, context, ACCESS_HELPER_EXPORTS);
+}
+
+function expressionReferencesIdentifier(expression: ts.Node, name: string): boolean {
+  let found = false;
+  function visit(node: ts.Node): void {
+    if (found || (node !== expression && ts.isFunctionLike(node))) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(expression);
+  return found;
+}
+
+function conditionUsesMutationMode(expression: ts.Expression): boolean {
+  const condition = unwrapParentheses(expression);
+  if (!ts.isBinaryExpression(condition)) return false;
+  const left = unwrapParentheses(condition.left);
+  const right = unwrapParentheses(condition.right);
+  return (ts.isIdentifier(left) && left.text === "mode" && stringLiteralValue(right) === "mutate") ||
+    (ts.isIdentifier(right) && right.text === "mode" && stringLiteralValue(left) === "mutate");
+}
+
+function expressionRequiresMutationMode(expression: ts.Expression, context: AnalysisContext): boolean {
+  const value = unwrapParentheses(expression);
+  if (!ts.isConditionalExpression(value) || !conditionUsesMutationMode(value.condition)) return false;
+  const whenTrueHasMutation = expressionHasImportedMutationGate(value.whenTrue, context);
+  const whenFalseHasMutation = expressionHasImportedMutationGate(value.whenFalse, context);
+  const whenTrueHasAccess = expressionHasImportedAccessGate(value.whenTrue, context);
+  const whenFalseHasAccess = expressionHasImportedAccessGate(value.whenFalse, context);
+  return (whenTrueHasMutation && whenFalseHasAccess) || (whenFalseHasMutation && whenTrueHasAccess);
+}
+
+function statementReturnsOrThrows(statement: ts.Statement): boolean {
+  if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+  return ts.isBlock(statement) && statement.statements.length > 0 && statementReturnsOrThrows(statement.statements.at(-1)!);
+}
+
+function conditionDeniesPendingMutation(condition: ts.Expression, pendingName: string): boolean {
+  const value = unwrapParentheses(condition);
+  return ts.isPrefixUnaryExpression(value) && value.operator === ts.SyntaxKind.ExclamationToken &&
+    expressionReferencesIdentifier(value.operand, pendingName);
+}
+
+function returnExpressionIsPendingMutationDecision(expression: ts.Expression, pendingName: string): boolean {
+  const value = unwrapParentheses(expression);
+  if (!ts.isConditionalExpression(value)) return false;
+  return expressionReferencesIdentifier(value.condition, pendingName) &&
+    !expressionHasImportedMutationGate(value.whenTrue, { sourceFile: value.getSourceFile(), imports: new Map(), invalidBindings: new Set(), localWrappers: new Map() }) &&
+    !expressionHasImportedMutationGate(value.whenFalse, { sourceFile: value.getSourceFile(), imports: new Map(), invalidBindings: new Set(), localWrappers: new Map() });
+}
+
+type LocalWrapperVerification = {
+  hasMutationGate: boolean;
+  hasModeScopedMutationGate: boolean;
+  hasMutationDenial: boolean;
+  hasThrowingDenial: boolean;
+  returnsMutationCall: boolean;
+  returnsDenialValue: boolean;
+  returnsSuccessAfterDenial: boolean;
+};
+
+function verifyLocalWrapperStatements(
+  statements: readonly ts.Statement[],
+  context: AnalysisContext,
+  incomingPending = new Set<string>(),
+): LocalWrapperVerification {
+  const result: LocalWrapperVerification = {
+    hasMutationGate: false,
+    hasModeScopedMutationGate: false,
+    hasMutationDenial: false,
+    hasThrowingDenial: false,
+    returnsMutationCall: false,
+    returnsDenialValue: false,
+    returnsSuccessAfterDenial: false,
+  };
+  const pendingMutation = new Set(incomingPending);
+  let deniedByMutation = incomingPending.size > 0;
+
+  function merge(child: LocalWrapperVerification, includeSuccessAfterDenial = false): void {
+    result.hasMutationGate ||= child.hasMutationGate;
+    result.hasModeScopedMutationGate ||= child.hasModeScopedMutationGate;
+    result.hasMutationDenial ||= child.hasMutationDenial;
+    result.hasThrowingDenial ||= child.hasThrowingDenial;
+    result.returnsMutationCall ||= child.returnsMutationCall;
+    result.returnsDenialValue ||= child.returnsDenialValue;
+    if (includeSuccessAfterDenial) result.returnsSuccessAfterDenial ||= child.returnsSuccessAfterDenial;
+  }
+
+  for (const statement of statements) {
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+        if (expressionRequiresMutationMode(declaration.initializer, context)) {
+          result.hasMutationGate = true;
+          result.hasModeScopedMutationGate = true;
+          pendingMutation.add(declaration.name.text);
+        } else if (expressionHasImportedMutationGate(declaration.initializer, context)) {
+          result.hasMutationGate = true;
+          pendingMutation.add(declaration.name.text);
+        }
+      }
+      continue;
+    }
+
+    if (ts.isExpressionStatement(statement) && expressionHasImportedMutationGate(statement.expression, context)) {
+      result.hasMutationGate = true;
+      continue;
+    }
+
+    if (ts.isIfStatement(statement)) {
+      const conditionHasModeScopedGate = expressionRequiresMutationMode(statement.expression, context);
+      if (conditionHasModeScopedGate || expressionHasImportedMutationGate(statement.expression, context)) {
+        result.hasMutationGate = true;
+        result.hasModeScopedMutationGate ||= conditionHasModeScopedGate;
+        if (statementTerminates(statement.thenStatement) && conditionDeniesUnauthorized(statement.expression, "allow-boolean")) {
+          deniedByMutation = true;
+          result.hasMutationDenial = true;
+          if (ts.isThrowStatement(ts.isBlock(statement.thenStatement) ? statement.thenStatement.statements.at(-1)! : statement.thenStatement)) {
+            result.hasThrowingDenial = true;
+          }
+        }
+      }
+      for (const pendingName of pendingMutation) {
+        if (conditionDeniesPendingMutation(statement.expression, pendingName) && statementReturnsOrThrows(statement.thenStatement)) {
+          deniedByMutation = true;
+          result.hasMutationDenial = true;
+          if (ts.isThrowStatement(ts.isBlock(statement.thenStatement) ? statement.thenStatement.statements.at(-1)! : statement.thenStatement)) {
+            result.hasThrowingDenial = true;
+          }
+        }
+      }
+      const thenVerification = verifyLocalWrapperStatements(
+        ts.isBlock(statement.thenStatement) ? statement.thenStatement.statements : [statement.thenStatement],
+        context,
+        pendingMutation,
+      );
+      merge(thenVerification);
+      if (statement.elseStatement) {
+        merge(verifyLocalWrapperStatements(
+          ts.isBlock(statement.elseStatement) ? statement.elseStatement.statements : [statement.elseStatement],
+          context,
+          pendingMutation,
+        ), true);
+      } else if (isOwnerNegation(statement.expression) && thenVerification.hasMutationDenial) {
+        deniedByMutation = true;
+      }
+      continue;
+    }
+
+    if (ts.isReturnStatement(statement) && statement.expression) {
+      const returnValue = unwrapParentheses(statement.expression);
+      if (ts.isConditionalExpression(returnValue) && expressionHasImportedMutationGate(returnValue.condition, context)) {
+        result.hasMutationGate = true;
+        result.returnsDenialValue = true;
+        deniedByMutation = true;
+        result.hasMutationDenial = true;
+      } else if (expressionHasImportedMutationGate(statement.expression, context)) {
+        result.hasMutationGate = true;
+        result.returnsMutationCall = true;
+      }
+      for (const pendingName of pendingMutation) {
+        if (returnExpressionIsPendingMutationDecision(statement.expression, pendingName)) {
+          result.returnsDenialValue = true;
+          deniedByMutation = true;
+          result.hasMutationDenial = true;
+        }
+      }
+      if (deniedByMutation) result.returnsSuccessAfterDenial = true;
+      continue;
+    }
+
+    if (ts.isBlock(statement)) {
+      merge(verifyLocalWrapperStatements(statement.statements, context, pendingMutation), true);
+    }
+  }
+
+  return result;
+}
+
+function verifiedLocalWrapper(
+  statement: ts.FunctionDeclaration,
+  baseContext: AnalysisContext,
+): { kind: TrustedCallKind; requiresMutationMode: boolean } | null {
+  if (!statement.name || !statement.body) return null;
+  const name = statement.name.text;
+  const verification = verifyLocalWrapperStatements(statement.body.statements, baseContext);
+  if (!verification.hasMutationGate) return null;
+
+  if (name === "requireHiveMutationAccess") {
+    return verification.returnsDenialValue || verification.returnsSuccessAfterDenial
+      ? { kind: "denial-value", requiresMutationMode: false }
+      : null;
+  }
+
+  if (name === "ensureCanMutateHive") {
+    if (verification.hasThrowingDenial) return { kind: "throwing", requiresMutationMode: false };
+    if (verification.returnsMutationCall) return { kind: "allow-boolean", requiresMutationMode: false };
+    return verification.returnsDenialValue || verification.returnsSuccessAfterDenial
+      ? { kind: "denial-value", requiresMutationMode: false }
+      : null;
+  }
+
+  const hasAccess = hasImportedHelper(statement.body, baseContext, ACCESS_HELPER_EXPORTS);
+  if (hasAccess && !verification.hasModeScopedMutationGate) return null;
+  return verification.returnsSuccessAfterDenial
+    ? { kind: "success-object", requiresMutationMode: hasAccess }
+    : null;
+}
+
 function localAuthWrappers(sourceFile: ts.SourceFile, baseContext: AnalysisContext): AnalysisContext["localWrappers"] {
   const wrappers: AnalysisContext["localWrappers"] = new Map();
   for (const statement of sourceFile.statements) {
     if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body || !LOCAL_AUTH_WRAPPER_NAMES.has(statement.name.text)) continue;
     if (baseContext.invalidBindings.has(statement.name.text)) continue;
-    const hasMutation = Boolean(callWithin(statement.body, baseContext));
-    if (!hasMutation) continue;
-    const hasAccess = hasImportedHelper(statement.body, baseContext, ACCESS_HELPER_EXPORTS);
-    let hasThrow = false;
-    let returnsMutationCall = false;
-    function inspect(node: ts.Node): void {
-      if (ts.isThrowStatement(node)) hasThrow = true;
-      if (ts.isReturnStatement(node) && node.expression && callWithin(node.expression, baseContext)) returnsMutationCall = true;
-      ts.forEachChild(node, inspect);
-    }
-    inspect(statement.body);
-    const kind: TrustedCallKind = statement.name.text === "requireHiveMutationAccess"
-      ? "denial-value"
-      : statement.name.text === "ensureCanMutateHive"
-        ? hasThrow ? "throwing" : returnsMutationCall ? "allow-boolean" : "denial-value"
-        : "success-object";
-    wrappers.set(statement.name.text, { kind, requiresMutationMode: hasAccess });
+    const wrapper = verifiedLocalWrapper(statement, baseContext);
+    if (wrapper) wrappers.set(statement.name.text, wrapper);
   }
   return wrappers;
 }
@@ -832,6 +1061,21 @@ async function runSelfTest(): Promise<void> {
     );
     await writeRoute(
       rootDir,
+      "unsafe-dead-code-local-wrapper",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function resolveHiveAccess(params: unknown, mode: "access" | "mutate") { if (false) await canMutateHive(sql, user.id, hiveId); const ok = await canAccessHive(sql, user.id, hiveId); return ok ? { user } : { response: jsonError("denied", 403) }; }\nexport async function POST() { const access = await resolveHiveAccess(params, "mutate"); if ("response" in access) return access.response; await mutateDatabase(); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "unsafe-access-only-local-wrapper",
+      'import { canAccessHive } from "@/auth/users";\nasync function authorizeHive(user: any, hiveId: string, mode: "access" | "mutate") { const ok = await canAccessHive(sql, user.id, hiveId); return ok ? { ok: true } : { ok: false }; }\nexport async function PATCH() { const auth = await authorizeHive(user, hiveId, "mutate"); if (!auth.ok) return jsonError("denied", 403); await mutateDatabase(); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "unsafe-nondominating-local-wrapper",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function resolveHiveAccess(params: unknown, mode: "access" | "mutate") { if (flag) { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); if (!ok) return { response: jsonError("denied", 403) }; } return { user }; }\nexport async function POST() { const access = await resolveHiveAccess(params, "mutate"); if ("response" in access) return access.response; await mutateDatabase(); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
       "read-only-post",
       'import { canAccessHive } from "@/auth/users";\nexport function POST() { // hive-mutation-not-required: POST returns a read-only export\nreturn canAccessHive; }\n',
     );
@@ -897,6 +1141,9 @@ async function runSelfTest(): Promise<void> {
       "src/app/api/exported-const-access-only/route.ts",
       "src/app/api/exception-literal-does-not-bypass/route.ts",
       "src/app/api/valid-handler-route-auth-exception/route.ts",
+      "src/app/api/unsafe-dead-code-local-wrapper/route.ts",
+      "src/app/api/unsafe-access-only-local-wrapper/route.ts",
+      "src/app/api/unsafe-nondominating-local-wrapper/route.ts",
     ];
 
     for (const file of expected) {
@@ -924,10 +1171,10 @@ async function runSelfTest(): Promise<void> {
       files.has("src/app/api/valid-aliased-mutation-helper/route.ts") ||
       files.has("src/app/api/valid-member-mutation-helper/route.ts") ||
       files.has("src/app/api/valid-nested-authorization/route.ts") ||
-      files.has("src/app/api/valid-early-return-before-authorization/route.ts")
-      || files.has("src/app/api/valid-export-alias/route.ts")
+      files.has("src/app/api/valid-early-return-before-authorization/route.ts") ||
+      files.has("src/app/api/valid-export-alias/route.ts")
     ) {
-      throw new Error(`self-test produced a false positive for a valid route: ${Array.from(files).filter((file) => file.includes("/valid-")).join(", ")}`);
+      throw new Error(`self-test produced a false positive for a valid route: ${Array.from(files).filter((file) => file.includes("/valid-") && file !== "src/app/api/valid-handler-route-auth-exception/route.ts").join(", ")}`);
     }
 
     console.log("check-route-auth self-test passed");
