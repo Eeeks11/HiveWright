@@ -10,6 +10,7 @@ Restart=always
 RestartSec=10
 Environment=HIVEWRIGHT_RUNTIME_ROOT=%h/.hivewright
 EnvironmentFile=%h/.hivewright/config/.env
+ExecStartPre=/usr/bin/npm run auth:owner-bootstrap:provision
 StandardOutput=journal
 StandardError=journal
 

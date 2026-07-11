@@ -1,8 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk } from "../../_lib/responses";
-import { countUsers } from "@/auth/users";
+import { ownerSetupRequired } from "@/auth/owner-bootstrap";
 
 export async function GET() {
-  const count = await countUsers(sql);
-  return jsonOk({ needsSetup: count === 0, userCount: count });
+  return jsonOk({ needsSetup: await ownerSetupRequired(sql) });
 }

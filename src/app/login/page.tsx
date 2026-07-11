@@ -38,6 +38,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -78,7 +79,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/bootstrap-owner", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, displayName }),
+        body: JSON.stringify({ email, password, displayName, setupToken }),
       });
       const body = await res.json();
       if (!res.ok) {
@@ -127,6 +128,15 @@ export default function LoginPage() {
           <>
             <form onSubmit={handleSetup} className="mt-6 space-y-3">
               <input
+                type="password"
+                value={setupToken}
+                onChange={(e) => setSetupToken(e.target.value)}
+                placeholder="One-time setup token"
+                autoComplete="off"
+                required
+                className="w-full rounded-md border px-3 py-2.5 text-sm shadow-[0_1px_0_rgba(255,255,255,0.03)_inset]"
+              />
+              <input
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -161,16 +171,6 @@ export default function LoginPage() {
                 {busy ? "Creating owner…" : "Create owner & sign in"}
               </button>
             </form>
-            <button
-              type="button"
-              onClick={() => {
-                setMode("signin");
-                setError("");
-              }}
-              className="mt-4 block w-full text-center text-xs text-honey-300/75 underline underline-offset-4 hover:text-honey-300"
-            >
-              Use the legacy dashboard password instead
-            </button>
           </>
         ) : (
           <form onSubmit={handleSignIn} className="mt-6 space-y-3">

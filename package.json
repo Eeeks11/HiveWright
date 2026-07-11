@@ -24,6 +24,7 @@
     "db:migrate:app": "scripts/with-runtime-env.sh tsx scripts/migrate-app-db.ts",
     "db:push": "drizzle-kit push",
     "auth:owner-reset-local": "tsx scripts/reset-owner-session.ts",
+    "auth:owner-bootstrap:provision": "scripts/with-runtime-env.sh tsx scripts/provision-owner-bootstrap.ts",
     "auth:owner-smoke": "tsx scripts/run-owner-session-smoke.ts",
     "auth:owner-smoke:local": "tsx scripts/run-owner-session-local-smoke.ts",
     "dashboard:agent-live-smoke": "scripts/with-runtime-env.sh tsx scripts/run-dashboard-agent-live-usage-smoke.ts",
