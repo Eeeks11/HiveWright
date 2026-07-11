@@ -5,7 +5,7 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt, buildCommentWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { codexCliModelName, resolveGoalSupervisorRuntime } from "./supervisor-routing";
-import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
+import { buildGoalSupervisorProcessEnv, loadGoalSupervisorCredentials } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
 import {
   captureGoalProgress,
@@ -33,22 +33,13 @@ import {
 const CODEX_BIN = ["/home/hivewright/.local/bin/codex", "/home/hivewright/.npm-global/bin/codex", "codex"]
   .find((p) => { try { fs.accessSync(p); return true; } catch { return false; } }) || "codex";
 
-function buildCodexEnv(supervisorSession: string): NodeJS.ProcessEnv {
-  const env = buildGoalSupervisorProcessEnv(process.env, supervisorSession);
-  // Same hygiene as the codex adapter — strip OPENAI key so codex uses the
-  // owner's ChatGPT OAuth instead of per-token API billing.
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
-  return env;
-}
-
 const THREAD_ID_FILE = ".codex-thread-id";
 
 function runCodex(
   args: string[],
   cwd: string,
   prompt: string,
-  supervisorSession: string,
+  environment: { credentials: Record<string, string>; goalId: string; hiveId: string; supervisorSession: string },
   timeoutMs = 14_400_000,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
@@ -56,7 +47,7 @@ function runCodex(
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       timeout: timeoutMs,
-      env: buildCodexEnv(supervisorSession),
+      env: buildGoalSupervisorProcessEnv({ adapter: "codex", ...environment }),
     });
     let stdout = "", stderr = "";
     proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
@@ -105,6 +96,7 @@ export async function startGoalSupervisor(
   fs.mkdirSync(workspacePath, { recursive: true });
 
   const initialPrompt = await buildSupervisorInitialPrompt(sql, goalId);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const agentsMd = `# Goal Supervisor
 
@@ -136,7 +128,12 @@ ${initialPrompt}
     "-C", workspacePath,
   ];
 
-  const runResult = await runCodex(args, workspacePath, initialPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, initialPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor-codex] codex exec failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}`);
@@ -191,6 +188,7 @@ export async function wakeUpSupervisor(
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   const wakeUpPrompt = await buildSprintWakeUpPrompt(sql, goalId, sprintNumber);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
@@ -222,7 +220,12 @@ export async function wakeUpSupervisor(
     ? ["exec", "resume", threadId, ...resumeFlags, "-"]
     : ["exec", ...freshFlags];
 
-  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };
@@ -269,6 +272,7 @@ export async function wakeUpSupervisorOnComment(
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   const wakeUpPrompt = await buildCommentWakeUpPrompt(sql, goalId, commentId);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
@@ -290,7 +294,12 @@ export async function wakeUpSupervisorOnComment(
     ? ["exec", "resume", threadId, ...commonFlags, "-"]
     : ["exec", ...commonFlags, "-C", workspacePath];
 
-  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };

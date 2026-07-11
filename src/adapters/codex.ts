@@ -14,6 +14,7 @@ import {
   recordAgentAuditEventBestEffort,
 } from "../audit/agent-events";
 import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
+import { buildAgentEnvironment } from "../security/agent-environment";
 
 /**
  * Direct codex CLI adapter — bypasses openclaw entirely.
@@ -41,14 +42,14 @@ export class CodexAdapter implements Adapter {
       "-m",
       modelName,
     ];
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    delete baseEnv.OPENAI_API_KEY;
-    delete baseEnv.OPENAI_BASE_URL;
-
     return new Promise((resolve) => {
       const proc = spawn("codex", args, {
         cwd: process.cwd(),
-        env: { ...baseEnv, ...credential.secrets } as NodeJS.ProcessEnv,
+        env: buildAgentEnvironment({
+          scope: { kind: "probe", adapter: "codex", model: modelName },
+          credentials: credential.secrets,
+          nativeProviderState: [".codex"],
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 120_000,
       });
@@ -173,19 +174,14 @@ export class CodexAdapter implements Adapter {
     existingSessionId?: string | null;
   }): Promise<AdapterResult> {
     const { prompt, args, cwd, ctx, onChunk, hooks, existingSessionId = null } = input;
-    // Strip OpenAI key env vars so codex falls back to its native ChatGPT
-    // OAuth (~/.codex/auth.json with `auth_mode:"chatgpt"`). Otherwise an
-    // OPENAI_API_KEY inherited from the dispatcher's secrets file forces
-    // per-token API billing instead of using the owner's subscription.
-    // Mirrors the same fix as the claude-code adapter.
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    delete baseEnv.OPENAI_API_KEY;
-    delete baseEnv.OPENAI_BASE_URL;
-
     return new Promise((resolve) => {
       const proc = spawn("codex", args, {
         cwd,
-        env: { ...baseEnv, ...ctx.credentials } as NodeJS.ProcessEnv,
+        env: buildAgentEnvironment({
+          scope: { kind: "task", adapter: "codex", taskId: ctx.task.id, hiveId: ctx.task.hiveId },
+          credentials: ctx.credentials,
+          nativeProviderState: [".codex"],
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         // 4-hour wall-clock cap — matches claude-code adapter so executor
         // tasks running on either backend get the same bounded autonomy.

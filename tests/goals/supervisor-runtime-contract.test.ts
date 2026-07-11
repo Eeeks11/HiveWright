@@ -1,27 +1,35 @@
-import { describe, it, expect } from "vitest";
+import fs from "fs";
+import path from "path";
+import { afterAll, describe, it, expect } from "vitest";
 import { buildGoalSupervisorProcessEnv } from "@/goals/supervisor-env";
 import { buildSupervisorToolsMd } from "@/goals/supervisor-tool-contract";
 
 const goalId = "11111111-2222-4333-8444-555555555555";
 const hiveId = "22222222-3333-4444-9555-666666666666";
+const runtimeRoot = path.join(process.cwd(), ".supervisor-env-test");
+
+afterAll(() => fs.rmSync(runtimeRoot, { recursive: true, force: true }));
 
 describe("goal supervisor runtime contract", () => {
-  it("scrubs inherited task and hive scope while setting the supervisor session", () => {
-    const env = buildGoalSupervisorProcessEnv(
-      {
-        INTERNAL_SERVICE_TOKEN: "token",
-        HIVEWRIGHT_TASK_ID: "wrong-parent-task",
-        HIVEWRIGHT_HIVE_ID: "wrong-parent-hive",
-        PATH: "/usr/bin",
-      },
-      "/tmp/hivewright/goal-session",
-    );
+  it("denies ambient secrets while setting explicit goal scope and scoped credentials", () => {
+    const previous = process.env.INTERNAL_SERVICE_TOKEN;
+    process.env.INTERNAL_SERVICE_TOKEN = "ambient-sentinel-token";
+    const env = buildGoalSupervisorProcessEnv({
+      adapter: "codex",
+      credentials: { INTERNAL_SERVICE_TOKEN: "scoped-token" },
+      goalId,
+      hiveId,
+      runtimeRoot,
+      supervisorSession: "/tmp/hivewright/goal-session",
+    });
+    if (previous === undefined) delete process.env.INTERNAL_SERVICE_TOKEN;
+    else process.env.INTERNAL_SERVICE_TOKEN = previous;
 
-    expect(env.INTERNAL_SERVICE_TOKEN).toBe("token");
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.INTERNAL_SERVICE_TOKEN).toBe("scoped-token");
     expect(env.HIVEWRIGHT_SUPERVISOR_SESSION).toBe("/tmp/hivewright/goal-session");
     expect(env.HIVEWRIGHT_TASK_ID).toBeUndefined();
-    expect(env.HIVEWRIGHT_HIVE_ID).toBeUndefined();
+    expect(env.HIVEWRIGHT_HIVE_ID).toBe(hiveId);
+    expect(env.HIVEWRIGHT_GOAL_ID).toBe(goalId);
   });
 
   it("tells supervisors to send X-Supervisor-Session on task, plan, and complete writes", () => {
