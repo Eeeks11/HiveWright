@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import {
   importHiveRecordsFromEmail,
   MAX_EMAIL_IMPORT_MESSAGES,
@@ -59,9 +59,9 @@ async function resolveHiveAccess(paramsPromise: Promise<{ id: string }>): Promis
   if (!hive) return { response: jsonError("hive not found", 404) };
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, id);
-    if (!hasAccess) {
-      return { response: jsonError("Forbidden: hive access required", 403) };
+    const canMutate = await canMutateHive(sql, authz.user.id, id);
+    if (!canMutate) {
+      return { response: jsonError("Forbidden: hive mutation access required", 403) };
     }
   }
 

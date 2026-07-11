@@ -1,7 +1,7 @@
 import { sql } from "../_lib/db";
 import { jsonError, jsonOk, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
 import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
@@ -193,7 +193,7 @@ export async function GET(request: Request) {
 // Previously any authenticated session could pick an arbitrary hiveId and
 // taskId and forcibly block a task in an unrelated hive. Minimum hardening:
 //   1. `requireApiUser()` resolves the caller identity.
-//   2. `canAccessHive()` gates the supplied hiveId — system owners bypass.
+//   2. Explicit mutation permission gates the supplied hiveId — system owners bypass.
 //   3. The referenced task must belong to that hive before the decision row
 //      is inserted and the task is transitioned to 'blocked'.
 export async function POST(request: Request) {
@@ -218,8 +218,8 @@ export async function POST(request: Request) {
     if (creationPause) return creationPausedResponse(creationPause);
 
     if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+      const canMutate = await canMutateHive(sql, user.id, hiveId);
+      if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
     }
 
     const [taskRow] = await sql<{

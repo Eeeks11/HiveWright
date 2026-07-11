@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import {
   canonicalModelIdForAdapter,
   configuredModelIdentityKey,
@@ -96,6 +96,12 @@ async function requireHiveAccess(
   return hasAccess ? null : jsonError("Forbidden: hive access required", 403);
 }
 
+async function requireHiveMutationAccess(user: { id: string; isSystemOwner: boolean }, hiveId: string) {
+  if (user.isSystemOwner) return null;
+  const canMutate = await canMutateHive(sql, user.id, hiveId);
+  return canMutate ? null : jsonError("Forbidden: hive mutation access required", 403);
+}
+
 async function validateCredentialForHive(credentialId: string | null, hiveId: string) {
   if (!credentialId) return null;
   const [credential] = await sql<{ id: string; hive_id: string | null }[]>`
@@ -148,7 +154,7 @@ export async function PATCH(request: Request) {
   if (!hiveId) return jsonError("hiveId is required", 400);
   if (!modelCatalogId && !hiveModelId) return jsonError("modelCatalogId or hiveModelId is required", 400);
 
-  const denied = await requireHiveAccess(authz.user, hiveId);
+  const denied = await requireHiveMutationAccess(authz.user, hiveId);
   if (denied) return denied;
 
   const enabled = typeof body.enabled === "boolean" ? body.enabled : true;

@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { runSupervisorDigest } from "@/supervisor";
 import { jsonError, jsonOk } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
@@ -27,7 +27,7 @@ import {
 const HIVE_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-async function authorizeHiveRequest(request: Request) {
+async function authorizeHiveRequest(request: Request, mode: "access" | "mutate" = "access") {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   const { user } = authz;
@@ -40,9 +40,11 @@ async function authorizeHiveRequest(request: Request) {
     return jsonError("hiveId must be a valid UUID", 400);
   }
   if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(appSql, user.id, hiveId);
-    if (!hasAccess) {
-      return jsonError("Forbidden: caller cannot access this hive", 403);
+    const allowed = mode === "mutate"
+      ? await canMutateHive(appSql, user.id, hiveId)
+      : await canAccessHive(appSql, user.id, hiveId);
+    if (!allowed) {
+      return jsonError(mode === "mutate" ? "Forbidden: hive mutation access required" : "Forbidden: caller cannot access this hive", 403);
     }
   }
   return { hiveId, url };
@@ -69,7 +71,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const authorized = await authorizeHiveRequest(request);
+    const authorized = await authorizeHiveRequest(request, "mutate");
     if (authorized instanceof Response) return authorized;
     const result = await runSupervisorDigest(appSql, authorized.hiveId);
     return jsonOk(result);

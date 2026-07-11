@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { sql } from "../../../../_lib/db";
 import { jsonOk, jsonError } from "../../../../_lib/responses";
 import { requireApiUser } from "../../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { validateAttachmentFiles } from "@/attachments/constants";
 import { persistAttachmentsForParent } from "@/attachments/persist";
 import { isValidStatus } from "../_status";
@@ -39,8 +39,8 @@ export async function PATCH(
   if ("response" in authz) return authz.response;
   const { user } = authz;
   if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, id);
-    if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+    const canMutate = await canMutateHive(sql, user.id, id);
+    if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
   }
 
   // The human owner's dashboard session is privileged (isSystemOwner=true)
@@ -175,8 +175,8 @@ export async function DELETE(
   if ("response" in authz) return authz.response;
   const { user } = authz;
   if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, id);
-    if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+    const canMutate = await canMutateHive(sql, user.id, id);
+    if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
   }
 
   const result = await sql`

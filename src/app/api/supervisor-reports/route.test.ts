@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   sql: vi.fn(),
   requireApiUser: vi.fn(),
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
   runSupervisorDigest: vi.fn(),
 }));
 
@@ -36,6 +37,7 @@ vi.mock("../_lib/responses", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
 }));
 
 vi.mock("@/supervisor", () => ({
@@ -76,6 +78,7 @@ beforeEach(() => {
     user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
   });
   mocks.canAccessHive.mockResolvedValue(true);
+  mocks.canMutateHive.mockResolvedValue(true);
 });
 
 describe("GET /api/supervisor-reports — access control", () => {
@@ -285,7 +288,7 @@ describe("POST /api/supervisor-reports — on-demand digest", () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mocks.canAccessHive.mockResolvedValueOnce(false);
+    mocks.canMutateHive.mockResolvedValueOnce(false);
 
     const res = await POST(
       new Request(`http://localhost/api/supervisor-reports?hiveId=${HIVE_ID}`, {
@@ -294,7 +297,7 @@ describe("POST /api/supervisor-reports — on-demand digest", () => {
     );
 
     expect(res.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_ID);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_ID);
     expect(mocks.runSupervisorDigest).not.toHaveBeenCalled();
   });
 
