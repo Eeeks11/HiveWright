@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import { storeCredential } from "@/credentials/manager";
 import { canonicalConnectorPayloadHash, executeApprovedConnectorAction, invokeConnector, loadConnectorInstall } from "@/connectors/runtime";
-import { setHttpWebhookDnsLookupForTests } from "@/connectors/http-webhook-safety";
+import {
+  setHttpWebhookDispatchForTests,
+  setHttpWebhookDnsLookupForTests,
+} from "@/connectors/http-webhook-safety";
 
 const BIZ = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const TEST_ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -18,6 +21,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   setHttpWebhookDnsLookupForTests(null);
+  setHttpWebhookDispatchForTests(null);
   vi.restoreAllMocks();
 });
 
@@ -457,11 +461,14 @@ describe("invokeConnector(http-webhook, post_json)", () => {
       allowedHostnames: "hooks.example.com",
     });
     mockDns(["93.184.216.34"]);
-    const fetchMock = vi.fn(async () => new Response(null, {
-      status: 302,
-      headers: { location: "http://127.0.0.1/admin" },
+    const dispatchMock = vi.fn(async () => ({
+      remoteAddress: "93.184.216.34",
+      response: new Response(null, {
+        status: 302,
+        headers: { location: "http://127.0.0.1/admin" },
+      }),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    setHttpWebhookDispatchForTests(dispatchMock);
 
     const result = await invokeApprovedConnector({
       installId,
@@ -472,9 +479,7 @@ describe("invokeConnector(http-webhook, post_json)", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/redirects are not allowed/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
-    expect(calls[0][1]).toEqual(expect.objectContaining({ redirect: "manual" }));
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect((await latestHttpWebhookAudit()).outcome).toBe("error");
   });
 
@@ -485,8 +490,11 @@ describe("invokeConnector(http-webhook, post_json)", () => {
       authHeader: "Bearer test",
     });
     mockDns(["93.184.216.34"]);
-    const fetchMock = vi.fn(async () => Response.json({ delivered: true }, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
+    const dispatchMock = vi.fn(async () => ({
+      remoteAddress: "93.184.216.34",
+      response: Response.json({ delivered: true }, { status: 200 }),
+    }));
+    setHttpWebhookDispatchForTests(dispatchMock);
 
     const result = await invokeApprovedConnector({
       installId,
@@ -497,15 +505,20 @@ describe("invokeConnector(http-webhook, post_json)", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://hooks.example.com/hook");
-    expect(init.headers).toEqual({
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0] as unknown as [
+      { url: URL },
+      string,
+      { headers?: Record<string, string>; body?: string | Uint8Array },
+    ];
+    const [destination, address, options] = call;
+    expect(destination.url.toString()).toBe("https://hooks.example.com/hook");
+    expect(address).toBe("93.184.216.34");
+    expect(options.headers).toEqual({
       "Content-Type": "application/json",
       Authorization: "Bearer test",
     });
-    expect(init.body).toBe("{\"message\":\"hello\"}");
-    expect(init.redirect).toBe("manual");
+    expect(options.body).toBe("{\"message\":\"hello\"}");
     const audit = await latestHttpWebhookAudit();
     expect(audit.event_type).toBe("http_webhook_post");
     expect(audit.outcome).toBe("success");
@@ -518,7 +531,10 @@ describe("invokeConnector(http-webhook, post_json)", () => {
       allowedHostnames: "hooks.example.com",
     });
     mockDns(["93.184.216.34"]);
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    setHttpWebhookDispatchForTests(async () => ({
+      remoteAddress: "93.184.216.34",
+      response: new Response("nope", { status: 500 }),
+    }));
 
     const result = await invokeApprovedConnector({
       installId,

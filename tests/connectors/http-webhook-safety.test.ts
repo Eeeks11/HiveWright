@@ -60,6 +60,70 @@ describe("HTTP connector SSRF safety", () => {
     ]);
   });
 
+  it("does not retry non-idempotent HTTP webhook POST after a dispatch error", async () => {
+    setHttpWebhookDnsLookupForTests(async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "93.184.216.35", family: 4 },
+    ]);
+    const dispatch = vi.fn(async () => {
+      throw Object.assign(new Error("socket reset after request bytes were sent"), { code: "ECONNRESET" });
+    });
+    setHttpWebhookDispatchForTests(dispatch);
+
+    const operation = connectorOperation("http-webhook", "post_json");
+    await expect(operation.handler({
+      config: { allowedHostnames: "hooks.example.com" },
+      secrets: {
+        url: "https://hooks.example.com/ingest",
+        authHeader: "Bearer same-side-effect-only-once",
+      },
+      args: { body: JSON.stringify({ sideEffect: true }) },
+    })).rejects.toThrow(/connection failed for validated address 93\.184\.216\.34/);
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: "hooks.example.com" }),
+      "93.184.216.34",
+      expect.objectContaining({ method: "POST" }),
+      "http-webhook",
+    );
+  });
+
+  it("continues trying validated addresses for idempotent website form GET failures", async () => {
+    setHttpWebhookDnsLookupForTests(async () => [
+      { address: "93.184.216.34", family: 4 },
+      { address: "93.184.216.35", family: 4 },
+    ]);
+    const dispatch = vi.fn(async (_destination, address) => {
+      if (address === "93.184.216.34") throw new Error("first address refused connection");
+      return {
+        remoteAddress: "93.184.216.35",
+        response: Response.json({ submissions: [] }, { status: 200 }),
+      };
+    });
+    setHttpWebhookDispatchForTests(dispatch);
+
+    const operation = connectorOperation("website-forms", "sync_submissions");
+    const result = await operation.handler({
+      config: {
+        submissionsUrl: "https://forms.example.com/submissions",
+        allowedHostnames: "forms.example.com",
+      },
+      secrets: {
+        submissionsUrl: "https://forms.example.com/submissions",
+        authHeader: "Bearer read-only-can-retry",
+      },
+      args: {},
+    });
+
+    expect(result).toEqual({ stream: "submissions", nextCursor: undefined, items: [] });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls.map(([, address]) => address)).toEqual([
+      "93.184.216.34",
+      "93.184.216.35",
+    ]);
+  });
+
   it.each([
     ["loopback", "127.0.0.1"],
     ["RFC1918", "10.0.0.5"],
@@ -147,6 +211,46 @@ describe("HTTP connector SSRF safety", () => {
       },
       args: {},
     })).rejects.toThrow(/redirects are not allowed/);
+  });
+
+  it("uses fresh sockets for validated transport requests so remote addresses are observed on connect", async () => {
+    const remotePorts: number[] = [];
+    const server = http.createServer((req, res) => {
+      if (typeof req.socket.remotePort === "number") remotePorts.push(req.socket.remotePort);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        connection: "keep-alive",
+      });
+      res.end(JSON.stringify({ submissions: [] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      setHttpWebhookDnsLookupForTests(async () => [{ address: "127.0.0.1", family: 4 }]);
+      setHttpWebhookPublicAddressPredicateForTests((address) => address === "127.0.0.1");
+
+      const operation = connectorOperation("website-forms", "sync_submissions");
+      for (const cursor of ["first", "second"]) {
+        const result = await operation.handler({
+          config: {
+            submissionsUrl: `http://forms.example.com:${port}/submissions`,
+            allowedHostnames: "forms.example.com",
+          },
+          secrets: {
+            submissionsUrl: `http://forms.example.com:${port}/submissions`,
+          },
+          args: { cursor },
+        });
+        expect(result).toEqual({ stream: "submissions", nextCursor: undefined, items: [] });
+      }
+
+      expect(remotePorts).toHaveLength(2);
+      expect(new Set(remotePorts).size).toBe(2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it("aborts oversized website form responses while the validated transport is still reading chunks", async () => {

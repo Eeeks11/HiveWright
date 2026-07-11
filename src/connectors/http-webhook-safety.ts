@@ -139,6 +139,7 @@ export async function fetchValidatedHttpWebhookDestination(
   label = "http-webhook",
 ): Promise<Response> {
   let lastError: Error | null = null;
+  const canRetryDispatch = isIdempotentHttpMethod(options.method);
 
   for (const address of destination.addresses) {
     try {
@@ -154,12 +155,21 @@ export async function fetchValidatedHttpWebhookDestination(
       lastError = error as Error;
       if (error instanceof HttpWebhookBlockedError) throw error;
       if (error instanceof HttpWebhookResponseTooLargeError) throw error;
+      if (!canRetryDispatch) {
+        throw new HttpWebhookBlockedError(
+          `${label} connection failed for validated address ${address}: ${lastError.message}`,
+        );
+      }
     }
   }
 
   throw new HttpWebhookBlockedError(
     `${label} connection failed for all validated addresses: ${lastError?.message ?? "unknown error"}`,
   );
+}
+
+function isIdempotentHttpMethod(method: string): boolean {
+  return ["GET", "HEAD", "OPTIONS", "PUT", "DELETE", "TRACE"].includes(method.toUpperCase());
 }
 
 function dispatchValidatedHttpRequest(
@@ -185,6 +195,7 @@ function dispatchValidatedHttpRequest(
       method: options.method,
       headers,
       servername: destination.hostname,
+      agent: false,
       signal: options.signal,
       lookup: (_hostname, _lookupOptions, callback) => {
         callback(null, address, net.isIP(address) === 6 ? 6 : 4);
@@ -237,12 +248,16 @@ function dispatchValidatedHttpRequest(
         remoteAddress = normalizeIpAddress(socket.remoteAddress ?? "");
         if (!destination.addresses.includes(remoteAddress) || !publicAddressPredicate(remoteAddress)) {
           request.destroy(new HttpWebhookBlockedError(
-            `http-webhook connected to unvalidated address ${remoteAddress || "unknown"}`,
+            `${label} connected to unvalidated address ${remoteAddress || "unknown"}`,
           ));
         }
       };
-      socket.once("connect", recordRemoteAddress);
-      socket.once("secureConnect", recordRemoteAddress);
+      if (socket.connecting === false) {
+        recordRemoteAddress();
+      } else {
+        socket.once("connect", recordRemoteAddress);
+        socket.once("secureConnect", recordRemoteAddress);
+      }
     });
 
     request.on("error", (error) => {
