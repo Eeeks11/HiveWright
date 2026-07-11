@@ -1,7 +1,7 @@
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { requireStrictHiveTarget } from "../_lib/hive-target";
 import { hiveProjectsPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 import fs from "fs";
@@ -145,9 +145,9 @@ export async function POST(request: Request) {
     }
 
     if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
+      const canMutate = await canMutateHive(sql, user.id, hiveId);
+      if (!canMutate) {
+        return jsonError("Forbidden: hive mutation access required", 403);
       }
       if (explicitWorkspacePath) {
         return jsonError("Forbidden: explicit workspacePath requires system owner", 403);

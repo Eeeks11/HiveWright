@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     requireApiUser: vi.fn(),
     enforceInternalTaskHiveScope: vi.fn(),
     canAccessHive: vi.fn(),
+    canMutateHive: vi.fn(),
     maybeRecordEaHiveSwitch: vi.fn(),
     requireEaDestinationHiveConfirmation: vi.fn(),
     recordAgentAuditEventBestEffort: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock("../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
 }));
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
@@ -54,6 +56,7 @@ describe("GET /api/decisions", () => {
       user: { id: "user-1", email: "owner@example.com", isSystemOwner: false },
     });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.canMutateHive.mockResolvedValue(true);
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true });
     mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.recordAgentAuditEventBestEffort.mockResolvedValue(undefined);

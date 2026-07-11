@@ -21,6 +21,7 @@ vi.mock("../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("../_lib/responses", () => ({
@@ -45,7 +46,7 @@ vi.mock("../_lib/responses", () => ({
 import { GET, POST } from "./route";
 import { sql } from "../_lib/db";
 import { requireApiUser } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import fs from "fs";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
@@ -54,6 +55,7 @@ const mockMkdirSync = fs.mkdirSync as unknown as ReturnType<typeof vi.fn>;
 const mockRealpathSync = fs.realpathSync.native as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const TEST_HIVES_ROOT = path.join(os.tmpdir(), "hw-project-route-hives");
 const projectRoot = (bizSlug = "my-biz") => path.join(TEST_HIVES_ROOT, bizSlug, "projects");
 const projectPath = (slug = "my-proj", bizSlug = "my-biz") => path.join(projectRoot(bizSlug), slug);
@@ -147,7 +149,7 @@ describe("POST /api/projects", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "member-1", email: "member@local", isSystemOwner: false },
     });
-    mockCanAccessHive.mockResolvedValue(false);
+    mockCanMutateHive.mockResolvedValue(false);
 
     const res = await POST(projectRequest({
       hiveId: "biz-1",
@@ -157,7 +159,7 @@ describe("POST /api/projects", () => {
 
     const body = await res.json();
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: caller cannot access this hive");
+    expect(body.error).toBe("Forbidden: hive mutation access required");
     expect(mockMkdirSync).not.toHaveBeenCalled();
     expect(mockSql).not.toHaveBeenCalled();
   });
@@ -166,7 +168,7 @@ describe("POST /api/projects", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "member-1", email: "member@local", isSystemOwner: false },
     });
-    mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
 
     const res = await POST(projectRequest({
       hiveId: "biz-1",

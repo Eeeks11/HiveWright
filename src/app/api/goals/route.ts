@@ -3,7 +3,7 @@ import { jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, requireApiUser } from "../_lib/auth";
 import { readIdempotencyKey, runIdempotentCreate } from "../_lib/idempotency";
 import { requireStrictHiveTarget } from "../_lib/hive-target";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import {
   recordEaDirectCreateBypass,
   requireEaDirectCreateBypassReason,
@@ -157,7 +157,7 @@ export async function GET(request: Request) {
 // Goal creation previously only checked session presence, letting any
 // authenticated caller insert a goal into any hive. Minimum hardening:
 //   1. Resolve caller identity via `requireApiUser()`.
-//   2. Enforce `canAccessHive()` on the supplied hiveId before INSERT.
+//   2. Enforce explicit hive mutation permission before INSERT.
 // Role-slug attribution for non-owner supervisor-originated top-level goals
 // remains blocked until role propagation lands in the JWT — see the audit at
 // `docs/security/2026-04-22-goal-task-mutation-auth-seams.md`.
@@ -176,6 +176,13 @@ export async function POST(request: Request) {
       return jsonError("Missing required fields: hiveId, title", 400);
     }
 
+    if (!user.isSystemOwner) {
+      const canMutate = await canMutateHive(sql, user.id, hiveId);
+      if (!canMutate) {
+        return jsonError("Forbidden: hive mutation access required", 403);
+      }
+    }
+
     const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
     if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
@@ -187,13 +194,6 @@ export async function POST(request: Request) {
 
     const creationPause = await assertHiveCreationAllowed(sql, hiveId);
     if (creationPause) return creationPausedResponse(creationPause);
-
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
-      }
-    }
 
     if (parentId) {
       const [parentGoal] = await sql`

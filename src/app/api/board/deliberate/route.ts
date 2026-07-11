@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonError, jsonOk } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { runDeliberation } from "@/board/deliberate";
 
 export async function POST(request: Request) {
@@ -19,8 +19,8 @@ export async function POST(request: Request) {
       return jsonError("hiveId and question are required", 400);
     }
     if (!authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+      const canMutate = await canMutateHive(sql, authz.user.id, hiveId);
+      if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
     }
     const result = await runDeliberation(sql, { hiveId, question, hiveContext });
     return jsonOk(result);

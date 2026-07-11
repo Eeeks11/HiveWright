@@ -1,7 +1,7 @@
 import { sql as appSql } from "../_lib/db";
 import { jsonOk, jsonError } from "../_lib/responses";
 import { enforceInternalTaskHiveScope, isInternalServiceAccountUser, requireApiUser } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { validateAttachmentFiles } from "@/attachments/constants";
 import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError } from "@/projects/default-project";
@@ -96,8 +96,8 @@ export async function POST(request: Request) {
     if (creationPause) return creationPausedResponse(creationPause);
 
     if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(appSql, user.id, hiveId);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
+      const canMutate = await canMutateHive(appSql, user.id, hiveId);
+      if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
     }
 
     // tasks.created_by stores role slugs ("owner", "ea", "system", role
