@@ -1,5 +1,7 @@
 import * as dns from "node:dns/promises";
-import net from "node:net";
+import * as http from "node:http";
+import * as https from "node:https";
+import * as net from "node:net";
 
 export class HttpWebhookBlockedError extends Error {
   constructor(message: string) {
@@ -19,10 +21,33 @@ type DnsLookup = (
   options: { all: true; verbatim: true },
 ) => Promise<Array<{ address: string; family: number }>>;
 
+export interface ValidatedHttpRequestOptions {
+  method: string;
+  headers?: Record<string, string>;
+  body?: string | Uint8Array;
+  signal?: AbortSignal;
+}
+
+interface ValidatedHttpDispatchResult {
+  response: Response;
+  remoteAddress: string | null;
+}
+
+type ValidatedHttpDispatch = (
+  destination: HttpWebhookDestination,
+  address: string,
+  options: ValidatedHttpRequestOptions,
+) => Promise<ValidatedHttpDispatchResult>;
+
 let dnsLookup: DnsLookup = dns.lookup as DnsLookup;
+let httpDispatch: ValidatedHttpDispatch = dispatchValidatedHttpRequest;
 
 export function setHttpWebhookDnsLookupForTests(lookupForTests: DnsLookup | null): void {
   dnsLookup = lookupForTests ?? (dns.lookup as DnsLookup);
+}
+
+export function setHttpWebhookDispatchForTests(dispatchForTests: ValidatedHttpDispatch | null): void {
+  httpDispatch = dispatchForTests ?? dispatchValidatedHttpRequest;
 }
 
 export function parseAllowedHostnames(value: unknown): string[] {
@@ -79,7 +104,7 @@ export async function validateHttpWebhookDestination(
     throw new HttpWebhookBlockedError(`${label} DNS returned no addresses for ${hostname}`);
   }
 
-  const addresses = answers.map((answer) => answer.address);
+  const addresses = answers.map((answer) => normalizeIpAddress(answer.address));
   const unsafeAddress = addresses.find((address) => !isPublicIpAddress(address));
   if (unsafeAddress) {
     throw new HttpWebhookBlockedError(
@@ -88,6 +113,113 @@ export async function validateHttpWebhookDestination(
   }
 
   return { url, hostname, addresses };
+}
+
+export async function fetchValidatedHttpWebhookDestination(
+  destination: HttpWebhookDestination,
+  options: ValidatedHttpRequestOptions,
+  label = "http-webhook",
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (const address of destination.addresses) {
+    try {
+      const result = await httpDispatch(destination, address, options);
+      const remoteAddress = result.remoteAddress ? normalizeIpAddress(result.remoteAddress) : null;
+      if (!remoteAddress || !destination.addresses.includes(remoteAddress) || !isPublicIpAddress(remoteAddress)) {
+        throw new HttpWebhookBlockedError(
+          `${label} connected to unvalidated address ${remoteAddress ?? "unknown"}`,
+        );
+      }
+      return result.response;
+    } catch (error) {
+      lastError = error as Error;
+      if (error instanceof HttpWebhookBlockedError) throw error;
+    }
+  }
+
+  throw new HttpWebhookBlockedError(
+    `${label} connection failed for all validated addresses: ${lastError?.message ?? "unknown error"}`,
+  );
+}
+
+function dispatchValidatedHttpRequest(
+  destination: HttpWebhookDestination,
+  address: string,
+  options: ValidatedHttpRequestOptions,
+): Promise<ValidatedHttpDispatchResult> {
+  return new Promise((resolve, reject) => {
+    const transport = destination.url.protocol === "https:" ? https : http;
+    const headers = {
+      ...(options.headers ?? {}),
+      Host: buildHostHeader(destination.url, destination.hostname),
+    };
+    let settled = false;
+    let remoteAddress: string | null = null;
+
+    const request = transport.request({
+      protocol: destination.url.protocol,
+      hostname: address,
+      port: destination.url.port || undefined,
+      path: `${destination.url.pathname}${destination.url.search}`,
+      method: options.method,
+      headers,
+      servername: destination.hostname,
+      signal: options.signal,
+      lookup: (_hostname, _lookupOptions, callback) => {
+        callback(null, address, net.isIP(address) === 6 ? 6 : 4);
+      },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        if (settled) return;
+        settled = true;
+        const responseHeaders = new Headers();
+        for (const [key, value] of Object.entries(res.headers)) {
+          if (Array.isArray(value)) {
+            for (const part of value) responseHeaders.append(key, part);
+          } else if (typeof value === "string") {
+            responseHeaders.set(key, value);
+          }
+        }
+        resolve({
+          response: new Response(Buffer.concat(chunks), {
+            status: res.statusCode ?? 0,
+            statusText: res.statusMessage ?? "",
+            headers: responseHeaders,
+          }),
+          remoteAddress,
+        });
+      });
+    });
+
+    request.on("socket", (socket) => {
+      const recordRemoteAddress = () => {
+        remoteAddress = normalizeIpAddress(socket.remoteAddress ?? "");
+        if (!destination.addresses.includes(remoteAddress) || !isPublicIpAddress(remoteAddress)) {
+          request.destroy(new HttpWebhookBlockedError(
+            `http-webhook connected to unvalidated address ${remoteAddress || "unknown"}`,
+          ));
+        }
+      };
+      socket.once("connect", recordRemoteAddress);
+      socket.once("secureConnect", recordRemoteAddress);
+    });
+
+    request.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+
+    request.end(options.body);
+  });
+}
+
+function buildHostHeader(url: URL, hostname: string): string {
+  const defaultPort = url.protocol === "https:" ? "443" : "80";
+  return url.port && url.port !== defaultPort ? `${hostname}:${url.port}` : hostname;
 }
 
 function normalizeHostname(value: string): string | null {
@@ -101,13 +233,16 @@ function normalizeHostname(value: string): string | null {
   }
 }
 
-function isPublicIpAddress(address: string): boolean {
+function normalizeIpAddress(address: string): string {
   const ipv4Mapped = address.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
-  if (ipv4Mapped) return isPublicIpv4Address(ipv4Mapped[1]);
+  return ipv4Mapped ? ipv4Mapped[1] : address;
+}
 
-  const family = net.isIP(address);
-  if (family === 4) return isPublicIpv4Address(address);
-  if (family === 6) return isPublicIpv6Address(address);
+function isPublicIpAddress(address: string): boolean {
+  const normalized = normalizeIpAddress(address);
+  const family = net.isIP(normalized);
+  if (family === 4) return isPublicIpv4Address(normalized);
+  if (family === 6) return isPublicIpv6Address(normalized);
   return false;
 }
 
@@ -129,7 +264,6 @@ function isPublicIpv4Address(address: string): boolean {
   if (a === 192 && b === 168) return false;
   if (a === 100 && b >= 64 && b <= 127) return false;
   if (a === 192 && b === 0) return false;
-  if (a === 192 && b === 0 && octets[2] === 2) return false;
   if (a === 198 && (b === 18 || b === 19 || b === 51)) return false;
   if (a === 203 && b === 0 && octets[2] === 113) return false;
   if (a >= 224) return false;

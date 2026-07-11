@@ -4,7 +4,7 @@
  */
 
 import { defineConnectorPlugin, type ConnectorDefinitionDraft } from "./plugin-sdk";
-import { validateHttpWebhookDestination } from "./http-webhook-safety";
+import { fetchValidatedHttpWebhookDestination, validateHttpWebhookDestination } from "./http-webhook-safety";
 
 export const BUILTIN_CONNECTOR_PLUGIN_SLUG = "hivewright-builtins";
 
@@ -229,11 +229,10 @@ const httpWebhook: ConnectorDefinitionDraft = {
         }
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (secrets.authHeader) headers["Authorization"] = secrets.authHeader;
-        const res = await fetch(url, {
+        const res = await fetchValidatedHttpWebhookDestination(destination, {
           method: "POST",
           headers,
           body: JSON.stringify(parsed),
-          redirect: "manual",
         });
         if (res.status >= 300 && res.status < 400) {
           throw new Error("Webhook redirects are not allowed");
@@ -338,12 +337,11 @@ const websiteForms: ConnectorDefinitionDraft = {
         const timeout = setTimeout(() => controller.abort(), WEBSITE_FORMS_SYNC_TIMEOUT_MS);
         let res: Response;
         try {
-          res = await fetch(destination.url.toString(), {
+          res = await fetchValidatedHttpWebhookDestination(destination, {
             method: "GET",
             headers,
-            redirect: "manual",
             signal: controller.signal,
-          });
+          }, "website-forms");
         } finally {
           clearTimeout(timeout);
         }
