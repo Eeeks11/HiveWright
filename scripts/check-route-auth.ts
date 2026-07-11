@@ -316,6 +316,7 @@ function callWithin(expression: ts.Node, context: AnalysisContext): { call: ts.C
   let result: { call: ts.CallExpression; kind: TrustedCallKind } | null = null;
   function visit(node: ts.Node): void {
     if (result) return;
+    if (node !== expression && ts.isFunctionLike(node)) return;
     if (ts.isCallExpression(node)) {
       const kind = trustedCall(node, context);
       if (kind) {
@@ -648,12 +649,137 @@ function conditionDeniesUnauthorized(expression: ts.Expression, kind: TrustedCal
   return false;
 }
 
-// Before authorization, permit identity/authorization extraction, request URL/body
-// parsing, validation/normalization, read-only lookup helpers, and response/logging
-// construction. SQL tags are separately limited to non-mutation statements. All
-// other calls are conservatively treated as potentially side effecting; unusual
-// control flow needs a handler-local `route-auth-exception: <reason>` comment.
-const PRE_GATE_SAFE_CALL_NAME = /^(?:parse|normalize|validate|clean|string|boolean|number|positive|negative|nonNegative|recordValue|safe|is|has|to|optional|require|assert|read|load|find|list|get|json|formData|text|arrayBuffer|blob|trim|filter|map|includes|test|catch|log|warn|error)/i;
+// Calls before mutation authorization fail closed. This deliberately small list
+// contains only deterministic parsing/validation helpers used by current routes
+// and side-effect-free language/request primitives. Unusual route-specific calls
+// need a handler-local `route-auth-exception: <reason>` comment.
+const PRE_GATE_SAFE_CALL_NAMES = new Set([
+  "Array.isArray",
+  "Boolean",
+  "Buffer.byteLength",
+  "NextResponse.json",
+  "Number",
+  "Number.isFinite",
+  "Number.isInteger",
+  "Object.entries",
+  "Object.fromEntries",
+  "Object.keys",
+  "Object.values",
+  "Response.json",
+  "String",
+  "jsonError",
+  "jsonOk",
+  "normalizeHiveId",
+  "parseFloat",
+  "parseInt",
+  "parsePayload",
+  "validateHiveId",
+  "request.arrayBuffer",
+  "request.blob",
+  "request.formData",
+  "request.json",
+  "request.text",
+  "booleanValue",
+  "cleanMetrics",
+  "cleanString",
+  "hasNonEmptyStringArray",
+  "hasOutcomeClassificationInput",
+  "isMultipart",
+  "isRecord",
+  "isStringArray",
+  "isUuid",
+  "nonNegativeNullableIntValue",
+  "parseCompletionEvidenceBundle",
+  "parseGoalCompletionStatus",
+  "parseJsonBody",
+  "parseLearningGateResult",
+  "parseOutcomeClassificationRecord",
+  "positiveIntValue",
+  "readMetadataOnlyJson",
+  "recordValue",
+  "requireApiUser",
+  "requireEaDestinationHiveConfirmation",
+  "requireHiveTargetMatchesPath",
+  "safeSlug",
+  "stringValue",
+  "syncError",
+  "validatePatchBody",
+  "ALLOWED_CHANNELS.has",
+  "ALLOWED_STATUSES.has",
+  "CUSTOMER_TYPES.has",
+  "DASHBOARD_VISIBILITY_POLICIES.has",
+  "TEMPLATE_MODES.has",
+  "UUID_RE.test",
+  "body.channels.filter",
+  "body.createdBy.trim",
+  "body.hiveId.trim",
+  "body.hiveModelId.trim",
+  "body.modelCatalogId.trim",
+  "body.reason.trim",
+  "body.summary.trim",
+  "formData.get",
+  "formData.getAll",
+  "req.arrayBuffer",
+  "req.blob",
+  "req.formData",
+  "req.json",
+  "req.text",
+  "url.searchParams.get",
+]);
+
+// Exact diagnostic/response calls may run on a pre-gate rejection path, but do
+// not mutate a protected hive resource. Their callees and arguments are still
+// recursively inspected, so they cannot conceal a nested mutation.
+const PRE_GATE_NON_RESOURCE_MUTATION_CALL_NAMES = new Set([
+  "console.error",
+]);
+const PRE_GATE_SAFE_LITERAL_METHOD_NAMES = new Set(["filter", "includes", "map", "trim", "toLowerCase", "toUpperCase"]);
+const PRE_GATE_SAFE_DERIVED_COLLECTION_METHOD_NAMES = new Set(["filter", "map"]);
+const PRE_GATE_SAFE_CONSTRUCTOR_NAMES = new Set(["Date", "Response", "URL"]);
+
+function callName(expression: ts.LeftHandSideExpression): string | null {
+  const target = unwrapParentheses(expression as ts.Expression);
+  if (ts.isIdentifier(target)) return target.text;
+  if (ts.isPropertyAccessExpression(target)) {
+    const receiver = callName(target.expression as ts.LeftHandSideExpression);
+    return receiver ? `${receiver}.${target.name.text}` : null;
+  }
+  return null;
+}
+
+function isSafeLiteralReceiverCall(call: ts.CallExpression): boolean {
+  const expression = unwrapParentheses(call.expression);
+  if (!ts.isPropertyAccessExpression(expression)) return false;
+  const receiver = unwrapParentheses(expression.expression);
+  if (!ts.isArrayLiteralExpression(receiver) && !ts.isStringLiteral(receiver) && !ts.isNoSubstitutionTemplateLiteral(receiver)) return false;
+  return PRE_GATE_SAFE_LITERAL_METHOD_NAMES.has(expression.name.text);
+}
+
+function isSafePromiseRejectionCall(call: ts.CallExpression, context: AnalysisContext): boolean {
+  const expression = unwrapParentheses(call.expression);
+  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== "catch") return false;
+  const receiver = unwrapParentheses(expression.expression);
+  if (!ts.isCallExpression(receiver)) return false;
+  const called = callName(receiver.expression);
+  return Boolean(called && PRE_GATE_SAFE_CALL_NAMES.has(called)) && !potentiallySideEffecting(receiver, context);
+}
+
+function isSafeDerivedCollectionCall(call: ts.CallExpression, context: AnalysisContext): boolean {
+  const expression = unwrapParentheses(call.expression);
+  if (!ts.isPropertyAccessExpression(expression) || !PRE_GATE_SAFE_DERIVED_COLLECTION_METHOD_NAMES.has(expression.name.text)) return false;
+  const receiver = unwrapParentheses(expression.expression);
+  if (!ts.isCallExpression(receiver)) return false;
+  const called = callName(receiver.expression);
+  return Boolean(called && PRE_GATE_SAFE_CALL_NAMES.has(called)) && !potentiallySideEffecting(receiver, context);
+}
+
+function isReadOnlySqlTag(node: ts.TaggedTemplateExpression): boolean {
+  const tag = unwrapParentheses(node.tag);
+  if (!ts.isIdentifier(tag) || tag.text !== "sql") return false;
+  const sqlText = node.template.getText().replace(/^`|`$/g, "").trim();
+  if (!/^(?:select|with)\b/i.test(sqlText)) return false;
+  return !/\b(?:insert\s+into|update\s+[a-z_]|delete\s+from|merge\s+into|create\s+(?:table|index)|alter\s+table|drop\s+|truncate\s+)/i.test(sqlText);
+}
 
 function isImportedAccessCall(call: ts.CallExpression, context: AnalysisContext): boolean {
   const expression = unwrapParentheses(call.expression);
@@ -672,20 +798,21 @@ function isImportedAccessCall(call: ts.CallExpression, context: AnalysisContext)
 function potentiallySideEffecting(node: ts.Node, context: AnalysisContext): boolean {
   let found = false;
   function visit(child: ts.Node): void {
-    if (found || (child !== node && ts.isFunctionLike(child))) return;
+    if (found) return;
     if (ts.isTaggedTemplateExpression(child)) {
-      const sqlText = child.template.getText().replace(/^`|`$/g, "").trim();
-      if (/\b(?:insert\s+into|update\s+[a-z_]|delete\s+from|merge\s+into|create\s+(?:table|index)|alter\s+table|drop\s+|truncate\s+)/i.test(sqlText)) found = true;
+      if (!isReadOnlySqlTag(child)) found = true;
     } else if (ts.isCallExpression(child)) {
-      if (trustedCall(child, context)) return;
-      if (isImportedAccessCall(child, context)) return;
-      const called = ts.isIdentifier(child.expression)
-        ? child.expression.text
-        : ts.isPropertyAccessExpression(child.expression) ? child.expression.name.text : "";
-      if (!PRE_GATE_SAFE_CALL_NAME.test(called)) found = true;
-    } else if (ts.isNewExpression(child) && !ts.isIdentifier(child.expression)) {
+      const isTrusted = Boolean(trustedCall(child, context)) || isImportedAccessCall(child, context);
+      const called = callName(child.expression);
+      const isSafe = Boolean(called && (PRE_GATE_SAFE_CALL_NAMES.has(called) || PRE_GATE_NON_RESOURCE_MUTATION_CALL_NAMES.has(called))) ||
+        isSafeLiteralReceiverCall(child) || isSafePromiseRejectionCall(child, context) || isSafeDerivedCollectionCall(child, context);
+      if (!isTrusted && !isSafe) {
+        found = true;
+      }
+    } else if (ts.isNewExpression(child) && (!ts.isIdentifier(child.expression) || !PRE_GATE_SAFE_CONSTRUCTOR_NAMES.has(child.expression.text))) {
       found = true;
-    } else if (ts.isBinaryExpression(child) && isAssignmentOperator(child.operatorToken.kind) && ts.isPropertyAccessExpression(child.left)) {
+    } else if (ts.isBinaryExpression(child) && isAssignmentOperator(child.operatorToken.kind) &&
+      (ts.isPropertyAccessExpression(child.left) || ts.isElementAccessExpression(child.left))) {
       found = true;
     }
     if (!found) ts.forEachChild(child, visit);
@@ -703,7 +830,10 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
   for (const statement of statements) {
     if (state.terminated) break;
     if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) {
-      if (statement.expression && callWithin(statement.expression, context)) state.sawGate = true;
+      if (statement.expression) {
+        if (callWithin(statement.expression, context)) state.sawGate = true;
+        if (!state.authorized && potentiallySideEffecting(statement.expression, context)) state.violation = true;
+      }
       state.terminated = true;
       continue;
     }
@@ -720,6 +850,7 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
       continue;
     }
     if (ts.isIfStatement(statement)) {
+      if (!state.authorized && potentiallySideEffecting(statement.expression, context)) state.violation = true;
       if (isSystemOwnerDenial(statement)) {
         state.sawGate = true;
         state.authorized = true;
@@ -772,9 +903,9 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
     const gate = ts.isExpressionStatement(statement) ? callWithin(statement.expression, context) : null;
     if (gate) {
       state.sawGate = true;
-      if (gate.kind === "throwing") state.authorized = true;
     }
     if (!state.authorized && potentiallySideEffecting(statement, context)) state.violation = true;
+    if (gate?.kind === "throwing") state.authorized = true;
   }
   return state;
 }
@@ -830,7 +961,7 @@ export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]
               ...initialFlow(),
               terminated: true,
               sawGate: Boolean(gate),
-              violation: potentiallySideEffecting(handler.body, context) && !gate,
+              violation: potentiallySideEffecting(handler.body, context),
             };
           })();
       if (
@@ -1001,6 +1132,71 @@ async function runSelfTest(): Promise<void> {
     );
     await writeRoute(
       rootDir,
+      "side-effect-in-gate-argument",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { if (!await canMutateHive(sql, user.id, await mutateDatabase())) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "side-effect-in-gate-computed-chain",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function PUT() { if (!await canMutateHive(sql, user[mutateDatabase()]?.profile?.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "side-effect-in-gate-callback",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function PATCH() { if (!await canMutateHive(sql, values.map(() => mutateDatabase()), hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "destructive-safe-prefix",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function DELETE() { await getAndDeleteEveryHive(); if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "disguised-safe-prefix-member",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { await store.readThenDestroy?.(); if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "disguised-exact-safe-member",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { await destructiveStore.get(); if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "disguised-computed-safe-member",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { await destructiveStore["get"]?.(); if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "unknown-constructor-before-gate",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { new DestructiveWriter(); if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "nested-return-sequence",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { return (mutateDatabase(), await canMutateHive(sql, user.id, hiveId), canAccessHive); }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "nested-return-conditional",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function PUT(flag: boolean) { return (flag ? mutateDatabase() : canMutateHive(sql, user.id, hiveId)) && canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "nested-throw-optional-chain",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function PATCH() { throw errors[mutateDatabase()]?.wrap?.(await canMutateHive(sql, user.id, hiveId), canAccessHive); }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-safe-parser-validation-helpers",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST(request: Request) { const url = new URL(request.url); const body = await request.json(); const parsed = parsePayload(body); const clean = normalizeHiveId(validateHiveId(parsed.hiveId)); if (!await canMutateHive(sql, String(user.id), clean)) return Response.json({ error: "denied" }, { status: 403 }); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-read-only-sql-before-gate",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport async function POST() { const rows = await sql`SELECT id FROM hives WHERE id = ${hiveId}`; if (!await canMutateHive(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive && rows; }\n',
+    );
+    await writeRoute(
+      rootDir,
       "valid-aliased-mutation-helper",
       'import { canAccessHive, canMutateHive as mayWrite } from "@/auth/users";\nexport async function POST(user: { id: string }) { if (!await mayWrite(sql, user.id, hiveId)) return jsonError("denied", 403); return canAccessHive; }\n',
     );
@@ -1137,6 +1333,17 @@ async function runSelfTest(): Promise<void> {
       "src/app/api/shadowed-mutation-helper/route.ts",
       "src/app/api/reassigned-mutation-helper/route.ts",
       "src/app/api/conditional-gate-bypass/route.ts",
+      "src/app/api/side-effect-in-gate-argument/route.ts",
+      "src/app/api/side-effect-in-gate-computed-chain/route.ts",
+      "src/app/api/side-effect-in-gate-callback/route.ts",
+      "src/app/api/destructive-safe-prefix/route.ts",
+      "src/app/api/disguised-safe-prefix-member/route.ts",
+      "src/app/api/disguised-exact-safe-member/route.ts",
+      "src/app/api/disguised-computed-safe-member/route.ts",
+      "src/app/api/unknown-constructor-before-gate/route.ts",
+      "src/app/api/nested-return-sequence/route.ts",
+      "src/app/api/nested-return-conditional/route.ts",
+      "src/app/api/nested-throw-optional-chain/route.ts",
       "src/app/api/multi-handler-scope/route.ts",
       "src/app/api/exported-const-access-only/route.ts",
       "src/app/api/exception-literal-does-not-bypass/route.ts",
@@ -1172,6 +1379,8 @@ async function runSelfTest(): Promise<void> {
       files.has("src/app/api/valid-member-mutation-helper/route.ts") ||
       files.has("src/app/api/valid-nested-authorization/route.ts") ||
       files.has("src/app/api/valid-early-return-before-authorization/route.ts") ||
+      files.has("src/app/api/valid-safe-parser-validation-helpers/route.ts") ||
+      files.has("src/app/api/valid-read-only-sql-before-gate/route.ts") ||
       files.has("src/app/api/valid-export-alias/route.ts")
     ) {
       throw new Error(`self-test produced a false positive for a valid route: ${Array.from(files).filter((file) => file.includes("/valid-") && file !== "src/app/api/valid-handler-route-auth-exception/route.ts").join(", ")}`);
