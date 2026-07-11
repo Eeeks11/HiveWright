@@ -1,6 +1,6 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import {
-  advancePipelineRunFromTask,
+  advancePipelineRunFromTaskInTransaction,
   failPipelineRunFromTask,
   getPipelineTaskExecutionRules,
   markPipelineTaskRunning,
@@ -12,7 +12,7 @@ import {
 } from "@/software-pipeline/deployment-sensitive-proof";
 import type { ClaimedTask } from "./types";
 import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
-import { validateRoutingPublicationCompletion } from "@/tasks/output-disposition";
+import { validateRoutingPublicationCompletion, type AnalystOutputDisposition } from "@/tasks/output-disposition";
 
 export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
   await pauseOverBudgetGoalsForClaim(sql);
@@ -214,19 +214,38 @@ export async function completeTask(
   // output persistence.
   const warning = options.runtimeWarnings?.filter(Boolean).join("\n") || null;
   const terminalDisposition = routeDisposition.disposition;
-  const updated = await sql<{ id: string }[]>`
+  await sql.begin(async (tx) => {
+    const updated = await markTaskCompletedInTransaction(tx, {
+      taskId,
+      resultSummary,
+      warning,
+      terminalDisposition,
+    });
+
+    if (updated.length === 0) return;
+
+    await advancePipelineRunFromTaskInTransaction(tx, { taskId, resultSummary });
+  });
+}
+
+async function markTaskCompletedInTransaction(
+  tx: TransactionSql,
+  input: {
+    taskId: string;
+    resultSummary: string;
+    warning: string | null;
+    terminalDisposition: AnalystOutputDisposition | null;
+  },
+) {
+  return tx<{ id: string }[]>`
     UPDATE tasks
-    SET status = 'completed', result_summary = ${resultSummary},
-        completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning},
-        terminal_disposition = COALESCE(terminal_disposition, ${terminalDisposition ? sql.json(terminalDisposition) : null})
-    WHERE id = ${taskId}
+    SET status = 'completed', result_summary = ${input.resultSummary},
+        completed_at = NOW(), updated_at = NOW(), failure_reason = ${input.warning},
+        terminal_disposition = COALESCE(terminal_disposition, ${input.terminalDisposition ? tx.json(input.terminalDisposition) : null})
+    WHERE id = ${input.taskId}
       AND status <> 'completed'
     RETURNING id
   `;
-
-  if (updated.length === 0) return;
-
-  await advancePipelineRunFromTask(sql, { taskId, resultSummary });
 }
 
 async function evaluateTaskDeploymentProof(

@@ -608,7 +608,13 @@ export async function advancePipelineRunFromTask(
   sql: Sql,
   input: AdvancePipelineRunInput,
 ): Promise<AdvancePipelineRunResult> {
-  return sql.begin(async (tx) => {
+  return sql.begin((tx) => advancePipelineRunFromTaskInTransaction(tx, input));
+}
+
+export async function advancePipelineRunFromTaskInTransaction(
+  tx: TransactionSql,
+  input: AdvancePipelineRunInput,
+): Promise<AdvancePipelineRunResult> {
     const [stepRun] = await tx<PipelineStepRunRow[]>`
       SELECT id, run_id, step_id
       FROM pipeline_step_runs
@@ -736,5 +742,4 @@ export async function advancePipelineRunFromTask(
       stepRunId: nextStepRun.id,
       taskId: nextTask.id,
     };
-  });
 }

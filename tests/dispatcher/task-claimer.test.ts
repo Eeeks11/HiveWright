@@ -687,4 +687,80 @@ verification: checked.`);
 verification: checked.` });
     expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
   });
+
+  it("rolls back task completion when next step-run insertion fails and retries exactly once", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    const injectedDuplicateStepRun = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_step_runs (run_id, step_id, status)
+      VALUES (${started.runId}, ${pipeline.secondStepId}, 'pending')
+      RETURNING id
+    `;
+    expect(injectedDuplicateStepRun).toHaveLength(1);
+
+    const firstResult = `summary: Completion should roll back.
+verification: duplicate step-run blocks advancement.`;
+    await expect(completeTask(sql, started.taskId, firstResult)).rejects.toThrow();
+
+    const [rolledBackTask] = await sql<{ status: string; result_summary: string | null; completed_at: Date | null }[]>`
+      SELECT status, result_summary, completed_at
+      FROM tasks
+      WHERE id = ${started.taskId}
+    `;
+    const [rolledBackStepRun] = await sql<{ status: string; result_summary: string | null; completed_at: Date | null }[]>`
+      SELECT status, result_summary, completed_at
+      FROM pipeline_step_runs
+      WHERE task_id = ${started.taskId}
+    `;
+    const [rolledBackRun] = await sql<{ status: string; current_step_id: string | null }[]>`
+      SELECT status, current_step_id
+      FROM pipeline_runs
+      WHERE id = ${started.runId}
+    `;
+    const duplicateNextTasks = await sql<{ id: string }[]>`
+      SELECT id
+      FROM tasks
+      WHERE parent_task_id = ${started.taskId}
+    `;
+
+    expect(rolledBackTask).toEqual({ status: "pending", result_summary: null, completed_at: null });
+    expect(rolledBackStepRun).toEqual({ status: "pending", result_summary: null, completed_at: null });
+    expect(rolledBackRun).toEqual({ status: "active", current_step_id: pipeline.firstStepId });
+    expect(duplicateNextTasks).toHaveLength(0);
+
+    await sql`
+      DELETE FROM pipeline_step_runs
+      WHERE id = ${injectedDuplicateStepRun[0].id}
+    `;
+
+    const retryResult = `summary: Completion retried safely.
+verification: duplicate injection removed.`;
+    await completeTask(sql, started.taskId, retryResult);
+    await completeTask(sql, started.taskId, `summary: Duplicate retry should be ignored.
+verification: checked.`);
+
+    const stepRuns = await sql<{ step_id: string; task_id: string | null; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const nextTasks = await sql<{ id: string; status: string }[]>`
+      SELECT id, status
+      FROM tasks
+      WHERE parent_task_id = ${started.taskId}
+      ORDER BY created_at ASC
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, task_id: started.taskId, status: "complete", result_summary: retryResult });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
+    expect(nextTasks).toHaveLength(1);
+    expect(stepRuns[1].task_id).toBe(nextTasks[0].id);
+  });
 });
