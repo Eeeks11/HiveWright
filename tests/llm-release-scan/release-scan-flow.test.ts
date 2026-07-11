@@ -240,9 +240,13 @@ describe("LLM release scan owner-gated flow", () => {
       { params: Promise.resolve({ id: decision.id }) },
     );
     expect(approval.status).toBe(200);
+    expect(await countReleasePatchTasks()).toBe(1);
 
-    const [recordedDecision] = await sql<Array<{ owner_response: string | null }>>`
-      SELECT owner_response FROM decisions WHERE id = ${decision.id}
+    const [recordedDecision] = await sql<Array<{
+      owner_response: string | null;
+      selected_option_key: string | null;
+    }>>`
+      SELECT owner_response, selected_option_key FROM decisions WHERE id = ${decision.id}
     `;
     expect(recordedDecision.owner_response).toBe("approved: Proceed with the registry patch");
 
@@ -250,6 +254,7 @@ describe("LLM release scan owner-gated flow", () => {
     expect(result).toMatchObject({
       newModelsDetected: 1,
       decisionsCreated: 0,
+      heartbeatRecorded: false,
     });
 
     const decisions = await sql<Array<{ id: string }>>`
@@ -258,8 +263,14 @@ describe("LLM release scan owner-gated flow", () => {
     expect(decisions).toHaveLength(1);
     expect(await countReleasePatchTasks()).toBe(1);
 
-    const [runDecision] = await sql<Array<{ action_taken: string; suppression_reason: string | null }>>`
-      SELECT action_taken, suppression_reason
+    const [runDecision] = await sql<
+      Array<{
+        action_taken: string;
+        suppression_reason: string | null;
+        evidence: { priorOwnerResponse?: string | null };
+      }>
+    >`
+      SELECT action_taken, suppression_reason, evidence
       FROM initiative_run_decisions
       WHERE run_id = ${result.runId}
     `;
@@ -267,6 +278,7 @@ describe("LLM release scan owner-gated flow", () => {
       action_taken: "suppress",
       suppression_reason: "cooldown_active",
     });
+    expect(runDecision.evidence.priorOwnerResponse).toBe("approved: Proceed with the registry patch");
   });
 
   it("suppresses duplicate proposals while an approved release-scan patch task is running", async () => {
@@ -297,6 +309,7 @@ describe("LLM release scan owner-gated flow", () => {
     expect(result).toMatchObject({
       newModelsDetected: 1,
       decisionsCreated: 0,
+      heartbeatRecorded: false,
     });
 
     const decisions = await sql<Array<{ id: string }>>`
