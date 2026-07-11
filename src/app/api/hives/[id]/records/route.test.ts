@@ -10,6 +10,7 @@ vi.mock("../../../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/hives/records", () => ({
@@ -18,7 +19,7 @@ vi.mock("@/hives/records", () => ({
   listRecentHiveRecords: vi.fn(),
 }));
 
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import {
   createManualHiveRecord,
   getHiveRecordOptions,
@@ -29,6 +30,7 @@ import { sql } from "../../../_lib/db";
 import { GET, POST } from "./route";
 
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockCreateManualHiveRecord = createManualHiveRecord as unknown as ReturnType<typeof vi.fn>;
 const mockGetHiveRecordOptions = getHiveRecordOptions as unknown as ReturnType<typeof vi.fn>;
 const mockListRecentHiveRecords = listRecentHiveRecords as unknown as ReturnType<typeof vi.fn>;
@@ -52,6 +54,7 @@ describe("/api/hives/[id]/records", () => {
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
     mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
     mockGetHiveRecordOptions.mockReturnValue({
       kind: "research",
       familyOptions: [{ value: "evidence", label: "Evidence" }],

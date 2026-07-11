@@ -10,6 +10,7 @@ vi.mock("../../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/hives/operating-profile", () => ({
@@ -25,13 +26,14 @@ vi.mock("@/ea/native/model-selection", () => ({
 import { GET, PATCH } from "./route";
 import { sql } from "../../_lib/db";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
 import { getEaModelConfiguration, updateEaModelConfiguration } from "@/ea/native/model-selection";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockGetOperatingProfile = getOperatingProfile as unknown as ReturnType<typeof vi.fn>;
 const mockUpsertOperatingProfile = upsertOperatingProfile as unknown as ReturnType<typeof vi.fn>;
 const mockGetEaModelConfiguration = getEaModelConfiguration as unknown as ReturnType<typeof vi.fn>;
@@ -156,19 +158,19 @@ describe("PATCH /api/hives/[id]", () => {
     expect(mockCanAccessHive).not.toHaveBeenCalled();
   });
 
-  it("rejects users without system-owner or hive access before updates", async () => {
+  it("rejects viewers without hive mutation access before updates and leaves state unchanged", async () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
     mockSql.mockResolvedValueOnce([{ id: "hive-1" }]);
-    mockCanAccessHive.mockResolvedValueOnce(false);
+    mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await PATCH(patchRequest({ name: "Renamed" }), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toBe("Forbidden: hive access required");
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(body.error).toBe("Forbidden: hive mutation access required");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
     expect(mockSql).toHaveBeenCalledTimes(1);
   });
 
@@ -195,14 +197,14 @@ describe("PATCH /api/hives/[id]", () => {
         ai_budget_window: "all_time",
         created_at: "2026-04-27T00:00:00.000Z",
       }]);
-    mockCanAccessHive.mockResolvedValueOnce(true);
+    mockCanMutateHive.mockResolvedValueOnce(true);
 
     const res = await PATCH(patchRequest({ name: "Renamed" }), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toMatchObject({ id: "hive-1", name: "Renamed" });
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
     expect(mockSql).toHaveBeenCalledTimes(3);
   });
 

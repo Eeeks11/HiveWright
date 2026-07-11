@@ -9,7 +9,7 @@ vi.mock("../../../../_lib/auth", () => ({
 }));
 
 vi.mock("@/auth/users", () => ({
-  canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/hives/records", () => ({
@@ -17,13 +17,13 @@ vi.mock("@/hives/records", () => ({
   MAX_EMAIL_IMPORT_MESSAGES: 100,
 }));
 
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { importHiveRecordsFromEmail } from "@/hives/records";
 import { requireApiUser } from "../../../../_lib/auth";
 import { sql } from "../../../../_lib/db";
 import { POST } from "./route";
 
-const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockImportHiveRecordsFromEmail = importHiveRecordsFromEmail as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
@@ -44,7 +44,7 @@ describe("/api/hives/[id]/records/import-email", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
     mockImportHiveRecordsFromEmail.mockResolvedValue({
       imported: 1,
       rejected: 0,
@@ -62,7 +62,7 @@ describe("/api/hives/[id]/records/import-email", () => {
 
     expect(res.status).toBe(401);
     expect(mockSql).not.toHaveBeenCalled();
-    expect(mockCanAccessHive).not.toHaveBeenCalled();
+    expect(mockCanMutateHive).not.toHaveBeenCalled();
     expect(mockImportHiveRecordsFromEmail).not.toHaveBeenCalled();
   });
 
@@ -95,7 +95,7 @@ describe("/api/hives/[id]/records/import-email", () => {
       errors: [],
       records: [{ id: "record-1", hiveId: "hive-1", type: "email_thread", title: "Imported email" }],
     });
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
     expect(mockImportHiveRecordsFromEmail).toHaveBeenCalledWith(mockSql, expect.objectContaining({
       hiveId: "hive-1",
       hiveKind: "personal_assistant",
@@ -112,13 +112,13 @@ describe("/api/hives/[id]/records/import-email", () => {
 
   it("returns 403 without importing when the user cannot access the hive", async () => {
     mockSql.mockResolvedValueOnce([{ id: "hive-1", kind: "business" }]);
-    mockCanAccessHive.mockResolvedValueOnce(false);
+    mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await POST(emailRequest({ messages: [{ externalId: "thread-1", subject: "Imported" }] }), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
-    expect(body.error).toMatch(/hive access required/i);
+    expect(body.error).toMatch(/hive mutation access required/i);
     expect(mockImportHiveRecordsFromEmail).not.toHaveBeenCalled();
   });
 

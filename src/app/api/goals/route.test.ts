@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => {
     sql,
     requireApiUser: vi.fn(),
     canAccessHive: vi.fn(),
+    canMutateHive: vi.fn(),
   };
 });
 
@@ -19,9 +20,10 @@ vi.mock("../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
 }));
 
-import { GET } from "./route";
+import { GET, POST } from "./route";
 
 describe("GET /api/goals access control", () => {
   beforeEach(() => {
@@ -136,5 +138,35 @@ describe("GET /api/goals access control", () => {
     expect(res.status).toBe(200);
     expect(mocks.canAccessHive).not.toHaveBeenCalled();
     expect(mocks.sql.unsafe.mock.calls[0][1]).toEqual(["11111111-1111-4111-8111-111111111111"]);
+  });
+});
+
+describe("POST /api/goals mutation access", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "viewer-1", email: "viewer@example.com", isSystemOwner: false },
+    });
+  });
+
+  it("rejects a read-only viewer before creation side effects", async () => {
+    mocks.canMutateHive.mockResolvedValueOnce(false);
+    const res = await POST(new Request("http://localhost/api/goals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        hiveId: "11111111-1111-4111-8111-111111111111",
+        title: "Viewer must not create",
+      }),
+    }));
+
+    expect(res.status).toBe(403);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(
+      mocks.sql,
+      "viewer-1",
+      "11111111-1111-4111-8111-111111111111",
+    );
+    expect(mocks.sql).not.toHaveBeenCalled();
+    expect(mocks.sql.unsafe).not.toHaveBeenCalled();
   });
 });

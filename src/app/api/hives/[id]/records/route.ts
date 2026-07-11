@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import {
   createManualHiveRecord,
   getHiveRecordOptions,
@@ -31,7 +31,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const access = await resolveHiveAccess(params);
+  const access = await resolveHiveAccess(params, "mutate");
   if ("response" in access) return access.response;
 
   let body: Record<string, unknown>;
@@ -72,7 +72,7 @@ type HiveAccess =
   | { response: NextResponse }
   | { user: AuthenticatedApiUser; hive: { id: string; kind: HiveKind } };
 
-async function resolveHiveAccess(paramsPromise: Promise<{ id: string }>): Promise<HiveAccess> {
+async function resolveHiveAccess(paramsPromise: Promise<{ id: string }>, mode: "access" | "mutate" = "access"): Promise<HiveAccess> {
   const authz = await requireApiUser();
   if ("response" in authz) return { response: authz.response };
 
@@ -85,9 +85,11 @@ async function resolveHiveAccess(paramsPromise: Promise<{ id: string }>): Promis
   if (!hive) return { response: jsonError("hive not found", 404) };
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, id);
-    if (!hasAccess) {
-      return { response: jsonError("Forbidden: hive access required", 403) };
+    const allowed = mode === "mutate"
+      ? await canMutateHive(sql, authz.user.id, id)
+      : await canAccessHive(sql, authz.user.id, id);
+    if (!allowed) {
+      return { response: jsonError(mode === "mutate" ? "Forbidden: hive mutation access required" : "Forbidden: hive access required", 403) };
     }
   }
 

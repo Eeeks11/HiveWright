@@ -15,6 +15,7 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // hive-mutation-not-required: POST is a read-only export alias and does not mutate hive state.
   return handleExport(params);
 }
 

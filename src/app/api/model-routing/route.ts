@@ -1,4 +1,4 @@
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import {
   normalizeModelRoutingPolicy,
   saveModelRoutingPolicy,
@@ -17,6 +17,12 @@ async function requireHiveAccess(
   if (user.isSystemOwner) return null;
   const hasAccess = await canAccessHive(sql, user.id, hiveId);
   return hasAccess ? null : jsonError("Forbidden: hive access required", 403);
+}
+
+async function requireHiveMutationAccess(user: { id: string; isSystemOwner: boolean }, hiveId: string) {
+  if (user.isSystemOwner) return null;
+  const canMutate = await canMutateHive(sql, user.id, hiveId);
+  return canMutate ? null : jsonError("Forbidden: hive mutation access required", 403);
 }
 
 export async function GET(request: Request) {
@@ -81,7 +87,7 @@ export async function PATCH(request: Request) {
   const hiveId = typeof body.hiveId === "string" ? body.hiveId : "";
   if (!hiveId) return jsonError("hiveId is required", 400);
 
-  const denied = await requireHiveAccess(authz.user, hiveId);
+  const denied = await requireHiveMutationAccess(authz.user, hiveId);
   if (denied) return denied;
 
   const policy = normalizeModelRoutingPolicy(body.policy);

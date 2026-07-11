@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { normalizeAiBudgetSettings } from "@/budget/ai-budget";
 import { normalizeHiveKind, normalizeHiveOperatingMode } from "@/hives/kind";
 import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
@@ -133,9 +133,9 @@ export async function PATCH(
   if (!existing) return jsonError("hive not found", 404);
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, id);
-    if (!hasAccess) {
-      return jsonError("Forbidden: hive access required", 403);
+    const canMutate = await canMutateHive(sql, authz.user.id, id);
+    if (!canMutate) {
+      return jsonError("Forbidden: hive mutation access required", 403);
     }
   }
 

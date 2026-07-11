@@ -9,6 +9,10 @@ type Finding = {
 
 const HIVE_ID_QUERY_READ = /\bsearchParams\s*\.\s*get\s*\(\s*(['"`])hiveId\1\s*\)/;
 const STRICT_HIVE_TARGET_HELPER = "requireStrictHiveTarget";
+const ROUTE_HANDLER = /export\s+(?:async\s+)?function\s+(GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)\b/g;
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const ACCESS_ONLY_HIVE_GATE = /\bcanAccessHive\b|\brequireStrictHiveTarget\s*\(|\brequireHiveAccess\s*\(|\bauthorizeHive(?:Request)?\s*\(/;
+const EXPLICIT_MUTATION_GATE = /\bcanMutateHive\b|mode\s*:\s*["']mutate["']|["']mutate["']|\brequireSystemOwner\b|if\s*\(\s*![^)]*\.isSystemOwner\s*\)\s*return\b|\bensureCanMutateHive\b|\brequireHiveMutationAccess\b/;
 const MANUAL_HIVE_TARGET_ALLOWLIST = new Map<string, string>([
   ["src/app/api/action-policies/route.ts", "existing manual access check; migrate in route-hardening slices"],
   ["src/app/api/active-supervisors/route.ts", "existing manual access check; migrate in route-hardening slices"],
@@ -34,6 +38,7 @@ const MANUAL_HIVE_TARGET_ALLOWLIST = new Map<string, string>([
 ]);
 const FORBIDDEN_HIVE_TARGET_FALLBACK = /\b(activeHiveId|activeHive|getActiveHive|membershipHiveId|globalHiveId|defaultHiveId)\b/;
 const ESCAPE_HATCH = /\/\/\s*hive-access-not-required\s*:(.*)$/gm;
+const MUTATION_ESCAPE_HATCH = /\/\/\s*hive-mutation-not-required\s*:(.*)$/gm;
 
 async function findRouteFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
@@ -56,11 +61,20 @@ async function findRouteFiles(dir: string): Promise<string[]> {
   return files.flat();
 }
 
-function escapeHatchState(source: string): { hasValid: boolean; hasInvalid: boolean } {
+function routeHandlerSections(source: string): Array<{ method: string; source: string }> {
+  const matches = Array.from(source.matchAll(ROUTE_HANDLER));
+  ROUTE_HANDLER.lastIndex = 0;
+  return matches.map((match, index) => ({
+    method: match[1],
+    source: source.slice(match.index, matches[index + 1]?.index ?? source.length),
+  }));
+}
+
+function escapeHatchState(source: string, pattern = ESCAPE_HATCH): { hasValid: boolean; hasInvalid: boolean } {
   let hasValid = false;
   let hasInvalid = false;
 
-  for (const match of source.matchAll(ESCAPE_HATCH)) {
+  for (const match of source.matchAll(pattern)) {
     const reason = match[1]?.trim() ?? "";
     if (reason.length > 0) {
       hasValid = true;
@@ -81,6 +95,7 @@ export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]
     const source = await readFile(file, "utf8");
     const relativeFile = path.relative(rootDir, file);
     const escapeHatch = escapeHatchState(source);
+    const mutationEscapeHatch = escapeHatchState(source, MUTATION_ESCAPE_HATCH);
 
     if (escapeHatch.hasInvalid) {
       findings.push({
@@ -95,6 +110,30 @@ export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]
         message:
           "route references an active/membership/global hive fallback; use requireStrictHiveTarget or document why this route is not hive-scoped.",
       });
+    }
+
+    if (MUTATION_ESCAPE_HATCH.test(source) && !mutationEscapeHatch.hasValid) {
+      findings.push({
+        file: relativeFile,
+        message: "hive-mutation-not-required escape hatch must include a non-empty reason after the colon.",
+      });
+    }
+    MUTATION_ESCAPE_HATCH.lastIndex = 0;
+
+    for (const handler of routeHandlerSections(source)) {
+      const handlerMutationEscape = escapeHatchState(handler.source, MUTATION_ESCAPE_HATCH);
+      if (
+        MUTATION_METHODS.has(handler.method) &&
+        ACCESS_ONLY_HIVE_GATE.test(handler.source) &&
+        !EXPLICIT_MUTATION_GATE.test(handler.source) &&
+        !handlerMutationEscape.hasValid
+      ) {
+        findings.push({
+          file: relativeFile,
+          message:
+            `${handler.method} handler uses a hive access-only gate; require explicit mutation permission via canMutateHive, requireStrictHiveTarget mode=mutate, or a stricter system-owner gate.`,
+        });
+      }
     }
 
     if (!HIVE_ID_QUERY_READ.test(source)) {
@@ -141,6 +180,36 @@ async function runSelfTest(): Promise<void> {
     );
     await writeRoute(
       rootDir,
+      "read-only-access",
+      'import { canAccessHive } from "@/auth/users";\nexport function GET() { return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "access-only-mutation",
+      'import { canAccessHive } from "@/auth/users";\nexport function PATCH() { return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "owner-bypass-access-mutation",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST(user: { isSystemOwner: boolean }) { if (!user.isSystemOwner) { return canAccessHive; } }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "owner-only-mutation",
+      'import { canAccessHive } from "@/auth/users";\nexport function DELETE(user: { isSystemOwner: boolean }) { if (!user.isSystemOwner) return new Response(null, { status: 403 }); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-mutation",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport function GET() { return canAccessHive; }\nexport function PATCH() { return canMutateHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "read-only-post",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST() { // hive-mutation-not-required: POST returns a read-only export\nreturn canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
       "legacy-manual-access",
       'import { canAccessHive } from "@/auth/users";\nexport function GET(request: Request) { return new URL(request.url).searchParams.get("hiveId") && canAccessHive; }\n',
     );
@@ -167,6 +236,8 @@ async function runSelfTest(): Promise<void> {
       "src/app/api/legacy-manual-access/route.ts",
       "src/app/api/fallback-active-hive/route.ts",
       "src/app/api/empty-escape/route.ts",
+      "src/app/api/access-only-mutation/route.ts",
+      "src/app/api/owner-bypass-access-mutation/route.ts",
     ];
 
     for (const file of expected) {
@@ -175,7 +246,14 @@ async function runSelfTest(): Promise<void> {
       }
     }
 
-    if (files.has("src/app/api/valid-access/route.ts") || files.has("src/app/api/valid-escape/route.ts")) {
+    if (
+      files.has("src/app/api/valid-access/route.ts") ||
+      files.has("src/app/api/valid-escape/route.ts") ||
+      files.has("src/app/api/read-only-access/route.ts") ||
+      files.has("src/app/api/read-only-post/route.ts") ||
+      files.has("src/app/api/owner-only-mutation/route.ts") ||
+      files.has("src/app/api/valid-mutation/route.ts")
+    ) {
       throw new Error("self-test produced a false positive for a valid route");
     }
 

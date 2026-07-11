@@ -1,7 +1,7 @@
 import { sql } from "@/app/api/_lib/db";
 import { requireApiUser, type AuthenticatedApiUser } from "@/app/api/_lib/auth";
 import { jsonError, jsonOk } from "@/app/api/_lib/responses";
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import {
   DashboardEaTurnInProgressError,
   DashboardEaStreamError,
@@ -21,16 +21,19 @@ const UUID_RE =
 async function authorizeHive(
   user: Pick<AuthenticatedApiUser, "id" | "isSystemOwner">,
   hiveId: string,
+  mode: "access" | "mutate" = "access",
 ): Promise<{ ok: true } | { ok: false; response: Response }> {
   if (!UUID_RE.test(hiveId)) {
     return { ok: false, response: jsonError("hiveId is invalid", 400) };
   }
   if (user.isSystemOwner) return { ok: true };
-  const hasAccess = await canAccessHive(sql, user.id, hiveId);
-  if (!hasAccess) {
+  const allowed = mode === "mutate"
+    ? await canMutateHive(sql, user.id, hiveId)
+    : await canAccessHive(sql, user.id, hiveId);
+  if (!allowed) {
     return {
       ok: false,
-      response: jsonError("Forbidden: caller cannot access this hive", 403),
+      response: jsonError(mode === "mutate" ? "Forbidden: hive mutation access required" : "Forbidden: caller cannot access this hive", 403),
     };
   }
   return { ok: true };
@@ -111,7 +114,7 @@ export async function POST(request: Request): Promise<Response> {
       : jsonError("Invalid JSON body", 400);
   }
   const hiveId = typeof payload.hiveId === "string" ? payload.hiveId : "";
-  const authorization = await authorizeHive(authz.user, hiveId);
+  const authorization = await authorizeHive(authz.user, hiveId, "mutate");
   if (!authorization.ok) return authorization.response;
 
   const content = typeof payload.content === "string" ? payload.content.trim() : "";
@@ -204,7 +207,7 @@ export async function DELETE(request: Request): Promise<Response> {
 
   const url = new URL(request.url);
   const hiveId = url.searchParams.get("hiveId") ?? "";
-  const authorization = await authorizeHive(authz.user, hiveId);
+  const authorization = await authorizeHive(authz.user, hiveId, "mutate");
   if (!authorization.ok) return authorization.response;
 
   try {

@@ -9,15 +9,15 @@ vi.mock("../../_lib/auth", () => ({
 }));
 
 vi.mock("@/auth/users", () => ({
-  canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { requireApiUser } from "../../_lib/auth";
 import { sql } from "../../_lib/db";
 import { POST } from "./route";
 
-const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 
@@ -41,16 +41,16 @@ describe("POST /api/push/subscribe access control", () => {
     mockRequireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
   });
 
   it("returns 403 before upserting when the caller cannot access the hive", async () => {
-    mockCanAccessHive.mockResolvedValueOnce(false);
+    mockCanMutateHive.mockResolvedValueOnce(false);
 
     const response = await POST(subscribeRequest());
 
     expect(response.status).toBe(403);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
     expect(mockSql).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireApiUser } from "../../_lib/auth";
 import { sql } from "../../_lib/db";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
 import { signVoiceSessionToken } from "@/lib/voice-session-token";
 
 /**
@@ -39,10 +39,10 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-    if (!hasAccess) {
+    const canMutate = await canMutateHive(sql, authz.user.id, hiveId);
+    if (!canMutate) {
       return NextResponse.json(
-        { error: "Forbidden: caller cannot access this hive" },
+        { error: "Forbidden: hive mutation access required" },
         { status: 403 },
       );
     }
