@@ -23,6 +23,7 @@ import {
   claimSprintWakeUp,
   revertSprintWakeUp,
   findOrphanedWakeUps,
+  recoverStaleZeroProgressGoals,
   withGoalSupervisorWakeLock,
 } from "./goal-lifecycle";
 import {
@@ -56,6 +57,7 @@ import {
   type DispatcherModelRouteHealthDecision,
 } from "./adapter-health";
 import { decideProviderFailoverRoute } from "./provider-failover";
+import { buildRuntimeHealthGateForensics } from "./route-health-forensics";
 import { ClaudeCodeAdapter } from "../adapters/claude-code";
 import { assertSupportedRuntimeAdapter } from "../adapters/adapter-routing";
 import { adapterSupports } from "../adapters/capabilities";
@@ -92,6 +94,7 @@ import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 import { ensureRuntimeGuardDecision } from "../decisions/runtime-guard";
 import { failTaskWithRuntimeReplan } from "./runtime-replan";
 import { sendNotification } from "../notifications/sender";
+import { runStaleDecisionEscalations } from "./decision-escalation";
 import { pruneStaleGoalSupervisors } from "../openclaw/goal-supervisor-cleanup";
 import { buildGoalCreatedNotificationMessage } from "./goal-notification";
 import {
@@ -112,6 +115,7 @@ import {
   markInterruptedRunningExecutionRuns,
   recordExecutionRunOutput,
   startExecutionRun,
+  summarizeRuntimeBlockFingerprint,
   type ExecutionRunRecord,
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
@@ -146,6 +150,14 @@ function parseExitCode(failureReason: string | undefined): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function isMissingGitBackedProjectWorkspacePolicyBlock(
+  workspacePolicy: WorkspacePolicyDecision,
+): boolean {
+  return !workspacePolicy.allowed
+    && workspacePolicy.signals.includes("code_changing_task")
+    && workspacePolicy.reason.includes("no approved git-backed project_id");
+}
+
 export async function applyStructuredDoctorDiagnosis(
   sql: Sql,
   task: StructuredDoctorDiagnosisTask,
@@ -154,13 +166,29 @@ export async function applyStructuredDoctorDiagnosis(
   if (task.assignedTo !== "doctor" || !task.parentTaskId) return false;
 
   if (isQualityDoctorDiagnosisTask(task)) {
-    const { parseQualityDoctorDiagnosis, applyQualityDoctorDiagnosis } =
+    const {
+      parseQualityDoctorDiagnosisResult,
+      applyQualityDoctorDiagnosis,
+      recordQualityDoctorContaminationHandoff,
+    } =
       await import("../quality/doctor");
-    const diagnosis = parseQualityDoctorDiagnosis(output);
-    if (diagnosis) {
-      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, diagnosis);
+    const parseResult = parseQualityDoctorDiagnosisResult(output);
+    if (parseResult.ok) {
+      await applyQualityDoctorDiagnosis(sql, task.parentTaskId, parseResult.diagnosis);
       return true;
     }
+
+    console.warn(
+      `[dispatcher] Quality doctor diagnosis parse failed for task ${task.id}: ${parseResult.reason}`,
+    );
+    await recordQualityDoctorContaminationHandoff(
+      sql,
+      task.parentTaskId,
+      task.id,
+      parseResult.reason,
+      output,
+    );
+    return true;
   }
 
   const { parseDoctorDiagnosis, applyDoctorDiagnosis, escalateMalformedDiagnosis } =
@@ -260,10 +288,22 @@ export class Dispatcher {
   private async blockTaskForWorkspacePolicy(
     task: ClaimedTask,
     ctx: SessionContext,
-    workspacePolicy: Extract<WorkspacePolicyDecision, { allowed: false }>,
+    workspacePolicy: WorkspacePolicyDecision,
   ): Promise<void> {
+    if (workspacePolicy.allowed) return;
     const reason = workspacePolicy.reason;
     console.warn(`[dispatcher] ${reason} task=${task.id} signals=${workspacePolicy.signals.join(",")}`);
+    if (isMissingGitBackedProjectWorkspacePolicyBlock(workspacePolicy)) {
+      await writeTaskLog(this.sql, {
+        taskId: task.id,
+        goalId: task.goalId ?? undefined,
+        chunk: reason,
+        type: "status",
+      }).catch(() => {});
+      await blockTask(this.sql, task.id, reason);
+      return;
+    }
+
     const run = await startExecutionRun(this.sql, {
       hiveId: task.hiveId,
       taskId: task.id,
@@ -872,6 +912,7 @@ export class Dispatcher {
       }
 
       const route = decideProviderFailoverRoute({
+        roleSlug: task.assignedTo,
         primaryAdapterType,
         primaryModel: ctx.model,
         fallbackAdapterType: ctx.fallbackAdapterType,
@@ -898,6 +939,16 @@ export class Dispatcher {
 
       if (!route.canRun) {
         const reason = `runtime_blocked: Runtime health gate blocked task before spawn. ${route.diagnostic}`;
+        const routeHealthForensics = buildRuntimeHealthGateForensics({
+          roleSlug: task.assignedTo,
+          primaryAdapterType,
+          primaryModel: ctx.model,
+          fallbackAdapterType: ctx.fallbackAdapterType,
+          fallbackModel: ctx.fallbackModel,
+          primaryHealth,
+          fallbackHealth,
+          route,
+        });
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
         const run = await startExecutionRun(this.sql, {
           hiveId: task.hiveId,
@@ -905,20 +956,24 @@ export class Dispatcher {
           goalId: task.goalId,
           adapterType: route.adapterType,
           model: route.model,
+          sessionId: null,
           dispatcherPid: process.pid,
-          metadata: {
-            routeStage: "runtime_health_gate",
-            primaryAdapterType,
-            primaryHealthy: primaryHealth.healthy,
-            fallbackHealthy: fallbackHealth?.healthy ?? null,
-            routeReason: route.reason,
-          },
+          metadata: routeHealthForensics,
         });
-        await markExecutionRunBlocked(this.sql, { runId: run.id, hiveId: run.hiveId, reason });
+        await markExecutionRunBlocked(this.sql, {
+          runId: run.id,
+          hiveId: run.hiveId,
+          reason,
+          evidence: routeHealthForensics,
+        });
+        const repeatedRuntimeBlockAlert = await this.buildRepeatedRuntimeBlockAlert(
+          task.hiveId,
+          routeHealthForensics.runtimeBlockFingerprint,
+        );
         await writeTaskLog(this.sql, {
           taskId: task.id,
           goalId: task.goalId ?? undefined,
-          chunk: reason,
+          chunk: repeatedRuntimeBlockAlert ? `${reason} ${repeatedRuntimeBlockAlert}` : reason,
           type: "status",
         }).catch(() => {});
         await blockTask(this.sql, task.id, reason);
@@ -1976,6 +2031,13 @@ export class Dispatcher {
     try {
       await this.processPendingDecisionOwnerComments();
 
+      const recoveredZeroProgressGoals = await recoverStaleZeroProgressGoals(this.sql);
+      for (const recovered of recoveredZeroProgressGoals) {
+        console.warn(
+          `[dispatcher] Released stale zero-progress supervisor session for goal ${recovered.goalId}; normal lifecycle discovery will retry it.`,
+        );
+      }
+
       // 1. Check for new goals that need supervisors
       const newGoals = await findNewGoals(this.sql);
       for (const goal of newGoals) {
@@ -2142,6 +2204,28 @@ export class Dispatcher {
     }
   }
 
+
+  private async buildRepeatedRuntimeBlockAlert(
+    hiveId: string,
+    runtimeBlockFingerprint: string | undefined,
+  ): Promise<string | null> {
+    if (!runtimeBlockFingerprint) return null;
+    try {
+      const summary = await summarizeRuntimeBlockFingerprint(this.sql, {
+        hiveId,
+        fingerprint: runtimeBlockFingerprint,
+      });
+      if (summary.repeated) {
+        return `[runtime-route-alert] Repeated identical runtime block fingerprint ${summary.fingerprint} occurred ${summary.count} times in the last 24 hours; operator attention recommended.`;
+      }
+    } catch (err) {
+      console.warn(
+        `[dispatcher] repeated runtime block fingerprint check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return null;
+  }
+
   /**
    * Require fresh model-health evidence and then ask the adapter provisioner
    * whether the runtime is currently reachable. Used to pre-emptively swap to
@@ -2285,27 +2369,13 @@ export class Dispatcher {
 
   private async checkDecisionEscalation() {
     try {
-      const stale = await this.sql`
-        SELECT d.id, d.hive_id, d.title, d.context, d.priority
-        FROM decisions d
-        WHERE d.priority = 'urgent'
-          AND d.status = 'pending'
-          AND d.created_at < NOW() - INTERVAL '4 hours'
-          AND NOT EXISTS (
-            SELECT 1 FROM decision_messages dm
-            WHERE dm.decision_id = d.id
-            AND dm.created_at > NOW() - INTERVAL '4 hours'
-          )
-      `;
-      for (const d of stale) {
-        await sendNotification(this.sql, {
-          hiveId: d.hive_id as string,
-          title: `ESCALATION: ${d.title}`,
-          message: `This urgent decision has been pending for over 4 hours: ${d.context}`,
-          priority: "urgent",
-          source: "dispatcher",
-        });
-        console.log(`[dispatcher] Escalated stale decision: ${d.id}`);
+      const escalated = await runStaleDecisionEscalations(this.sql);
+      for (const result of escalated) {
+        console.log(
+          `[dispatcher] Escalated stale decision: ${result.decisionId} ` +
+          `(message=${result.messageId}, sent=${result.notification.sent}, ` +
+          `skipped=${result.notification.skipped}, errors=${result.notification.errors})`,
+        );
       }
     } catch (err) {
       console.error("[dispatcher] Decision escalation check failed:", err);

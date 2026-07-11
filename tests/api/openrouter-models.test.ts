@@ -37,8 +37,8 @@ describe("GET /api/openrouter/models", () => {
       new Response(
         JSON.stringify({
           data: [
-            { id: "google/gemini-2.0-flash-exp:free", name: "Gemini Flash Free",
-              pricing: { prompt: "0", completion: "0" } },
+            { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash",
+              pricing: { prompt: "0.0000003", completion: "0.0000025" } },
             { id: "openai/gpt-4o", name: "GPT-4o",
               pricing: { prompt: "0.0000025", completion: "0.00001" } },
           ],
@@ -51,8 +51,8 @@ describe("GET /api/openrouter/models", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.data.data).toHaveLength(2);
-    expect(body.data.data[0].id).toBe("google/gemini-2.0-flash-exp:free");
-    expect(body.data.data[0].free).toBe(true);
+    expect(body.data.data[0].id).toBe("google/gemini-2.5-flash");
+    expect(body.data.data[0].free).toBe(false);
     expect(body.data.data[1].free).toBe(false);
   });
 

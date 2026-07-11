@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 const baseLinkClass =
   "rounded-full border px-3 py-1.5 text-sm transition-colors";
@@ -15,6 +16,7 @@ function linkClass(isActive: boolean) {
 
 export function HiveSectionNav({ hiveId }: { hiveId: string }) {
   const pathname = usePathname();
+  const target = useResolvedHiveTarget(hiveId);
   const { data: qualityFeedbackCount = 0 } = useQuery({
     queryKey: ["hive-section-quality-feedback", hiveId],
     queryFn: async () => {
@@ -30,10 +32,10 @@ export function HiveSectionNav({ hiveId }: { hiveId: string }) {
     { href: `/hives/${hiveId}/ideas`, label: "Ideas" },
     { href: `/hives/${hiveId}/initiatives`, label: "Initiatives" },
     { href: `/hives/${hiveId}/files`, label: "Files" },
-    { href: `/goals?hiveId=${hiveId}`, label: "Goals" },
-    { href: `/decisions?hiveId=${hiveId}`, label: "Decisions" },
+    { href: target.withHiveTargetParams(`/goals`), label: "Goals" },
+    { href: target.withHiveTargetParams(`/decisions`), label: "Decisions" },
     ...(qualityFeedbackCount > 0
-      ? [{ href: `/quality-feedback?hiveId=${hiveId}`, label: "Quality feedback" }]
+      ? [{ href: target.withHiveTargetParams(`/quality-feedback`), label: "Quality feedback" }]
       : []),
   ];
 

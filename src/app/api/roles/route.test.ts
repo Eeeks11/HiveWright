@@ -34,6 +34,7 @@ vi.mock("../../../provisioning/status-cache", () => ({
 }));
 
 import { GET, POST } from "./route";
+import { GET as GET_GLOBAL_ROLES } from "./global/route";
 
 describe("GET /api/roles read behavior", () => {
   beforeEach(() => {
@@ -43,17 +44,36 @@ describe("GET /api/roles read behavior", () => {
     });
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.sql.mockResolvedValue([]);
+    mocks.sql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
   });
 
-  it("preserves the active-role filter while returning enriched role rows", async () => {
-    const res = await GET(new Request("http://localhost/api/roles"));
+  it("preserves the active-role filter while returning enriched role rows for an explicit hive", async () => {
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(res.status).toBe(200);
-    // calls[0] = sql`WHERE rt.active = true` fragment; calls[1] = main SELECT query
-    expect(mocks.sql).toHaveBeenCalledTimes(2);
-    const fragmentQuery = Array.from(mocks.sql.mock.calls[0][0] as TemplateStringsArray).join(" ");
+    // calls[0] = strict hive exists; calls[1] = sql`WHERE rt.active = true` fragment; calls[2] = main SELECT query
+    expect(mocks.sql).toHaveBeenCalledTimes(4);
+    const fragmentQuery = Array.from(mocks.sql.mock.calls[1][0] as TemplateStringsArray).join(" ");
     expect(fragmentQuery).toContain("rt.active");
     expect(fragmentQuery).toContain("WHERE rt.active = true");
+  });
+
+  it("rejects missing hiveId before returning roles", async () => {
+    const res = await GET(new Request("http://localhost/api/roles"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid hiveId before returning roles", async () => {
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=not-a-uuid"));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId must be a valid UUID");
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
   });
 
   it("checks hive access before applying hive-scoped role overrides for non-owner callers", async () => {
@@ -61,10 +81,10 @@ describe("GET /api/roles read behavior", () => {
       user: { id: "user-1", email: "member@example.com", isSystemOwner: false },
     });
 
-    const res = await GET(new Request("http://localhost/api/roles?hiveId=hive-1"));
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(res.status).toBe(200);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("rejects hive-scoped role reads when the caller cannot access the hive", async () => {
@@ -73,9 +93,30 @@ describe("GET /api/roles read behavior", () => {
     });
     mocks.canAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/roles?hiveId=hive-1"));
+    const res = await GET(new Request("http://localhost/api/roles?hiveId=11111111-1111-4111-8111-111111111111"));
 
     expect(res.status).toBe(403);
+  });
+});
+
+describe("GET /api/roles/global read behavior", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireApiUser.mockResolvedValue({
+      user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+    });
+    mocks.sql.mockResolvedValue([]);
+  });
+
+  it("returns global role templates without requiring a hiveId", async () => {
+    const res = await GET_GLOBAL_ROLES(new Request("http://localhost/api/roles/global"));
+
+    expect(res.status).toBe(200);
+    expect(mocks.canAccessHive).not.toHaveBeenCalled();
+    const fragmentText = Array.from(mocks.sql.mock.calls[0][0] as TemplateStringsArray).join(" ");
+    const queryText = Array.from(mocks.sql.mock.calls[1][0] as TemplateStringsArray).join(" ");
+    expect(queryText).toContain("0::int AS active_count");
+    expect(fragmentText).toContain("WHERE rt.active = true");
   });
 });
 

@@ -4,7 +4,14 @@ import { sanitizeAuditString } from "@/actions/redaction";
 import { loadCredentials } from "@/credentials/manager";
 import { createManualHiveRecord, type HiveRecord } from "@/hives/records";
 import { normalizeHiveKind, type HiveKind } from "@/hives/kind";
-import { getChatProvider, type ChatProvider, type ProviderId } from "@/llm";
+import {
+  generateStructuredJson,
+  parseStructuredJson,
+  type ChatProvider,
+  getChatProvider,
+  type ProviderId,
+  type StructuredJsonSchema,
+} from "@/llm";
 import { loadModelRoutingView } from "@/model-routing/registry";
 import { AUTO_MODEL_ROUTE, resolveConfiguredModelRoute } from "@/model-routing/selector";
 import { applyHiveRoleOverride, loadHiveRoleOverride } from "@/roles/hive-overrides";
@@ -108,6 +115,34 @@ const CATEGORY_TO_RECORD_TYPE: Record<string, string> = {
   "Obligation/Compliance": "obligation_compliance",
   "Decision/Context": "decision_context",
   "Task Suggestion": "task_suggestion",
+};
+
+const REFERENCE_REVIEW_SCHEMA: StructuredJsonSchema = {
+  type: "object",
+  required: ["proposals"],
+  properties: {
+    proposals: {
+      type: "array",
+      maxItems: REFERENCE_REVIEW_MAX_PROPOSALS,
+      items: {
+        type: "object",
+        required: ["category", "title", "summary"],
+        properties: {
+          category: { type: "string" },
+          title: { type: "string", minLength: 1 },
+          summary: { type: "string", minLength: 1 },
+          confidence: { type: "number" },
+          evidenceExcerpt: { type: "string" },
+          evidencePage: { type: "string" },
+          suggestedStatus: { type: "string" },
+        },
+      },
+    },
+  },
+};
+
+const REFERENCE_REVIEW_ARRAY_SCHEMA: StructuredJsonSchema = REFERENCE_REVIEW_SCHEMA.properties?.proposals ?? {
+  type: "array",
 };
 
 export async function createReferenceDocumentReviewJob(
@@ -324,15 +359,21 @@ export async function processReferenceDocumentReviewJob(
     } else {
       const provider = input.provider ?? runtime?.provider;
       if (!provider) throw new Error("reference review provider could not be initialized");
-      const response = await provider.chat({
-        system: referenceReviewSystemPrompt(),
-        user: referenceReviewUserPrompt(text),
-        model: input.model ?? runtime?.model ?? process.env.HIVEWRIGHT_REFERENCE_REVIEW_MODEL ?? "openai/gpt-4o-mini",
-        temperature: 0,
-        maxTokens: 4_000,
-        timeoutMs: 90_000,
+      const structured = await generateStructuredJson<{ proposals: unknown[] }>({
+        provider,
+        request: {
+          system: referenceReviewSystemPrompt(),
+          user: referenceReviewUserPrompt(text),
+          model: input.model ?? runtime?.model ?? process.env.HIVEWRIGHT_REFERENCE_REVIEW_MODEL ?? "openai/gpt-4o-mini",
+          temperature: 0,
+          maxTokens: 4_000,
+          timeoutMs: 90_000,
+        },
+        schema: REFERENCE_REVIEW_SCHEMA,
+        maxAttempts: 2,
+        validate: validateUsableReferenceReviewExtraction,
       });
-      proposals = parseReferenceReviewExtraction(response.text);
+      proposals = normalizeExtractedProposals(structured.value.proposals);
     }
     return storeExtractedReferenceDocumentProposals(sql, { ...input, proposals });
   } catch (error) {
@@ -466,16 +507,25 @@ export async function decideReferenceDocumentProposal(
 }
 
 export function parseReferenceReviewExtraction(text: string): ExtractedReferenceRecordProposal[] {
-  const jsonText = extractJsonObject(text);
-  if (!jsonText) throw new Error("AI review did not return JSON");
-  const parsed = JSON.parse(jsonText) as unknown;
-  const proposals = Array.isArray(parsed)
-    ? parsed
-    : parsed && typeof parsed === "object" && Array.isArray((parsed as { proposals?: unknown }).proposals)
-      ? (parsed as { proposals: unknown[] }).proposals
-      : null;
-  if (!proposals) throw new Error("AI review JSON must include a proposals array");
-  return normalizeExtractedProposals(proposals);
+  try {
+    const parsed = parseStructuredJson<{ proposals: unknown[] }>(text, REFERENCE_REVIEW_SCHEMA);
+    return normalizeExtractedProposals(parsed.proposals);
+  } catch (objectError) {
+    try {
+      const proposals = parseStructuredJson<unknown[]>(text, REFERENCE_REVIEW_ARRAY_SCHEMA);
+      return normalizeExtractedProposals(proposals);
+    } catch {
+      throw objectError;
+    }
+  }
+}
+
+function validateUsableReferenceReviewExtraction(value: unknown): string[] {
+  const proposals = value && typeof value === "object" && Array.isArray((value as { proposals?: unknown }).proposals)
+    ? (value as { proposals: unknown[] }).proposals
+    : [];
+  if (normalizeExtractedProposals(proposals).length > 0) return [];
+  return ["proposals must include at least one usable item with category, title, and summary"];
 }
 
 export function referenceReviewSystemPrompt(): string {
@@ -719,16 +769,6 @@ function trimLimit(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.replace(/\u0000/g, " ").trim();
   return trimmed ? trimmed.slice(0, max) : null;
-}
-
-function extractJsonObject(text: string): string | null {
-  const fenced = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
-  if (fenced.length > 0) return fenced[fenced.length - 1][1].trim();
-  const trimmed = text.trim();
-  const start = trimmed.indexOf("{");
-  const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) return trimmed.slice(start, end + 1);
-  return null;
 }
 
 async function refreshReviewJobDecisionStatus(sql: ReferenceDocumentReviewSql, hiveId: string, reviewJobId: string, userId: string): Promise<void> {

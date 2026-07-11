@@ -64,7 +64,13 @@ describe("runImprovementSweep", () => {
     expect(Number(mem.confidence)).toBe(1);
   });
 
-  it("flags a role with >=40% failure rate as a reliability concern", async () => {
+  it("flags a role with >=40% failure rate as a reliability concern without changing role models", async () => {
+    await sql`
+      UPDATE role_templates
+      SET recommended_model = 'anthropic/claude-opus-4-7',
+          fallback_model = 'anthropic/claude-sonnet-4-6'
+      WHERE slug = 'flaky-role'
+    `;
     // 7 failed + 3 completed = 70% failure rate. Seed started_at within window.
     for (let i = 0; i < 7; i++) {
       await sql`
@@ -89,6 +95,15 @@ describe("runImprovementSweep", () => {
     expect(d).toBeDefined();
     expect((d.context as string)).toMatch(/flaky-role/);
     expect((d.context as string)).toMatch(/failure rate/);
+
+    const [role] = await sql`
+      SELECT adapter_type, recommended_model, fallback_model
+      FROM role_templates
+      WHERE slug = 'flaky-role'
+    `;
+    expect(role.adapter_type).toBe("claude-code");
+    expect(role.recommended_model).toBe("anthropic/claude-opus-4-7");
+    expect(role.fallback_model).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("does not double-propose reliability concerns on a second run", async () => {
@@ -161,7 +176,7 @@ describe("runImprovementSweep", () => {
         AND title LIKE 'Model efficiency review:%'
     `;
     expect(d.status).toBe("auto_approved");
-    expect((d.context as string)).toMatch(/No peer-model suggestion/);
+    expect((d.context as string)).toMatch(/No role runtime config was changed/);
 
     const [role] = await sql`
       SELECT recommended_model, fallback_model FROM role_templates WHERE slug = 'flaky-role'
@@ -300,7 +315,7 @@ describe("runImprovementSweep", () => {
     expect(role.recommended_model).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  it("soft-reverts a demoted role when watched quality stays below floor after 5 tasks", async () => {
+  it("records an efficiency concern without demoting roles or creating new swap watches", async () => {
     await sql`
       UPDATE role_templates
       SET recommended_model = 'anthropic/claude-opus-4-7',
@@ -325,7 +340,33 @@ describe("runImprovementSweep", () => {
         VALUES (${task.id}, ${HIVE}, 'negative', 'explicit_owner_feedback', 'low quality', 1, 3)
       `;
     }
+
     await runImprovementSweep(sql);
+
+    const [role] = await sql`
+      SELECT recommended_model, fallback_model FROM role_templates WHERE slug = 'flaky-role'
+    `;
+    expect(role.recommended_model).toBe("anthropic/claude-opus-4-7");
+    expect(role.fallback_model).toBeNull();
+
+    const [watchCount] = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM role_model_swap_watches WHERE hive_id = ${HIVE}
+    `;
+    expect(watchCount.count).toBe(0);
+  });
+
+  it("marks legacy watched swaps failed without mutating role runtime config", async () => {
+    await sql`
+      UPDATE role_templates
+      SET recommended_model = 'anthropic/claude-sonnet-4-6',
+          fallback_model = 'anthropic/claude-opus-4-7',
+          owner_pinned = false
+      WHERE slug = 'flaky-role'
+    `;
+    await sql`
+      INSERT INTO role_model_swap_watches (hive_id, role_slug, from_model, to_model, tasks_to_watch, quality_floor, created_at)
+      VALUES (${HIVE}, 'flaky-role', 'anthropic/claude-opus-4-7', 'anthropic/claude-sonnet-4-6', 5, 0.7, NOW() - INTERVAL '1 second')
+    `;
 
     for (let i = 0; i < 5; i++) {
       const [task] = await sql<{ id: string }[]>`
@@ -345,50 +386,43 @@ describe("runImprovementSweep", () => {
       `;
     }
 
-    await runImprovementSweep(sql);
+    const sweep = await runImprovementSweep(sql);
+    expect(sweep[0].errors).toEqual([]);
 
     const [role] = await sql`
       SELECT recommended_model, fallback_model FROM role_templates WHERE slug = 'flaky-role'
     `;
-    expect(role.recommended_model).toBe("anthropic/claude-opus-4-7");
-    expect(role.fallback_model).toBe("anthropic/claude-sonnet-4-6");
+    expect(role.recommended_model).toBe("anthropic/claude-sonnet-4-6");
+    expect(role.fallback_model).toBe("anthropic/claude-opus-4-7");
+
+    const [watch] = await sql`
+      SELECT status, tasks_seen FROM role_model_swap_watches WHERE hive_id = ${HIVE}
+    `;
+    expect(watch.status).toBe("failed");
+    expect(watch.tasks_seen).toBe(5);
 
     const [decision] = await sql`
       SELECT title, status, priority FROM decisions
       WHERE hive_id = ${HIVE}
-        AND kind = 'model_swap_reverted'
+        AND kind = 'model_swap_watch_failed'
     `;
-    expect(decision.title).toBe("Model swap reverted: flaky-role");
+    expect(decision.title).toBe("Model swap watch failed: flaky-role");
     expect(decision.status).toBe("pending");
     expect(decision.priority).toBe("normal");
   });
 
-  it("passes a watched swap when the 5 post-swap tasks are above floor despite older low-quality aggregate history", async () => {
+  it("passes a legacy watched swap when the 5 post-swap tasks are above floor", async () => {
     await sql`
       UPDATE role_templates
-      SET recommended_model = 'anthropic/claude-opus-4-7',
-          fallback_model = NULL,
+      SET recommended_model = 'anthropic/claude-sonnet-4-6',
+          fallback_model = 'anthropic/claude-opus-4-7',
           owner_pinned = false
       WHERE slug = 'flaky-role'
     `;
-    for (let i = 0; i < 20; i++) {
-      const [task] = await sql<{ id: string }[]>`
-        INSERT INTO tasks (
-          hive_id, assigned_to, created_by, status, priority, title, brief,
-          started_at, completed_at, cost_cents, model_used, retry_count, doctor_attempts
-        )
-        VALUES (
-          ${HIVE}, 'flaky-role', 'owner', 'completed', 5, ${"Initial bad " + i}, 'b',
-          NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days', 100, 'anthropic/claude-opus-4-7', 1, 1
-        )
-        RETURNING id
-      `;
-      await sql`
-        INSERT INTO task_quality_signals (task_id, hive_id, signal_type, source, evidence, confidence, rating)
-        VALUES (${task.id}, ${HIVE}, 'negative', 'explicit_owner_feedback', 'low quality', 1, 1)
-      `;
-    }
-    await runImprovementSweep(sql);
+    await sql`
+      INSERT INTO role_model_swap_watches (hive_id, role_slug, from_model, to_model, tasks_to_watch, quality_floor, created_at)
+      VALUES (${HIVE}, 'flaky-role', 'anthropic/claude-opus-4-7', 'anthropic/claude-sonnet-4-6', 5, 0.7, NOW() - INTERVAL '1 second')
+    `;
 
     for (let i = 0; i < 5; i++) {
       const [task] = await sql<{ id: string }[]>`
@@ -422,12 +456,12 @@ describe("runImprovementSweep", () => {
     expect(watch.status).toBe("passed");
     expect(watch.tasks_seen).toBe(5);
 
-    const [reverted] = await sql<{ count: number }[]>`
+    const [failed] = await sql<{ count: number }[]>`
       SELECT COUNT(*)::int AS count
       FROM decisions
       WHERE hive_id = ${HIVE}
-        AND kind = 'model_swap_reverted'
+        AND kind = 'model_swap_watch_failed'
     `;
-    expect(reverted.count).toBe(0);
+    expect(failed.count).toBe(0);
   });
 });

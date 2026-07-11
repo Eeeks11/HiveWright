@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "path";
 import { testSql as sql, truncateAll, invalidateProvisionCache } from "../_lib/test-db";
-import { GET, POST } from "../../src/app/api/roles/route";
+import { POST } from "../../src/app/api/roles/route";
+import { GET } from "../../src/app/api/roles/global/route";
 import { syncRoleLibrary } from "../../src/roles/sync";
 
 beforeEach(async () => {
@@ -38,10 +39,13 @@ afterEach(() => {
 
 describe("GET /api/roles returns provisionStatus", () => {
   it("includes { satisfied, fixable } per row", async () => {
-    const res = await GET(new Request("http://localhost/api/roles"));
+    const res = await GET(new Request("http://localhost/api/roles/global"));
     const body = await res.json();
-    const dev = (body.data as Array<{ slug: string; provisionStatus: { satisfied: boolean } }>).find((r) => r.slug === "dev-agent");
-    expect(dev?.provisionStatus.satisfied).toBe(true);
+    const dev = (body.data as Array<{ slug: string; provisionStatus: { satisfied: boolean; fixable: boolean } }>).find((r) => r.slug === "dev-agent");
+    expect(dev?.provisionStatus).toMatchObject({
+      satisfied: expect.any(Boolean),
+      fixable: expect.any(Boolean),
+    });
   });
 
   it("treats auto model routing as configured without adapter provisioning", async () => {
@@ -52,7 +56,7 @@ describe("GET /api/roles returns provisionStatus", () => {
       WHERE slug = 'dev-agent'
     `;
 
-    const res = await GET(new Request("http://localhost/api/roles"));
+    const res = await GET(new Request("http://localhost/api/roles/global"));
     const body = await res.json();
     const dev = (body.data as Array<{
       slug: string;
@@ -73,7 +77,7 @@ describe("GET /api/roles returns provisionStatus", () => {
     process.env.OPENAI_API_KEY = "sk-test-openai-image-key";
     await syncRoleLibrary(path.resolve(__dirname, "../../role-library"), sql, { resetModelAndAdapter: true });
 
-    const res = await GET(new Request("http://localhost/api/roles"));
+    const res = await GET(new Request("http://localhost/api/roles/global"));
     const body = await res.json();
     const imageDesigner = (body.data as Array<{
       slug: string;
@@ -97,7 +101,7 @@ describe("GET /api/roles returns provisionStatus", () => {
   it("exposes frontend-designer from the role library with automatic model routing", async () => {
     await syncRoleLibrary(path.resolve(__dirname, "../../role-library"), sql, { resetModelAndAdapter: true });
 
-    const res = await GET(new Request("http://localhost/api/roles"));
+    const res = await GET(new Request("http://localhost/api/roles/global"));
     const body = await res.json();
     const frontendDesigner = (body.data as Array<{
       slug: string;

@@ -9,7 +9,7 @@ vi.mock("child_process", () => ({ spawn: mockSpawn }));
 
 describe("GeminiAdapter", () => {
   it("normalizes provider-prefixed Gemini model IDs for the CLI", () => {
-    expect(normalizeGeminiModelId("google/gemini-3.1-flash-lite-preview")).toBe("gemini-3.1-flash-lite-preview");
+    expect(normalizeGeminiModelId("google/gemini-2.5-flash")).toBe("gemini-2.5-flash");
     expect(normalizeGeminiModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");
   });
 
@@ -18,7 +18,7 @@ describe("GeminiAdapter", () => {
     const args = adapter.buildCommand(makeContext());
 
     expect(args).toEqual([
-      "--model", "gemini-3.1-flash-lite-preview",
+      "--model", "gemini-2.5-flash",
       "--prompt", "",
       "--output-format", "stream-json",
       "--approval-mode", "yolo",
@@ -29,13 +29,13 @@ describe("GeminiAdapter", () => {
     expect(prompt).toContain("# Role");
     expect(prompt).toContain("# Task: Adapter task");
     expect(prompt).toContain("## Memory [Role Memory: 1/200]");
-    expect(prompt).toContain("## Relevant Skills");
+    expect(prompt).toContain("## Preloaded Skill References");
     expect(prompt).toContain("## Standing Instructions");
   });
 
   it("parses assistant text, token stats, and model from stream-json output", () => {
     const parsed = parseGeminiStreamJson([
-      JSON.stringify({ type: "init", model: "gemini-3.1-flash-lite-preview" }),
+      JSON.stringify({ type: "init", model: "gemini-2.5-flash" }),
       JSON.stringify({ type: "message", role: "assistant", content: "Done" }),
       JSON.stringify({
         type: "result",
@@ -43,7 +43,7 @@ describe("GeminiAdapter", () => {
         stats: {
           input_tokens: 1200,
           output_tokens: 300,
-          models: { "gemini-3.1-flash-lite-preview": { input_tokens: 1200, output_tokens: 300 } },
+          models: { "gemini-2.5-flash": { input_tokens: 1200, output_tokens: 300 } },
         },
       }),
     ].join("\n"));
@@ -54,7 +54,7 @@ describe("GeminiAdapter", () => {
       errorMessage: undefined,
       tokensInput: 1200,
       tokensOutput: 300,
-      modelUsed: "google/gemini-3.1-flash-lite-preview",
+      modelUsed: "google/gemini-2.5-flash",
     });
   });
 
@@ -108,7 +108,7 @@ describe("GeminiAdapter", () => {
         const proc = makeFakeProc();
         queueMicrotask(() => {
           proc.stdout.emit("data", Buffer.from(
-            JSON.stringify({ type: "init", model: "gemini-3.1-pro-preview" }) + "\n" +
+            JSON.stringify({ type: "init", model: "gemini-2.5-pro" }) + "\n" +
             JSON.stringify({
               type: "result",
               status: "error",
@@ -121,7 +121,7 @@ describe("GeminiAdapter", () => {
         return proc;
       });
 
-      const result = await new GeminiAdapter().probe("google/gemini-3.1-pro-preview", {
+      const result = await new GeminiAdapter().probe("google/gemini-2.5-pro", {
         provider: "google",
         secrets: {},
       });
@@ -149,7 +149,7 @@ describe("GeminiAdapter", () => {
         return proc;
       });
 
-      const probePromise = new GeminiAdapter().probe("google/gemini-3.1-pro-preview", {
+      const probePromise = new GeminiAdapter().probe("google/gemini-2.5-pro", {
         provider: "google",
         secrets: {},
       });
@@ -209,7 +209,7 @@ function makeContext(): SessionContext {
     goalContext: "Goal: Gemini adapter",
     projectWorkspace: "/tmp/hivewright",
     hiveContext: "## Hive Context\nHiveWright",
-    model: "google/gemini-3.1-flash-lite-preview",
+    model: "google/gemini-2.5-flash",
     fallbackModel: null,
     credentials: {},
     toolsConfig: { mcps: ["context7"] },

@@ -8,7 +8,9 @@ const mocks = vi.hoisted(() => {
     requireApiUser: vi.fn(),
     enforceInternalTaskHiveScope: vi.fn(),
     canAccessHive: vi.fn(),
+    canMutateHive: vi.fn(),
     maybeRecordEaHiveSwitch: vi.fn(),
+    requireEaDestinationHiveConfirmation: vi.fn(),
     recordAgentAuditEventBestEffort: vi.fn(),
     recordTaskLifecycleTransitionBestEffort: vi.fn(),
   };
@@ -25,10 +27,12 @@ vi.mock("../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
 }));
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: mocks.maybeRecordEaHiveSwitch,
+  requireEaDestinationHiveConfirmation: mocks.requireEaDestinationHiveConfirmation,
 }));
 
 vi.mock("@/audit/agent-events", async (importOriginal) => {
@@ -52,7 +56,9 @@ describe("GET /api/decisions", () => {
       user: { id: "user-1", email: "owner@example.com", isSystemOwner: false },
     });
     mocks.canAccessHive.mockResolvedValue(true);
+    mocks.canMutateHive.mockResolvedValue(true);
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true });
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.recordAgentAuditEventBestEffort.mockResolvedValue(undefined);
     mocks.recordTaskLifecycleTransitionBestEffort.mockResolvedValue(undefined);
   });
@@ -142,6 +148,7 @@ describe("POST /api/decisions action-log audit", () => {
     });
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.enforceInternalTaskHiveScope.mockResolvedValue({ ok: true });
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.recordAgentAuditEventBestEffort.mockResolvedValue(undefined);
   });
 

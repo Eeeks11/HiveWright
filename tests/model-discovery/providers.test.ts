@@ -63,7 +63,7 @@ describe("provider model discovery adapters", () => {
 
   it("skips OpenAI models that are not usable by the Codex adapter", async () => {
     const { fetchFn } = fakeFetch(`
-      gpt-5.6 tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
+      gpt-5.6 gpt-5.4-mini gpt-5.3-codex gpt-5.2 gpt-5.2-chat-latest gpt-5.2-codex gpt-5.2-pro tts-1 text-embedding-3-large whisper-1 dall-e-3 sora-2
       gpt-realtime computer-use-preview gpt-5.6.png chatgpt chatgpt-ui chatgpt-image-latest gpt-5-4
       gpt gpt-3 gpt-3.5-turbo gpt-4 gpt-4-turbo gpt-4.5 chatgpt-4o chatgpt-4o-latest
     `);
@@ -72,6 +72,7 @@ describe("provider model discovery adapters", () => {
 
     expect(models.map((model) => model.modelId)).toEqual([
       "chatgpt-4o-latest",
+      "openai-codex/gpt-5.4-mini",
       "openai-codex/gpt-5.6",
     ]);
   });
@@ -123,6 +124,27 @@ describe("provider model discovery adapters", () => {
         capabilities: ["text", "code"],
       }),
     ]));
+  });
+
+  it("excludes Gemini preview and retired 2.0 IDs from public docs discovery", async () => {
+    const { fetchFn } = fakeFetch(`
+      gemini-2.5-pro
+      gemini-2.5-flash
+      gemini-2.5-flash-lite
+      gemini-3-flash-preview
+      gemini-3.1-pro-preview
+      gemini-2.0-flash
+      gemini-2.0-flash-lite
+      gemini-2.0-pro-exp-02-05
+    `);
+
+    const models = await discoverGeminiModels({ apiKey: "gemini-key", fetch: fetchFn });
+
+    expect(models.map((model) => model.modelId)).toEqual([
+      "google/gemini-2.5-flash",
+      "google/gemini-2.5-flash-lite",
+      "google/gemini-2.5-pro",
+    ]);
   });
 
   it("discovers Anthropic models from the public docs catalog", async () => {
@@ -299,6 +321,10 @@ describe("provider model discovery adapters", () => {
     const models = await discoverOpenAiModels({ fetch: fetchFn });
 
     expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5");
+    expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.5");
+    expect(models.map((model) => model.modelId)).toContain("openai-codex/gpt-5.6-sol");
+    expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2");
+    expect(models.map((model) => model.modelId)).not.toContain("openai-codex/gpt-5.2-codex");
     expect(models[0]?.metadataSourceName).toBe("OpenAI static model fallback");
   });
 });

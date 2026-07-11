@@ -895,8 +895,8 @@ export async function POST(req: Request) {
   if (!sourceTaskId && !suppliedSourceContext) return jsonError("sourceTaskId or sourceContext is required", 400);
 
   if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-    if (!hasAccess) return jsonError("Forbidden", 403);
+    const canMutate = await canMutateHive(sql, authz.user.id, hiveId);
+    if (!canMutate) return jsonError("Forbidden: hive mutation access required", 403);
   }
 
   let goal: GoalRow | null = null;

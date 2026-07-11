@@ -11,23 +11,25 @@ vi.mock("../../../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
 }));
 
 vi.mock("@/decisions/owner-comment-wake", () => ({
   mirrorOwnerDecisionCommentToGoalComment: vi.fn(),
 }));
 
-import { canAccessHive } from "@/auth/users";
+import { canAccessHive, canMutateHive } from "@/auth/users";
 import { requireApiUser } from "../../../_lib/auth";
 import { sql } from "../../../_lib/db";
 import { GET, POST } from "./route";
 
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
+const mockCanMutateHive = canMutateHive as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 
 const params = { params: Promise.resolve({ id: "decision-1" }) };
-const decisionRow = { hive_id: "hive-1" };
+const decisionRow = { hive_id: "11111111-1111-4111-8111-111111111111" };
 const messageRow = {
   id: "message-1",
   decision_id: "decision-1",
@@ -38,7 +40,7 @@ const messageRow = {
 
 describe("GET /api/decisions/[id]/messages access control", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockRequireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
@@ -50,7 +52,7 @@ describe("GET /api/decisions/[id]/messages access control", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages"), params);
+    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(401);
     expect(mockSql).not.toHaveBeenCalled();
@@ -58,22 +60,24 @@ describe("GET /api/decisions/[id]/messages access control", () => {
   });
 
   it("returns 403 when the signed-in caller cannot access the owning hive", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql.mockResolvedValueOnce([decisionRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages"), params);
+    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(403);
     expect(mockSql).toHaveBeenCalledTimes(1);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("returns 200 after resolving the decision's owning hive for an allowed caller", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql
       .mockResolvedValueOnce([decisionRow])
       .mockResolvedValueOnce([messageRow]);
 
-    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages"), params);
+    const res = await GET(new Request("http://localhost/api/decisions/decision-1/messages?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -84,39 +88,42 @@ describe("GET /api/decisions/[id]/messages access control", () => {
         content: "Approved",
       }),
     ]);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mockSql).toHaveBeenCalledTimes(3);
   });
 });
 
 describe("POST /api/decisions/[id]/messages access control", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     mockRequireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
     mockCanAccessHive.mockResolvedValue(true);
+    mockCanMutateHive.mockResolvedValue(true);
   });
 
   it("returns 403 before inserting when the caller cannot access the decision hive", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql.mockResolvedValueOnce([decisionRow]);
-    mockCanAccessHive.mockResolvedValueOnce(false);
+    mockCanMutateHive.mockResolvedValueOnce(false);
 
     const res = await POST(
       new Request("http://localhost/api/decisions/decision-1/messages", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: "Cross-hive write", sender: "owner" }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", content: "Cross-hive write", sender: "owner" }),
       }),
       params,
     );
 
     expect(res.status).toBe(403);
     expect(mockSql).toHaveBeenCalledTimes(1);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "hive-1");
+    expect(mockCanMutateHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
   });
 
   it("does not let non-owner hive members spoof owner as sender", async () => {
+    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
     mockSql
       .mockResolvedValueOnce([decisionRow])
       .mockResolvedValueOnce([{ ...messageRow, sender: "system" }]);
@@ -125,7 +132,7 @@ describe("POST /api/decisions/[id]/messages access control", () => {
       new Request("http://localhost/api/decisions/decision-1/messages", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: "Allowed member note", sender: "owner" }),
+        body: JSON.stringify({ hiveId: "11111111-1111-4111-8111-111111111111", content: "Allowed member note", sender: "owner" }),
       }),
       params,
     );
@@ -133,6 +140,6 @@ describe("POST /api/decisions/[id]/messages access control", () => {
 
     expect(res.status).toBe(201);
     expect(body.data.sender).toBe("system");
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
   });
 });

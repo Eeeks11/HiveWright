@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import {
   asEaReplayMessageLimit,
   DEFAULT_EA_REPLAY_MESSAGE_LIMIT,
@@ -9,8 +9,8 @@ import {
 /**
  * DB-backed EA conversation store. One active thread per (hive, channel);
  * /new closes the active thread and opens a fresh one so the next message
- * starts with no prior history. Load-history reads in timestamp order
- * so the runner can replay the conversation into the LLM.
+ * starts with no prior history. Load-history reads in deterministic chronological
+ * order so the runner can replay the conversation into the LLM.
  */
 
 export interface EaThread {
@@ -35,8 +35,29 @@ export interface EaMessage {
   updatedAt: Date;
 }
 
+type QuerySql = Sql | TransactionSql;
+
+// ea_messages.created_at uses transaction-stable now(), so the dashboard owner
+// row and its streaming assistant placeholder can legitimately share the same
+// timestamp. Keep reads deterministic without depending on UUID v4 ordering:
+// chronological order is timestamp, role phase, then id only as a final fallback.
+const EA_MESSAGE_CHRONOLOGICAL_ROLE_ORDER = `
+  CASE role
+    WHEN 'system' THEN 0
+    WHEN 'owner' THEN 1
+    WHEN 'assistant' THEN 2
+    ELSE 3
+  END
+`;
+
+export const EA_MESSAGE_NEWEST_FIRST_ORDER_SQL = `
+  created_at DESC,
+  ${EA_MESSAGE_CHRONOLOGICAL_ROLE_ORDER} DESC,
+  id DESC
+`;
+
 export async function getOrCreateActiveThread(
-  sql: Sql,
+  sql: QuerySql,
   hiveId: string,
   channelId: string,
 ): Promise<EaThread> {
@@ -56,7 +77,7 @@ export async function getOrCreateActiveThread(
 }
 
 export async function closeActiveThread(
-  sql: Sql,
+  sql: QuerySql,
   hiveId: string,
   channelId: string,
 ): Promise<void> {
@@ -68,7 +89,7 @@ export async function closeActiveThread(
 }
 
 export async function appendMessage(
-  sql: Sql,
+  sql: QuerySql,
   threadId: string,
   role: EaMessage["role"],
   content: string,
@@ -161,7 +182,7 @@ export async function getThreadMessages(
            updated_at as "updatedAt"
     FROM ea_messages
     WHERE thread_id = ${threadId}
-    ORDER BY created_at DESC
+    ORDER BY ${sql.unsafe(EA_MESSAGE_NEWEST_FIRST_ORDER_SQL)}
     LIMIT ${replayLimit}
   `;
   return rows.reverse();

@@ -46,6 +46,7 @@ type RouteCase = {
   name: string;
   call: () => Promise<Response>;
   seedSuccess: () => void;
+  seedDenied?: () => void;
   deniedQueriesBeforeAccess?: number;
 };
 
@@ -80,8 +81,12 @@ function routeCases(): RouteCase[] {
       name: "GET /api/adapter-config",
       call: () => getAdapterConfig(new Request(`http://localhost/api/adapter-config?hiveId=${HIVE_ID}`)) as Promise<Response>,
       seedSuccess: () => {
-        mocks.sql.mockResolvedValueOnce([]);
+        mocks.sql.mockResolvedValueOnce([{ id: HIVE_ID }]).mockResolvedValueOnce([]);
       },
+      seedDenied: () => {
+        mocks.sql.mockResolvedValueOnce([{ id: HIVE_ID }]);
+      },
+      deniedQueriesBeforeAccess: 1,
     },
     {
       name: "GET /api/dashboard/summary",
@@ -96,13 +101,18 @@ function routeCases(): RouteCase[] {
           },
         ]);
       },
+      deniedQueriesBeforeAccess: 0,
     },
     {
       name: "GET /api/projects",
       call: () => getProjects(new Request(`http://localhost/api/projects?hiveId=${HIVE_ID}`)) as Promise<Response>,
       seedSuccess: () => {
-        mocks.sql.mockResolvedValueOnce([{ total: "0" }]).mockResolvedValueOnce([]);
+        mocks.sql.mockResolvedValueOnce([{ id: HIVE_ID }]).mockResolvedValueOnce([{ total: "0" }]).mockResolvedValueOnce([]);
       },
+      seedDenied: () => {
+        mocks.sql.mockResolvedValueOnce([{ id: HIVE_ID }]);
+      },
+      deniedQueriesBeforeAccess: 1,
     },
     {
       name: "GET /api/projects/[id]",
@@ -113,6 +123,9 @@ function routeCases(): RouteCase[] {
       seedSuccess: () => {
         mocks.sql.mockResolvedValueOnce([projectRow()]);
       },
+      seedDenied: () => {
+        mocks.sql.mockResolvedValueOnce([projectRow()]);
+      },
       deniedQueriesBeforeAccess: 1,
     },
     {
@@ -121,6 +134,7 @@ function routeCases(): RouteCase[] {
       seedSuccess: () => {
         mocks.sql.mockResolvedValueOnce([]);
       },
+      deniedQueriesBeforeAccess: 0,
     },
     {
       name: "GET /api/analytics",
@@ -128,6 +142,7 @@ function routeCases(): RouteCase[] {
       seedSuccess: () => {
         mocks.sql.mockResolvedValueOnce([]);
       },
+      deniedQueriesBeforeAccess: 0,
     },
     {
       name: "GET /api/entities",
@@ -135,6 +150,7 @@ function routeCases(): RouteCase[] {
       seedSuccess: () => {
         mocks.sql.mockResolvedValueOnce([]);
       },
+      deniedQueriesBeforeAccess: 0,
     },
   ];
 }
@@ -160,9 +176,7 @@ describe("Sprint 4A verified hive read auth gates", () => {
 
       it("returns 403 when signed in without hive access", async () => {
         mocks.canAccessHive.mockResolvedValueOnce(false);
-        if (route.deniedQueriesBeforeAccess) {
-          mocks.sql.mockResolvedValueOnce([projectRow()]);
-        }
+        route.seedDenied?.();
 
         const res = await route.call();
 
@@ -175,7 +189,7 @@ describe("Sprint 4A verified hive read auth gates", () => {
           memberUser.id,
           HIVE_ID,
         );
-        expect(mocks.sql).toHaveBeenCalledTimes(route.deniedQueriesBeforeAccess ?? 0);
+        expect(mocks.sql).toHaveBeenCalledTimes(route.deniedQueriesBeforeAccess ?? 1);
       });
 
       it("returns 200 when signed in with hive access", async () => {

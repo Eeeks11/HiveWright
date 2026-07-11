@@ -13,7 +13,7 @@ describe("assessBudget", () => {
       monthlyLlmCap: 10000,
     });
     expect(r.warn).toBe(false);
-    expect(r.model).toBe("opus");
+    expect(r.model).toBe("primary");
     expect(r.pause).toBe(false);
   });
 
@@ -23,15 +23,15 @@ describe("assessBudget", () => {
       monthlyLlmCap: 10000,
     });
     expect(r.warn).toBe(true);
-    expect(r.model).toBe("opus");
+    expect(r.model).toBe("primary");
   });
 
-  it("downgrades to sonnet at >=100%", async () => {
+  it("selects the configured fallback tier at >=100%", async () => {
     await sql`INSERT INTO voice_sessions (hive_id, llm_cost_cents, started_at) VALUES ('00000000-0000-0000-0000-000000000001', 10100, NOW())`;
     const r = await assessBudget("00000000-0000-0000-0000-000000000001", {
       monthlyLlmCap: 10000,
     });
-    expect(r.model).toBe("sonnet");
+    expect(r.model).toBe("fallback");
   });
 
   it("pauses at >=120%", async () => {

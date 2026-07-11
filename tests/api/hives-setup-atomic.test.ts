@@ -126,6 +126,7 @@ describe("runHiveSetup atomicity", () => {
       fields: {
         applicationId: "app-123",
         channelId: "channel-123",
+        ownerUserIds: "123456789012345678",
         botToken: "bad-token",
       },
     }];
@@ -166,7 +167,7 @@ describe("runHiveSetup atomicity", () => {
       expect(await countRows("credentials")).toBe(1);
       expect(await countRows("projects")).toBe(1);
       expect(await countRows("goals")).toBe(1);
-      expect(await countRows("schedules")).toBe(1);
+      expect(await countRows("schedules")).toBe(2);
       expect(await countRows("action_policies")).toBeGreaterThan(0);
 
       const policyRows = await sql<{ name: string; effect_type: string | null; effect: string; priority: number }[]>`

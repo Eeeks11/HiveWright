@@ -1,5 +1,5 @@
 import type { Sql, TransactionSql } from "postgres";
-import { hashPassword, verifyPassword } from "./password";
+import { verifyPassword } from "./password";
 
 export interface AuthUser {
   id: string;
@@ -20,10 +20,8 @@ export interface HiveMembership {
  */
 type QuerySql = Sql | TransactionSql;
 
-const FIRST_OWNER_BOOTSTRAP_LOCK_KEY = "hivewright:first-owner-bootstrap";
 const TRUSTED_SYSTEM_ACTOR_IDS = new Set([
   "internal-service-account",
-  "owner-bootstrap",
 ]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -83,35 +81,6 @@ export async function verifyCredentials(
  * by the first-run setup flow. Subsequent owners are added via the
  * authenticated admin API.
  */
-export async function bootstrapFirstOwner(
-  sql: Sql,
-  input: { email: string; password: string; displayName?: string },
-): Promise<AuthUser> {
-  return await sql.begin(async (tx) => {
-    await tx`
-      SELECT pg_advisory_xact_lock(hashtext(${FIRST_OWNER_BOOTSTRAP_LOCK_KEY}))
-    `;
-
-    const count = await countUsers(tx);
-    if (count > 0) {
-      throw new Error(
-        "Users already exist — first-owner bootstrap can only run on an empty users table",
-      );
-    }
-
-    const hash = hashPassword(input.password);
-    const [row] = await tx<
-      { id: string; email: string; displayName: string | null; isSystemOwner: boolean }[]
-    >`
-      INSERT INTO users (email, display_name, password_hash, is_system_owner)
-      VALUES (${input.email}, ${input.displayName ?? null}, ${hash}, true)
-      RETURNING id, email, display_name AS "displayName",
-                is_system_owner AS "isSystemOwner"
-    `;
-    return row;
-  });
-}
-
 export async function listMemberships(
   sql: Sql,
   userId: string,

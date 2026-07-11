@@ -42,7 +42,7 @@ export default function IntakePage() {
   const filesRef = useRef<AttachmentFileEntry[]>([]);
 
   useEffect(() => {
-    fetch("/api/roles")
+    fetch("/api/roles/global")
       .then((r) => r.json())
       .then((data) => {
         const list: Role[] = data.data ?? [];

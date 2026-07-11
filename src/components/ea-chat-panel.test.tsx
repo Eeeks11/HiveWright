@@ -89,6 +89,17 @@ function createStreamingResponse() {
   };
 }
 
+function createFailedStreamingResponse() {
+  return new Response(
+    `data: ${JSON.stringify({ type: "start" })}\n\n` +
+      `data: ${JSON.stringify({ type: "error", category: "runner_failure" })}\n\n`,
+    {
+      status: 201,
+      headers: { "Content-Type": "text/event-stream" },
+    },
+  );
+}
+
 function setListScrollMetrics(
   list: HTMLElement,
   {
@@ -193,6 +204,99 @@ describe("EaChatPanel", () => {
     expect(await screen.findByText("No messages in this thread")).toBeTruthy();
     expect(screen.getByText("HiveWright · active thread")).toBeTruthy();
     expect(screen.getByLabelText("Message Executive Assistant")).toBeTruthy();
+  });
+
+  it("renders a persisted failed assistant turn as an accessible terminal failure", async () => {
+    const now = new Date().toISOString();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          data: {
+            thread: {
+              id: "thread-1",
+              hiveId: "11111111-1111-4111-8111-111111111111",
+              channelId: "dashboard:user",
+              status: "active",
+              createdAt: now,
+            },
+            messages: [{
+              id: "assistant-failed",
+              threadId: "thread-1",
+              role: "assistant",
+              content: "Partial owner-visible answer",
+              source: "dashboard",
+              status: "failed",
+              error: "EA response failed before completion.",
+              createdAt: now,
+              updatedAt: now,
+            }],
+            hasMore: false,
+          },
+        }),
+      ),
+    );
+
+    renderPanel();
+
+    const failed = await screen.findByRole("alert", { name: /Executive Assistant message, failed/i });
+    expect(failed.textContent).toContain("Partial owner-visible answer");
+    expect(failed.textContent).toContain("Response incomplete");
+    expect(failed.textContent).toContain("EA response failed before completion.");
+    expect(screen.queryByText("EA is thinking...")).toBeNull();
+  });
+
+  it("replaces the optimistic thinking bubble with the persisted failure after an SSE error", async () => {
+    const now = new Date().toISOString();
+    const failedState = {
+      data: {
+        thread: {
+          id: "thread-1",
+          hiveId: "11111111-1111-4111-8111-111111111111",
+          channelId: "dashboard:user",
+          status: "active",
+          createdAt: now,
+        },
+        messages: [{
+          id: "owner-1",
+          threadId: "thread-1",
+          role: "owner",
+          content: "Status please",
+          source: "dashboard",
+          status: "sent",
+          error: null,
+          createdAt: now,
+          updatedAt: now,
+        }, {
+          id: "assistant-failed",
+          threadId: "thread-1",
+          role: "assistant",
+          content: "",
+          source: "dashboard",
+          status: "failed",
+          error: "EA response failed before completion.",
+          createdAt: now,
+          updatedAt: now,
+        }],
+        hasMore: false,
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => emptyThreadResponse())
+      .mockImplementationOnce(() => Promise.resolve(createFailedStreamingResponse()))
+      .mockImplementation(() => jsonResponse(failedState));
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPanel();
+    const composer = await screen.findByLabelText("Message Executive Assistant");
+    fireEvent.change(composer, { target: { value: "Status please" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(await screen.findByRole("alert", { name: /Executive Assistant message, failed/i })).toBeTruthy();
+    expect(screen.getByText("EA did not return a response.")).toBeTruthy();
+    expect(screen.queryByLabelText(/Assistant message, streaming/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("optimistically shows a sending message and posts the composed content", async () => {

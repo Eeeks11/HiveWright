@@ -5,26 +5,29 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { resolveGoalSupervisorRuntime } from "./supervisor-routing";
-import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
+import { buildGoalSupervisorProcessEnv, loadGoalSupervisorCredentials } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
+import {
+  captureGoalProgress,
+  claimGoalSupervisorStart,
+  finalizeGoalSupervisorStart,
+  releaseGoalSupervisorStart,
+} from "./supervisor-start-guard";
 
 const OPENCLAW_BIN = ["/home/hivewright/.npm-global/bin/openclaw", "/usr/local/bin/openclaw", "openclaw"]
   .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
 
-function buildOpenClawEnv(supervisorSession: string): NodeJS.ProcessEnv {
-  return buildGoalSupervisorProcessEnv(
-    {
-      ...process.env,
-      PATH: `/home/hivewright/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ""}`,
-    },
-    supervisorSession,
-  );
+interface SupervisorSpawnScope {
+  credentials: Record<string, string>;
+  goalId: string;
+  hiveId: string;
+  supervisorSession: string;
 }
 
 function runOpenClaw(
   args: string[],
   cwd: string,
-  supervisorSession: string,
+  scope: SupervisorSpawnScope,
   timeout = 300_000,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
@@ -32,7 +35,7 @@ function runOpenClaw(
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       timeout,
-      env: buildOpenClawEnv(supervisorSession),
+      env: buildGoalSupervisorProcessEnv({ adapter: "openclaw", ...scope }),
     });
     let stdout = "", stderr = "";
     proc.stdout.on("data", (d) => { stdout += d.toString(); });
@@ -55,14 +58,15 @@ async function ensureSupervisorAgent(
   agentId: string,
   workspacePath: string,
   model: string,
-  supervisorSession: string,
+  scope: SupervisorSpawnScope,
 ): Promise<{ ok: boolean; error?: string }> {
-  const agentDir = path.join(process.env.HOME || "/home/hivewright", ".openclaw", "agents", agentId, "agent");
+  const env = buildGoalSupervisorProcessEnv({ adapter: "openclaw", ...scope });
+  const agentDir = path.join(env.HOME!, ".openclaw", "agents", agentId, "agent");
   if (fs.existsSync(agentDir)) {
     return { ok: true };
   }
 
-  const listResult = await runOpenClaw(["agents", "list", "--json"], workspacePath, supervisorSession, 60_000);
+  const listResult = await runOpenClaw(["agents", "list", "--json"], workspacePath, scope, 60_000);
   if (listResult.code === 0) {
     try {
       const jsonText = extractJsonArray(listResult.stdout);
@@ -80,7 +84,7 @@ async function ensureSupervisorAgent(
   const addResult = await runOpenClaw(
     ["agents", "add", agentId, "--workspace", workspacePath, "--model", model, "--non-interactive"],
     workspacePath,
-    supervisorSession,
+    scope,
     120_000,
   );
   if (addResult.code !== 0) {
@@ -101,9 +105,9 @@ function runSupervisorInWorkspace(
   agentId: string,
   workspacePath: string,
   prompt: string,
-  supervisorSession: string,
+  scope: SupervisorSpawnScope,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return runOpenClaw(["agent", "--agent", agentId, "--message", prompt, "--json"], workspacePath, supervisorSession);
+  return runOpenClaw(["agent", "--agent", agentId, "--message", prompt, "--json"], workspacePath, scope);
 }
 
 /**
@@ -145,6 +149,13 @@ export async function startGoalSupervisor(
 
   // Build and write initial prompt
   const initialPrompt = await buildSupervisorInitialPrompt(sql, goalId);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
+  const spawnScope: SupervisorSpawnScope = {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  };
 
   const agentsMd = `# Goal Supervisor
 
@@ -163,23 +174,36 @@ ${initialPrompt}
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), agentsMd, "utf-8");
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
-  const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel, supervisorSession);
+  const claimed = await claimGoalSupervisorStart(sql, goalId, supervisorSession);
+  if (!claimed) return { agentId };
+  const progressBaseline = await captureGoalProgress(sql, goalId);
+
+  const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel, spawnScope);
   if (!ensured.ok) {
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: ensured.error || "Failed to provision supervisor agent" };
   }
 
-  // Mark as started immediately — prevents re-triggering on the next lifecycle check
-  await sql`UPDATE goals SET session_id = ${supervisorSession} WHERE id = ${goalId}`;
-
   // Run the supervisor synchronously — blocks until complete or timeout
-  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt, supervisorSession);
+  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt, spawnScope);
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor] openclaw agent run failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr}`);
     // Clear session_id so the next lifecycle check can retry — leaving it set
     // would permanently block the goal since findNewGoals filters on session_id IS NULL.
-    await sql`UPDATE goals SET session_id = NULL WHERE id = ${goalId}`;
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: `Supervisor run failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 300)}` };
+  }
+
+  const progress = await finalizeGoalSupervisorStart(
+    sql,
+    goalId,
+    supervisorSession,
+    progressBaseline,
+  );
+  if (!progress.progressed) {
+    console.warn(`[supervisor] openclaw agent exited successfully without durable progress for goal ${goalId}`);
+    return { agentId, error: "Supervisor exited successfully without durable goal progress; start released for retry" };
   }
 
   console.log(`[supervisor] Supervisor run complete for goal ${goalId}. Output: ${runResult.stdout.slice(0, 300)}`);
@@ -218,6 +242,13 @@ export async function wakeUpSupervisor(
 
   // Build wake-up prompt and append to AGENTS.md
   const wakeUpPrompt = await buildSprintWakeUpPrompt(sql, goalId, sprintNumber);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
+  const spawnScope: SupervisorSpawnScope = {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  };
 
   const existingAgents = fs.existsSync(path.join(workspacePath, "AGENTS.md"))
     ? fs.readFileSync(path.join(workspacePath, "AGENTS.md"), "utf-8")
@@ -242,7 +273,7 @@ export async function wakeUpSupervisor(
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   // Run the supervisor synchronously — blocks until complete or timeout
-  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, wakeUpPrompt, supervisorSession);
+  const runResult = await runSupervisorInWorkspace(agentId, workspacePath, wakeUpPrompt, spawnScope);
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `openclaw agent run failed (exit ${runResult.code}): ${runResult.stderr}` };

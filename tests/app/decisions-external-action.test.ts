@@ -40,7 +40,7 @@ function respondReq(decisionId: string, body: object) {
     new Request(`http://localhost/api/decisions/${decisionId}/respond`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ hiveId: HIVE, ...body }),
     }),
     { params: Promise.resolve({ id: decisionId }) },
   );

@@ -6,8 +6,13 @@ import {
   markPipelineTaskRunning,
   validatePipelineOutputContract,
 } from "@/pipelines/service";
+import {
+  evaluateDeploymentSensitiveCompletionEvidence,
+  formatDeploymentProofFailure,
+} from "@/software-pipeline/deployment-sensitive-proof";
 import type { ClaimedTask } from "./types";
 import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
+import { validateRoutingPublicationCompletion } from "@/tasks/output-disposition";
 
 export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
   await pauseOverBudgetGoalsForClaim(sql);
@@ -142,6 +147,20 @@ export async function completeTask(
   resultSummary: string,
   options: { runtimeWarnings?: string[] } = {},
 ): Promise<void> {
+  const [task] = await sql<{
+    id: string;
+    hive_id: string;
+    assigned_to: string;
+    parent_task_id: string | null;
+    title: string;
+    brief: string | null;
+  }[]>`
+    SELECT id, hive_id, assigned_to, parent_task_id, title, brief
+    FROM tasks
+    WHERE id = ${taskId}
+  `;
+  if (!task) return;
+
   const rules = await getPipelineTaskExecutionRules(sql, taskId);
   if (rules) {
     const validation = validatePipelineOutputContract(resultSummary, rules.outputContract, {
@@ -160,16 +179,46 @@ export async function completeTask(
     }
   }
 
+  const routeDisposition = validateRoutingPublicationCompletion({
+    task: {
+      id: task.id,
+      hiveId: task.hive_id,
+      assignedTo: task.assigned_to,
+      title: task.title,
+      brief: task.brief,
+    },
+    resultSummary,
+  });
+  if (!routeDisposition.ok) {
+    const pipelineFailure = await failPipelineRunFromTask(sql, { taskId, reason: routeDisposition.reason });
+    if (pipelineFailure.status === "not_pipeline_task") {
+      await failTask(sql, taskId, routeDisposition.reason);
+    }
+    return;
+  }
+
+  if (!(task.assigned_to === "qa" && task.parent_task_id)) {
+    const deploymentProof = await evaluateTaskDeploymentProof(sql, taskId, {
+      resultSummary,
+    });
+    if (!deploymentProof.ok) {
+      await blockTask(sql, taskId, formatDeploymentProofFailure(deploymentProof.failures));
+      return;
+    }
+  }
+
   // Clear failure_reason on success so a stale message from a prior watchdog
   // hit / earlier retry doesn't keep showing up on the dashboard for a task
   // that ultimately succeeded. Runtime warnings are explicitly retained as a
   // visible QA guardrail for adapter-layer anomalies that did not prevent
   // output persistence.
   const warning = options.runtimeWarnings?.filter(Boolean).join("\n") || null;
+  const terminalDisposition = routeDisposition.disposition;
   const updated = await sql<{ id: string }[]>`
     UPDATE tasks
     SET status = 'completed', result_summary = ${resultSummary},
-        completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning}
+        completed_at = NOW(), updated_at = NOW(), failure_reason = ${warning},
+        terminal_disposition = COALESCE(terminal_disposition, ${terminalDisposition ? sql.json(terminalDisposition) : null})
     WHERE id = ${taskId}
       AND status <> 'completed'
     RETURNING id
@@ -178,6 +227,54 @@ export async function completeTask(
   if (updated.length === 0) return;
 
   await advancePipelineRunFromTask(sql, { taskId, resultSummary });
+}
+
+async function evaluateTaskDeploymentProof(
+  sql: Sql,
+  taskId: string,
+  input: { resultSummary?: string | null; qaFeedback?: string | null; workProductSummary?: string | null; workProductContent?: string | null },
+) {
+  const [task] = await sql<{
+    assigned_to: string;
+    parent_task_id: string | null;
+    title: string;
+    brief: string;
+    acceptance_criteria: string | null;
+    project_git_repo: boolean | null;
+  }[]>`
+    SELECT t.assigned_to,
+           t.parent_task_id,
+           t.title,
+           t.brief,
+           t.acceptance_criteria,
+           COALESCE(p.git_repo, false) AS project_git_repo
+    FROM tasks t
+    LEFT JOIN projects p ON p.id = t.project_id
+    WHERE t.id = ${taskId}
+    LIMIT 1
+  `;
+
+  if (task?.assigned_to === "qa" && task.parent_task_id) {
+    return {
+      required: false,
+      ok: true,
+      expectedCommit: null,
+      liveBuildHash: null,
+      currentRuntimeBuildHash: null,
+      failures: [],
+    };
+  }
+
+  return evaluateDeploymentSensitiveCompletionEvidence({
+    projectGitRepo: task?.project_git_repo === true,
+    taskTitle: task?.title,
+    taskBrief: task?.brief,
+    acceptanceCriteria: task?.acceptance_criteria,
+    resultSummary: input.resultSummary,
+    qaFeedback: input.qaFeedback,
+    workProductSummary: input.workProductSummary,
+    workProductContent: input.workProductContent,
+  });
 }
 
 export async function blockTask(sql: Sql, taskId: string, reason?: string): Promise<void> {

@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireHiveTargetMatchesPath, requireStrictHiveTarget } from "../../../_lib/hive-target";
 import { type TargetStatus, isValidStatus } from "./_status";
 
 interface TargetInput {
@@ -36,12 +36,16 @@ export async function GET(
   if ("response" in authz) return authz.response;
 
   const { id } = await params;
-  const [hive] = await sql`SELECT id FROM hives WHERE id = ${id}`;
-  if (!hive) return jsonError("hive not found", 404);
-  if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, id);
-    if (!hasAccess) return jsonError("Forbidden: hive access required", 403);
-  }
+  const requestedHive = requireHiveTargetMatchesPath({ kind: "query", request: _request }, id);
+  if (requestedHive.ok === false) return requestedHive.response;
+
+  const target = await requireStrictHiveTarget(
+    sql,
+    authz.user,
+    { kind: "path", params: { id }, key: "id" },
+    { label: "id" },
+  );
+  if (target.ok === false) return target.response;
 
   const rows = await sql`
     SELECT * FROM hive_targets
@@ -63,15 +67,6 @@ export async function POST(
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   const { user } = authz;
-  if (!user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, user.id, id);
-    if (!hasAccess) {
-      return jsonError("Forbidden: caller cannot access this hive", 403);
-    }
-  }
-
-  const [hive] = await sql`SELECT id FROM hives WHERE id = ${id}`;
-  if (!hive) return jsonError("hive not found", 404);
 
   let body: TargetInput;
   try {
@@ -79,6 +74,17 @@ export async function POST(
   } catch {
     return jsonError("invalid JSON", 400);
   }
+
+  const requestedHive = requireHiveTargetMatchesPath({ kind: "body", body: body as Record<string, unknown> }, id);
+  if (requestedHive.ok === false) return requestedHive.response;
+
+  const target = await requireStrictHiveTarget(
+    sql,
+    user,
+    { kind: "path", params: { id }, key: "id" },
+    { mode: "mutate", label: "id" },
+  );
+  if (target.ok === false) return target.response;
 
   if (typeof body.title !== "string" || body.title.trim() === "") {
     return jsonError("title is required", 400);

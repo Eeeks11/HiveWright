@@ -91,6 +91,7 @@ function makeRequest(body: unknown, headers: Record<string, string> = {}): Reque
 
 function completionBody(summary: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    hiveId: bizId,
     summary,
     evidence: [
       {

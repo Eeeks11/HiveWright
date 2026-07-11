@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
+import { OWNER_ACTION_REQUIRED_SQL } from "@/decisions/visibility";
 import { getHiveResumeReadiness } from "@/hives/resume-readiness";
 import { getHiveCreationPause } from "@/operations/creation-pause";
+import { hasSupervisorManagedTerminalDisposition } from "./reference-terminal-disposition";
 import type {
   FindingKind,
   FindingSeverity,
@@ -323,8 +325,15 @@ async function fetchMetrics(
         WHERE hive_id = ${hiveId} AND status = 'active'
       ) AS active_goals,
       (
-        SELECT COUNT(*)::int FROM decisions
-        WHERE hive_id = ${hiveId} AND status = 'pending'
+        SELECT COUNT(*)::int
+        FROM decisions d
+        JOIN hives h ON h.id = d.hive_id
+        LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
+        WHERE d.hive_id = ${hiveId}
+          AND d.status = 'pending'
+          AND d.kind = 'decision'
+          AND d.is_qa_fixture = false
+          AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
       ) AS open_decisions,
       (
         SELECT COUNT(*)::int FROM tasks
@@ -460,9 +469,14 @@ async function detectAgingDecisions(
       d.id, d.title, d.priority, d.created_at,
       EXTRACT(EPOCH FROM (NOW() - d.created_at)) / 3600 AS age_hours
     FROM decisions d
+    JOIN hives h ON h.id = d.hive_id
+    LEFT JOIN tasks t ON t.id = d.task_id AND t.hive_id = d.hive_id
     WHERE d.hive_id = ${hiveId}
       AND d.status = 'pending'
+      AND d.kind = 'decision'
+      AND d.is_qa_fixture = false
       AND d.owner_response IS NULL
+      AND ${sql.unsafe(OWNER_ACTION_REQUIRED_SQL)}
       AND (
         (
           d.priority = 'urgent'
@@ -560,6 +574,25 @@ const TERMINAL_VERIFICATION_IMPLEMENTATION_PATTERNS = [
   /\bupdate or add focused tests\b/i,
 ];
 
+const CANONICAL_DOWNSTREAM_DISPOSITION_PATTERNS = [
+  /\b(?:issue|github issue|jira|linear)\s*#\d+\b/i,
+  /\b(?:pr|pull request)\s*#\d+\b/i,
+  /\b(?:owner\s+)?decision\s+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i,
+  /\bno_action_notes\b/i,
+  /\bterminal[_ -]?no[_ -]?action\b/i,
+  /\bno (?:downstream )?action (?:needed|required)\b/i,
+  /\bno follow-up needed\b/i,
+];
+
+const NOVEL_SCAN_RESIDUE_PATTERNS = [
+  /\bnovel (?:technical )?issue\b/i,
+  /\brecurring defect\b/i,
+  /\b(?:bug|defect|regression|outage|incident|failure|drift|bottleneck)\b/i,
+  /\brecommend(?:ation)?\b/i,
+  /\baction needed\b/i,
+  /\bfollow-up\b/i,
+];
+
 function matchesAnyPattern(
   text: string,
   patterns: readonly RegExp[],
@@ -586,6 +619,7 @@ export function isTerminalVerificationTask(input: {
   title: string | null;
   brief: string | null;
   hasWorkProduct: boolean;
+  resultSummary: string | null;
   failureReason: string | null;
 }): boolean {
   return getTerminalVerificationDecision(input).eligible;
@@ -595,6 +629,7 @@ export function getTerminalVerificationDecision(input: {
   title: string | null;
   brief: string | null;
   hasWorkProduct: boolean;
+  resultSummary: string | null;
   failureReason: string | null;
 }): {
   eligible: boolean;
@@ -603,9 +638,12 @@ export function getTerminalVerificationDecision(input: {
   implementationCue: boolean;
   hasWorkProduct: boolean;
   blockedByFailureReason: boolean;
+  canonicalDownstreamDisposition: boolean;
+  novelResidueWithoutDisposition: boolean;
 } {
   const blockedByFailureReason = input.failureReason !== null;
   const text = [input.title ?? "", input.brief ?? ""].join("\n").trim();
+  const resultSummary = input.resultSummary ?? "";
   const verificationLike = TERMINAL_VERIFICATION_INTENT_RE.test(text);
   const proofOnly = matchesAnyPattern(
     text,
@@ -615,17 +653,27 @@ export function getTerminalVerificationDecision(input: {
     text,
     TERMINAL_VERIFICATION_IMPLEMENTATION_PATTERNS,
   );
+  const canonicalDownstreamDisposition = matchesAnyPattern(
+    resultSummary,
+    CANONICAL_DOWNSTREAM_DISPOSITION_PATTERNS,
+  );
+  const novelResidueWithoutDisposition =
+    matchesAnyPattern(resultSummary, NOVEL_SCAN_RESIDUE_PATTERNS)
+    && !canonicalDownstreamDisposition;
   return {
     eligible:
       !blockedByFailureReason
       && verificationLike
       && proofOnly
-      && !implementationCue,
+      && !implementationCue
+      && !novelResidueWithoutDisposition,
     verificationLike,
     proofOnly,
     implementationCue,
     hasWorkProduct: input.hasWorkProduct,
     blockedByFailureReason,
+    canonicalDownstreamDisposition,
+    novelResidueWithoutDisposition,
   };
 }
 
@@ -840,12 +888,13 @@ async function detectUnsatisfiedCompletions(
       completed_at: Date;
       result_summary: string | null;
       failure_reason: string | null;
+      terminal_disposition: unknown;
       has_work_product: boolean;
     }>
   >`
     SELECT
       t.id, t.assigned_to, t.title, t.brief, t.completed_at, t.result_summary,
-      t.failure_reason,
+      t.failure_reason, t.terminal_disposition,
       EXISTS (SELECT 1 FROM work_products wp WHERE wp.task_id = t.id) AS has_work_product
     FROM tasks t
     WHERE t.hive_id = ${hiveId}
@@ -893,10 +942,16 @@ async function detectUnsatisfiedCompletions(
   return rows
     .filter(
       (row) =>
+        (
+          row.failure_reason !== null
+          || !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)
+        )
+        &&
         !isTerminalVerificationTask({
           title: row.title,
           brief: row.brief,
           hasWorkProduct: row.has_work_product,
+          resultSummary: row.result_summary,
           failureReason: row.failure_reason,
         }),
     )
@@ -1192,11 +1247,13 @@ async function detectOrphanOutputs(
       assigned_to: string;
       title: string;
       completed_at: Date;
+      terminal_disposition: unknown;
       work_product_count: number;
     }>
   >`
     SELECT
       t.id, t.assigned_to, t.title, t.completed_at,
+      t.terminal_disposition,
       (SELECT COUNT(*)::int FROM work_products wp WHERE wp.task_id = t.id) AS work_product_count
     FROM tasks t
     WHERE t.hive_id = ${hiveId}
@@ -1232,7 +1289,7 @@ async function detectOrphanOutputs(
           AND r.actions->'findings_addressed' @> to_jsonb('orphan_output:' || t.id::text)
       )
   `;
-  return rows.map((row) => ({
+  return rows.filter((row) => !hasSupervisorManagedTerminalDisposition(row.terminal_disposition)).map((row) => ({
     id: findingId("orphan_output", row.id),
     kind: "orphan_output",
     severity: "info" as FindingSeverity,

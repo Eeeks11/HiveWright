@@ -298,9 +298,11 @@ export function EaChatPanel({
       setStatusText("EA response complete");
       await queryClient.invalidateQueries({ queryKey: queryKeys.eaChat.active(hiveId) });
     },
-    onError: (error) => {
+    onError: async (error) => {
+      setStreamingAssistant(null);
       setSendError(error instanceof Error ? error.message : "Failed to send message");
       setStatusText("Message was not sent");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.eaChat.active(hiveId) });
     },
   });
 
@@ -817,7 +819,15 @@ function MessageBubble({
   onToggleExpanded: () => void;
 }) {
   const isOwner = message.role === "owner";
-  const content = message.content || (message.status === "streaming" ? "EA is thinking..." : "");
+  const failed = message.status === "failed";
+  const content = message.content || (message.status === "streaming"
+    ? "EA is thinking..."
+    : failed
+      ? "EA did not return a response."
+      : "");
+  const failureDetail = failed && "error" in message
+    ? message.error ?? "EA response failed before completion."
+    : null;
   const long = !isOwner && content.split(/\s+/).length > 1200;
   const visibleContent = long && !expanded ? content.split(/\n\n/).slice(0, 1).join("\n\n") : content;
   const createdAt = new Date(message.createdAt);
@@ -827,6 +837,7 @@ function MessageBubble({
     <article
       className={cn("flex", isOwner ? "justify-end" : "justify-start")}
       aria-label={label}
+      role={failed ? "alert" : undefined}
     >
       <div
         className={cn(
@@ -841,9 +852,14 @@ function MessageBubble({
           {isOwner ? "Owner" : "EA"}
           {message.status === "queued" && " · Sending"}
           {message.status === "streaming" && " · Thinking"}
-          {message.status === "failed" && " · Runtime error"}
+          {failed && " · Response incomplete"}
         </div>
         <div className="whitespace-pre-wrap break-words">{visibleContent}</div>
+        {failed && (
+          <div className="mt-2 border-t border-destructive/20 pt-2 text-xs font-medium">
+            Response incomplete. {failureDetail} Retry by sending your message again.
+          </div>
+        )}
         {long && (
           <Button
             type="button"

@@ -154,6 +154,30 @@ describe("mountDirectWsHandler", () => {
     expect(mocks.runtimeFeedMicAudio).toHaveBeenCalledWith(pcm);
   });
 
+  it("closes oversized binary frames before forwarding audio", async () => {
+    const token = signVoiceSessionToken({ hiveId: "hive-1", ownerId: "owner-1" });
+    const ws = new FakeWs();
+    await mountDirectWsHandler(fakeSql, ws as unknown as WebSocket, fakeRequest(token));
+
+    ws.emit("message", Buffer.alloc(256 * 1024 + 1), true);
+
+    expect(ws.closed).toBe(true);
+    expect(ws.closeCode).toBe(1009);
+    expect(mocks.runtimeFeedMicAudio).not.toHaveBeenCalled();
+  });
+
+  it("closes oversized control frames before parsing JSON", async () => {
+    const token = signVoiceSessionToken({ hiveId: "hive-1", ownerId: "owner-1" });
+    const ws = new FakeWs();
+    await mountDirectWsHandler(fakeSql, ws as unknown as WebSocket, fakeRequest(token));
+
+    ws.emit("message", "x".repeat(16 * 1024 + 1), false);
+
+    expect(ws.closed).toBe(true);
+    expect(ws.closeCode).toBe(1009);
+    expect(mocks.runtimeStop).not.toHaveBeenCalled();
+  });
+
   it("calls runtime.stop on a JSON {type:'hangup'} control frame", async () => {
     const token = signVoiceSessionToken({ hiveId: "hive-1", ownerId: "owner-1" });
     const ws = new FakeWs();

@@ -31,7 +31,7 @@ async function main() {
   }
 
   console.log(
-    `[verify-landed-state] ok: clean ${expectedBranch} worktree${requiredAncestors.length ? ` with required ancestors ${requiredAncestors.join(", ")}` : ""}`,
+    `[verify-landed-state] ok: clean landed state for ${expectedBranch}${requiredAncestors.length ? ` with required ancestors ${requiredAncestors.join(", ")}` : ""}`,
   );
 }
 

@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError, parseSearchParams } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "../../_lib/hive-target";
 
 const PREVIEW_LIMIT = 160;
 
@@ -18,22 +18,15 @@ function buildPreview(content: string) {
 export async function GET(request: Request) {
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
     const q = params.get("q");
     const limit = params.getInt("limit", 20);
     const includeContent = wantsFullView(params.get("view"));
 
-    if (!hiveId) {
-      return jsonError("Missing required parameter: hiveId", 400);
-    }
     const authz = await requireApiUser();
     if ("response" in authz) return authz.response;
-    if (!authz.user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, authz.user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: hive access required", 403);
-      }
-    }
+    const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
 
     const pattern = q ? `%${q}%` : "%";
 

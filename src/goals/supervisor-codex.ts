@@ -5,8 +5,14 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt, buildCommentWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { codexCliModelName, resolveGoalSupervisorRuntime } from "./supervisor-routing";
-import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
+import { buildGoalSupervisorProcessEnv, loadGoalSupervisorCredentials } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
+import {
+  captureGoalProgress,
+  claimGoalSupervisorStart,
+  finalizeGoalSupervisorStart,
+  releaseGoalSupervisorStart,
+} from "./supervisor-start-guard";
 
 /**
  * codex-based goal-supervisor lifecycle. Mirrors supervisor-openclaw.ts so the
@@ -27,22 +33,13 @@ import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
 const CODEX_BIN = ["/home/hivewright/.local/bin/codex", "/home/hivewright/.npm-global/bin/codex", "codex"]
   .find((p) => { try { fs.accessSync(p); return true; } catch { return false; } }) || "codex";
 
-function buildCodexEnv(supervisorSession: string): NodeJS.ProcessEnv {
-  const env = buildGoalSupervisorProcessEnv(process.env, supervisorSession);
-  // Same hygiene as the codex adapter — strip OPENAI key so codex uses the
-  // owner's ChatGPT OAuth instead of per-token API billing.
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
-  return env;
-}
-
 const THREAD_ID_FILE = ".codex-thread-id";
 
 function runCodex(
   args: string[],
   cwd: string,
   prompt: string,
-  supervisorSession: string,
+  environment: { credentials: Record<string, string>; goalId: string; hiveId: string; supervisorSession: string },
   timeoutMs = 14_400_000,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
@@ -50,7 +47,7 @@ function runCodex(
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       timeout: timeoutMs,
-      env: buildCodexEnv(supervisorSession),
+      env: buildGoalSupervisorProcessEnv({ adapter: "codex", ...environment }),
     });
     let stdout = "", stderr = "";
     proc.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
@@ -99,6 +96,7 @@ export async function startGoalSupervisor(
   fs.mkdirSync(workspacePath, { recursive: true });
 
   const initialPrompt = await buildSupervisorInitialPrompt(sql, goalId);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const agentsMd = `# Goal Supervisor
 
@@ -115,8 +113,11 @@ ${initialPrompt}
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), agentsMd, "utf-8");
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
-  // Mark started immediately so findNewGoals doesn't re-trigger this goal.
-  await sql`UPDATE goals SET session_id = ${supervisorSession} WHERE id = ${goalId}`;
+  // Atomically claim the start so concurrent lifecycle polls cannot launch
+  // duplicate supervisor work for the same goal.
+  const claimed = await claimGoalSupervisorStart(sql, goalId, supervisorSession);
+  if (!claimed) return { agentId };
+  const progressBaseline = await captureGoalProgress(sql, goalId);
 
   const args = [
     "exec",
@@ -127,12 +128,28 @@ ${initialPrompt}
     "-C", workspacePath,
   ];
 
-  const runResult = await runCodex(args, workspacePath, initialPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, initialPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor-codex] codex exec failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}`);
-    await sql`UPDATE goals SET session_id = NULL WHERE id = ${goalId}`;
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: `Supervisor run failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 300)}` };
+  }
+
+  const progress = await finalizeGoalSupervisorStart(
+    sql,
+    goalId,
+    supervisorSession,
+    progressBaseline,
+  );
+  if (!progress.progressed) {
+    console.warn(`[supervisor-codex] codex exec exited successfully without durable progress for goal ${goalId}`);
+    return { agentId, error: "Supervisor exited successfully without durable goal progress; start released for retry" };
   }
 
   const threadId = extractThreadId(runResult.stdout);
@@ -171,6 +188,7 @@ export async function wakeUpSupervisor(
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   const wakeUpPrompt = await buildSprintWakeUpPrompt(sql, goalId, sprintNumber);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
@@ -202,7 +220,12 @@ export async function wakeUpSupervisor(
     ? ["exec", "resume", threadId, ...resumeFlags, "-"]
     : ["exec", ...freshFlags];
 
-  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };
@@ -249,6 +272,7 @@ export async function wakeUpSupervisorOnComment(
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
   const wakeUpPrompt = await buildCommentWakeUpPrompt(sql, goalId, commentId);
+  const credentials = await loadGoalSupervisorCredentials(sql, { goalId, hiveId: goal.hive_id as string });
 
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
@@ -270,7 +294,12 @@ export async function wakeUpSupervisorOnComment(
     ? ["exec", "resume", threadId, ...commonFlags, "-"]
     : ["exec", ...commonFlags, "-C", workspacePath];
 
-  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, supervisorSession);
+  const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
+    credentials,
+    goalId,
+    hiveId: goal.hive_id as string,
+    supervisorSession,
+  });
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };

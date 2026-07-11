@@ -203,6 +203,8 @@ export const SUPERVISOR_TOOLS: SupervisorTool[] = [
   },
 ];
 
+const FINAL_GOAL_STATUSES = new Set(["achieved", "execution_ready", "blocked_on_owner_channel"]);
+
 export interface ToolResult {
   success: boolean;
   message: string;
@@ -248,9 +250,18 @@ export async function executeSupervisorTool(
           }
         }
       }
-      const [goal] = await sql`
-        SELECT project_id FROM goals WHERE id = ${goalId} AND hive_id = ${hiveId}
+      const [goal] = await sql<{
+        project_id: string | null;
+        status: string;
+        title: string;
+        priority: number;
+        budget_cents: number | null;
+      }[]>`
+        SELECT project_id, status, title, priority, budget_cents FROM goals WHERE id = ${goalId} AND hive_id = ${hiveId}
       `;
+      if (!goal) {
+        return { success: false, message: `create_task rejected: goal '${goalId}' does not belong to this hive.` };
+      }
       const requestedProjectId = typeof args.projectId === "string" && args.projectId.trim()
         ? args.projectId.trim()
         : null;
@@ -262,7 +273,7 @@ export async function executeSupervisorTool(
           return { success: false, message: `create_task rejected: projectId '${requestedProjectId}' does not belong to this hive.` };
         }
       }
-      const projectId = requestedProjectId ?? (goal?.project_id as string | null) ?? null;
+      const projectId = requestedProjectId ?? goal.project_id ?? null;
       const pipelineGate = await rejectDirectContentTaskWhenPipelineFits(sql, hiveId, args, taskKind);
       if (pipelineGate) return pipelineGate;
       const sourceTask = await resolveSourceTask(sql, hiveId, goalId, args, "create_task");
@@ -282,6 +293,34 @@ export async function executeSupervisorTool(
           };
         }
       }
+      let effectiveGoalId = goalId;
+      let followUpGoalId: string | null = null;
+      if (FINAL_GOAL_STATUSES.has(goal.status)) {
+        const taskTitle = String(args.title ?? "follow-up task").trim() || "follow-up task";
+        const [followUpGoal] = await sql<{ id: string }[]>`
+          INSERT INTO goals (
+            hive_id, project_id, parent_id, title, description, priority, status, budget_cents
+          )
+          VALUES (
+            ${hiveId},
+            ${projectId},
+            ${goalId},
+            ${`Follow-up: ${taskTitle}`.slice(0, 500)},
+            ${[
+              `Automatically created because goal-supervisor attempted to add executable work to final-state goal ${goalId} (${goal.status}).`,
+              `Original goal: ${goal.title}`,
+              "Final goals must remain final; follow-up work is kept claimable under this active goal.",
+            ].join("\n")},
+            ${goal.priority},
+            'active',
+            ${goal.budget_cents}
+          )
+          RETURNING id
+        `;
+        effectiveGoalId = followUpGoal.id;
+        followUpGoalId = followUpGoal.id;
+      }
+
       const [task] = await sql`
         INSERT INTO tasks (
           hive_id, assigned_to, created_by, title, brief, acceptance_criteria,
@@ -289,12 +328,19 @@ export async function executeSupervisorTool(
         )
         VALUES (
           ${hiveId}, ${args.assigned_to}, 'goal-supervisor', ${args.title},
-          ${args.brief}, ${args.acceptance_criteria ?? null}, ${goalId},
+          ${args.brief}, ${args.acceptance_criteria ?? null}, ${effectiveGoalId},
           ${args.sprint_number}, ${args.qa_required ?? false}, ${projectId},
           ${parentTaskId}
         )
         RETURNING id
       `;
+      if (followUpGoalId) {
+        return {
+          success: true,
+          message: `Task created in active follow-up goal ${followUpGoalId}: ${task.id}`,
+          data: { taskId: task.id, goalId: followUpGoalId, originalGoalId: goalId, reconciledFromFinalGoal: true },
+        };
+      }
       return { success: true, message: `Task created: ${task.id}`, data: { taskId: task.id } };
     }
     case "create_goal_plan": {

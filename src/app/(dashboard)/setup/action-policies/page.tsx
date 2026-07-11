@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
+import { useSearchParams } from "next/navigation";
 
 type Decision = "allow" | "require_approval" | "block";
 type EffectType = "read" | "notify" | "write" | "financial" | "destructive" | "system";
@@ -43,8 +45,15 @@ const DECISIONS: Decision[] = ["allow", "require_approval", "block"];
 const EFFECT_TYPES: EffectType[] = ["read", "notify", "write", "financial", "destructive", "system"];
 const RISK_TIERS: RiskTier[] = ["low", "medium", "high", "critical"];
 
-export default function ActionPoliciesPage() {
+function ActionPoliciesPageContent() {
   const { selected } = useHiveContext();
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
+  const target = useResolvedHiveTarget(targetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : (selected?.id ?? null);
+  const effectiveHiveName = targetHiveId && target.targetHive ? target.targetHive.name : selected?.name;
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(false);
@@ -53,11 +62,11 @@ export default function ActionPoliciesPage() {
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selected?.id) return;
+    if (!effectiveHiveId) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(`/api/action-policies?hiveId=${selected.id}`, { signal: controller.signal })
+    fetch(`/api/action-policies?hiveId=${effectiveHiveId}`, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) throw new Error(await res.text());
         return res.json();
@@ -71,13 +80,21 @@ export default function ActionPoliciesPage() {
       })
       .finally(() => setLoading(false));
     return () => controller.abort();
-  }, [selected?.id]);
+  }, [effectiveHiveId]);
 
   const operationsByConnector = useMemo(() => {
     return Object.fromEntries(connectors.map((connector) => [connector.slug, connector.operations]));
   }, [connectors]);
 
-  if (!selected) {
+  if (targetHiveId && target.isUnresolvedTarget) {
+    return (
+      <div className="space-y-6">
+        <UnresolvedHiveTargetMessage hiveId={targetHiveId} />
+      </div>
+    );
+  }
+
+  if (!selected && !effectiveHiveId) {
     return (
       <div className="space-y-6">
         <Header />
@@ -122,7 +139,8 @@ export default function ActionPoliciesPage() {
   }
 
   async function savePolicies() {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Saving action policies")) return;
     setSaving(true);
     setError(null);
     setStatus(null);
@@ -130,7 +148,7 @@ export default function ActionPoliciesPage() {
       const res = await fetch("/api/action-policies", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hiveId: selected.id, policies }),
+        body: JSON.stringify({ hiveId: effectiveHiveId, policies }),
       });
       if (!res.ok) throw new Error(await res.text());
       const body = await res.json();
@@ -145,7 +163,9 @@ export default function ActionPoliciesPage() {
 
   return (
     <div className="space-y-6">
-      <Header />
+      <Header hiveName={effectiveHiveName} />
+
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/action-policies" />
 
       <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100">
         Business-specific rules are configured per hive; HiveWright only enforces the policy.
@@ -472,12 +492,12 @@ function lines(value: string): string[] {
   return value.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean);
 }
 
-function Header() {
+function Header({ hiveName }: { hiveName?: string | null } = {}) {
   return (
     <div>
       <h1 className="text-2xl font-semibold">Action policies</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        Configure generic allow, approval, and block policies for external connector actions.
+        Configure generic allow, approval, and block policies for external connector actions scoped to {hiveName ?? "the selected hive"}.
       </p>
     </div>
   );
@@ -498,4 +518,12 @@ function normalizePolicy(policy: Partial<Policy>): Policy {
     reason: policy.reason ?? null,
     conditions: policy.conditions ?? {},
   };
+}
+
+export default function ActionPoliciesPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Action policies loading...</div>}>
+      <ActionPoliciesPageContent />
+    </Suspense>
+  );
 }

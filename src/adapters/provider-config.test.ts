@@ -28,12 +28,16 @@ describe("calculateCostCents", () => {
     });
   });
 
-  it("computes cost for Gemini 3.1 Pro Preview", () => {
-    const cents = calculateCostCents("google/gemini-3.1-pro-preview", 10_000, 5_000);
-    expect(cents).toBe(8);
-    expect(getModelPricing("google/gemini-3.1-pro-preview")).toEqual({
-      inputPer1k: 0.2,
-      outputPer1k: 1.2,
+  it("computes cost for stable Gemini 2.5 routes", () => {
+    const cents = calculateCostCents("google/gemini-2.5-flash", 10_000, 5_000);
+    expect(cents).toBe(2);
+    expect(getModelPricing("google/gemini-2.5-flash")).toEqual({
+      inputPer1k: 0.03,
+      outputPer1k: 0.25,
+    });
+    expect(getModelPricing("google/gemini-2.5-pro")).toEqual({
+      inputPer1k: 0.125,
+      outputPer1k: 1.0,
     });
   });
 

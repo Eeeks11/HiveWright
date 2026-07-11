@@ -42,12 +42,12 @@ describe("classifyWork", () => {
     });
     const fallback = mockProvider("openrouter", async () => ({
       text: '{"type":"goal","confidence":0.8,"reasoning":"broad scope"}',
-      tokensIn: 80, tokensOut: 10, model: "google/gemini-2.0-flash-exp:free", provider: "openrouter",
+      tokensIn: 80, tokensOut: 10, model: "google/gemini-2.5-flash", provider: "openrouter",
     }));
 
     const outcome = await classifyWork("Launch a new product line", {
       primary, fallback,
-      primaryModel: "qwen3:32b", fallbackModel: "google/gemini-2.0-flash-exp:free",
+      primaryModel: "qwen3:32b", fallbackModel: "google/gemini-2.5-flash",
       confidenceThreshold: 0.6,
       timeoutMs: 15000, temperature: 0.1, maxTokens: 512,
       validRoles: VALID_ROLES,

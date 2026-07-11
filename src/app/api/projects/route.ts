@@ -1,7 +1,8 @@
 import { sql } from "../_lib/db";
 import { jsonOk, jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import { requireApiUser } from "../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 import { hiveProjectsPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 import fs from "fs";
 import path from "path";
@@ -102,19 +103,11 @@ export async function GET(request: Request) {
   const { user } = authz;
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
     const limit = params.getInt("limit", 50);
     const offset = params.getInt("offset", 0);
-
-    if (!hiveId) {
-      return jsonError("Missing required parameter: hiveId", 400);
-    }
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
-      }
-    }
 
     const [countRow] = await sql`
       SELECT COUNT(*) as total FROM projects WHERE hive_id = ${hiveId}
@@ -152,9 +145,9 @@ export async function POST(request: Request) {
     }
 
     if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
+      const canMutate = await canMutateHive(sql, user.id, hiveId);
+      if (!canMutate) {
+        return jsonError("Forbidden: hive mutation access required", 403);
       }
       if (explicitWorkspacePath) {
         return jsonError("Forbidden: explicit workspacePath requires system owner", 403);

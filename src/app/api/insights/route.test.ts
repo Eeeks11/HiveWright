@@ -21,17 +21,18 @@ vi.mock("@/auth/users", () => ({
 import { GET } from "./route";
 
 function request() {
-  return new Request("http://localhost/api/insights?hiveId=hive-1&status=new");
+  return new Request("http://localhost/api/insights?hiveId=11111111-1111-4111-8111-111111111111&status=new");
 }
 
 describe("GET /api/insights access control", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.sql.mockReset();
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
     mocks.canAccessHive.mockResolvedValue(true);
-    mocks.sql.mockResolvedValue([]);
+    mocks.sql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]).mockResolvedValueOnce([]);
   });
 
   it("returns 401 for signed-out callers", async () => {
@@ -52,8 +53,8 @@ describe("GET /api/insights access control", () => {
     const res = await GET(request() as never);
 
     expect(res.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
-    expect(mocks.sql).not.toHaveBeenCalled();
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mocks.sql).toHaveBeenCalledTimes(1);
   });
 
   it("returns 200 when the signed-in caller can access the hive", async () => {
@@ -62,7 +63,16 @@ describe("GET /api/insights access control", () => {
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual([]);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "hive-1");
-    expect(mocks.sql).toHaveBeenCalledTimes(1);
+    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mocks.sql).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 400 when hiveId is missing", async () => {
+    const res = await GET(new Request("http://localhost/api/insights?status=new") as never);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("hiveId is required");
+    expect(mocks.sql).not.toHaveBeenCalled();
   });
 });

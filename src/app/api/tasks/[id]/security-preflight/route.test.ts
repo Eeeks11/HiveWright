@@ -62,20 +62,22 @@ describe("GET /api/tasks/[id]/security-preflight", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "task-1", hive_id: "hive-1" }]);
+    mockSql.mockResolvedValueOnce([{ id: "task-1", hive_id: "11111111-1111-4111-8111-111111111111" }]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1/security-preflight"), params);
+    const res = await GET(new Request("http://localhost/api/tasks/task-1/security-preflight?hiveId=11111111-1111-4111-8111-111111111111"), params);
 
     expect(res.status).toBe(403);
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "11111111-1111-4111-8111-111111111111");
     expect(mockReadTaskSecurityPreflight).not.toHaveBeenCalled();
   });
 
   it("returns discrete secretScan and dependencyScan outcomes for accessible tasks", async () => {
-    mockSql.mockResolvedValueOnce([{ id: "task-1", hive_id: "hive-1" }]);
+    mockSql
+      .mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }])
+      .mockResolvedValueOnce([{ id: "task-1", hive_id: "11111111-1111-4111-8111-111111111111" }]);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1/security-preflight"), params);
+    const res = await GET(new Request("http://localhost/api/tasks/task-1/security-preflight?hiveId=11111111-1111-4111-8111-111111111111"), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);

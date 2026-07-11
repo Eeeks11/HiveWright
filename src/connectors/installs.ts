@@ -6,6 +6,12 @@ import {
   type ConnectorDefinition,
   type ConnectorScopeDeclaration,
 } from "@/connectors/registry";
+import {
+  DEFAULT_EA_FALLBACK_MODEL,
+  DEFAULT_EA_PRIMARY_MODEL,
+  getEaModelConfiguration,
+  updateEaModelConfiguration,
+} from "@/ea/native/model-selection";
 
 export type ConnectorInstallStatus = "active" | "disabled" | "broken";
 
@@ -105,6 +111,28 @@ function parseCount(value: number | string | undefined): number {
   if (typeof value === "number") return value;
   if (typeof value === "string") return Number.parseInt(value, 10) || 0;
   return 0;
+}
+
+const EA_CONNECTOR_SLUGS = new Set(["ea-discord", "voice-ea"]);
+
+async function persistSharedEaModelConfiguration(
+  sql: SqlExecutor,
+  hiveId: string,
+  connectorSlug: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  if (!EA_CONNECTOR_SLUGS.has(connectorSlug)) return;
+  const existing = await getEaModelConfiguration(sql, hiveId);
+  const hasExplicitModel = Object.prototype.hasOwnProperty.call(fields, "model");
+  const explicitModel = typeof fields.model === "string" && fields.model.trim()
+    ? fields.model
+    : null;
+  await updateEaModelConfiguration(sql, hiveId, {
+    primaryModel: hasExplicitModel
+      ? explicitModel
+      : existing.primaryModel ?? DEFAULT_EA_PRIMARY_MODEL,
+    fallbackModel: existing.fallbackModel ?? DEFAULT_EA_FALLBACK_MODEL,
+  });
 }
 
 function normalizeGrantedScopes(definition: ConnectorDefinition, requested: unknown): string[] {
@@ -302,6 +330,8 @@ export async function createConnectorInstall(
       updated_at AS "updatedAt"
   `;
 
+  await persistSharedEaModelConfiguration(sql, input.hiveId, definition.slug, input.fields);
+
   return redactConnectorInstallForOwner(row, definition);
 }
 
@@ -372,6 +402,10 @@ export async function updateConnectorInstall(
       created_at AS "createdAt",
       updated_at AS "updatedAt"
   `;
+
+  if (input.fields) {
+    await persistSharedEaModelConfiguration(sql, input.hiveId, definition.slug, input.fields);
+  }
 
   return redactConnectorInstallForOwner(row, definition);
 }

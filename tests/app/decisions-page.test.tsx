@@ -3,10 +3,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import DecisionsPage from "../../src/app/(dashboard)/decisions/page";
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/decisions",
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock("@/components/hive-context", () => ({
   useHiveContext: () => ({
     selected: { id: "hive-decisions", name: "Decision Hive" },
+    hives: [{ id: "hive-decisions", name: "Decision Hive" }],
     loading: false,
+    hasProvider: true,
   }),
 }));
 
@@ -106,6 +113,7 @@ describe("DecisionsPage", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
+            hiveId: "hive-decisions",
             response: "refine_brief_and_retry",
             selectedOptionKey: "refine_brief_and_retry",
             selectedOptionLabel: "Refine the brief and retry",
@@ -119,7 +127,7 @@ describe("DecisionsPage", () => {
     render(<DecisionsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText("Approve fallback decision?")).toBeTruthy();
+      expect(screen.getByRole("link", { name: "Approve fallback decision?" })).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -129,7 +137,7 @@ describe("DecisionsPage", () => {
         "/api/decisions/decision-no-options/respond",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ response: "approved" }),
+          body: JSON.stringify({ hiveId: "hive-decisions", response: "approved" }),
         }),
       );
     });

@@ -86,7 +86,7 @@ async function seedSessionUser(
 
 describe("GET /api/goals/:id/documents/plan", () => {
   it("returns 404 when no plan exists", async () => {
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`);
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`);
     const res = await getPlan(req, paramsFor(goalId));
     expect(res.status).toBe(404);
     const body = await res.json();
@@ -96,9 +96,9 @@ describe("GET /api/goals/:id/documents/plan", () => {
 
 describe("PUT /api/goals/:id/documents/plan", () => {
   it("rejects missing title with 400", async () => {
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({ body: "only body, no title" }),
+      body: JSON.stringify({ hiveId, body: "only body, no title" }),
     });
     const res = await putPlan(req, paramsFor(goalId));
     expect(res.status).toBe(400);
@@ -107,9 +107,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
   });
 
   it("rejects missing body with 400", async () => {
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({ title: "only title" }),
+      body: JSON.stringify({ hiveId, title: "only title" }),
     });
     const res = await putPlan(req, paramsFor(goalId));
     expect(res.status).toBe(400);
@@ -117,9 +117,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
 
   it("rejects body larger than 1 MiB with 413", async () => {
     const hugeBody = "x".repeat(1_048_577); // 1 MiB + 1 byte
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({ title: "huge", body: hugeBody }),
+      body: JSON.stringify({ hiveId, title: "huge", body: hugeBody }),
     });
     const res = await putPlan(req, paramsFor(goalId));
     expect(res.status).toBe(413);
@@ -129,9 +129,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
 
   it("returns 404 when the goal id does not exist", async () => {
     const fakeGoalId = "00000000-0000-0000-0000-000000000000";
-    const req = new Request(`http://localhost/api/goals/${fakeGoalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${fakeGoalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({ title: "no goal", body: "# body" }),
+      body: JSON.stringify({ hiveId, title: "no goal", body: "# body" }),
     });
     const res = await putPlan(req, paramsFor(fakeGoalId));
     expect(res.status).toBe(404);
@@ -140,9 +140,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
   });
 
   it("creates a plan on first PUT", async () => {
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}plan`,
         body: "# Goal Summary\nShip it.",
         createdBy: "owner",
@@ -159,9 +159,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
   it("allows a real system-owner session plan write without supervisor session proof", async () => {
     await seedSessionUser(OWNER_USER_ID, "owner-goal-documents@test.local", true);
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}owner plan`,
         body: "# Owner plan",
       }),
@@ -177,9 +177,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
     process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
     authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}blocked bearer plan`,
         body: "# Should not persist",
       }),
@@ -200,10 +200,10 @@ describe("PUT /api/goals/:id/documents/plan", () => {
     process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
     authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
       headers: { "X-Supervisor-Session": "gs-wrong-fixture" },
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}blocked wrong bearer plan`,
         body: "# Should not persist",
       }),
@@ -222,10 +222,10 @@ describe("PUT /api/goals/:id/documents/plan", () => {
     process.env.INTERNAL_SERVICE_TOKEN = INTERNAL_TOKEN;
     authState.authHeader = `Bearer ${INTERNAL_TOKEN}`;
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
       headers: { "X-Supervisor-Session": "gs-gdoc-api-fixture" },
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}supervisor plan`,
         body: "# Supervisor plan",
       }),
@@ -245,9 +245,9 @@ describe("PUT /api/goals/:id/documents/plan", () => {
       "member",
     );
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}member blocked plan`,
         body: "# Member blocked plan",
       }),
@@ -264,16 +264,16 @@ describe("PUT /api/goals/:id/documents/plan", () => {
   it("updates the plan and bumps revision on second PUT", async () => {
     // Create the plan first (revision 1)
     await putPlan(
-      new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
         method: "PUT",
-        body: JSON.stringify({ title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
+        body: JSON.stringify({ hiveId, title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
       }),
       paramsFor(goalId),
     );
     // Now update (should be revision 2)
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
       method: "PUT",
-      body: JSON.stringify({
+      body: JSON.stringify({ hiveId,
         title: `${PREFIX}plan`,
         body: "# Goal Summary\nShip it harder.",
       }),
@@ -290,22 +290,22 @@ describe("GET /api/goals/:id/documents/plan (after plan exists)", () => {
   it("returns the plan with 200 when one exists", async () => {
     // Create the plan first
     await putPlan(
-      new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
         method: "PUT",
-        body: JSON.stringify({ title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
+        body: JSON.stringify({ hiveId, title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
       }),
       paramsFor(goalId),
     );
     // Update to get revision 2
     await putPlan(
-      new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
         method: "PUT",
-        body: JSON.stringify({ title: `${PREFIX}plan`, body: "# Goal Summary\nShip it harder." }),
+        body: JSON.stringify({ hiveId, title: `${PREFIX}plan`, body: "# Goal Summary\nShip it harder." }),
       }),
       paramsFor(goalId),
     );
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan`);
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`);
     const res = await getPlan(req, paramsFor(goalId));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -318,14 +318,14 @@ describe("GET /api/goals/:id/documents", () => {
   it("returns all documents for the goal", async () => {
     // Create a plan so there is something to list
     await putPlan(
-      new Request(`http://localhost/api/goals/${goalId}/documents/plan`, {
+      new Request(`http://localhost/api/goals/${goalId}/documents/plan?hiveId=${hiveId}`, {
         method: "PUT",
-        body: JSON.stringify({ title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
+        body: JSON.stringify({ hiveId, title: `${PREFIX}plan`, body: "# Goal Summary\nShip it.", createdBy: "owner" }),
       }),
       paramsFor(goalId),
     );
 
-    const req = new Request(`http://localhost/api/goals/${goalId}/documents`);
+    const req = new Request(`http://localhost/api/goals/${goalId}/documents?hiveId=${hiveId}`);
     const res = await getDocuments(req, paramsFor(goalId));
     expect(res.status).toBe(200);
     const body = await res.json();

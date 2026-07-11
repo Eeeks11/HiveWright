@@ -1,8 +1,9 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { sql as appSql } from "@/app/api/_lib/db";
 import {
   appendMessage,
   closeActiveThread,
+  EA_MESSAGE_NEWEST_FIRST_ORDER_SQL,
   getOrCreateActiveThread,
   getThreadMessages,
   type EaMessage,
@@ -10,6 +11,7 @@ import {
 } from "./thread-store";
 import { buildEaPrompt } from "./prompt";
 import { runEaStream } from "./runner";
+import { recordEaModelRouteTelemetry, resolveEaModelRoute } from "./model-selection";
 import { emitEaChatEvent } from "./events";
 import { scheduleImplicitQualityExtraction } from "@/quality/ea-post-turn";
 import { type EaAttachment, renderEaAttachmentSection } from "./attachments";
@@ -17,6 +19,7 @@ import { type EaAttachment, renderEaAttachmentSection } from "./attachments";
 export type DashboardChatMessage = EaMessage;
 
 const DEFAULT_API_BASE_URL = "http://localhost:3002";
+const DASHBOARD_TURN_LOCK_PREFIX = "dashboard-ea-turn";
 
 export interface DashboardChatState {
   thread: EaThread;
@@ -49,11 +52,100 @@ export interface DashboardEaSubmitContext {
 }
 
 export interface DashboardEaClient {
-  submit(text: string, ctx: DashboardEaSubmitContext): Promise<AsyncIterable<string>>;
+  submit(text: string, ctx: DashboardEaSubmitContext): Promise<DashboardEaStream>;
 }
+
+export type DashboardEaFailureCategory =
+  | "aborted"
+  | "runner_failure"
+  | "empty_output"
+  | "preparation_failure";
+
+export interface DashboardEaStream extends AsyncIterable<string> {
+  threadId: string;
+  assistantMessageId: string;
+}
+
+export class DashboardEaStreamError extends Error {
+  constructor(
+    readonly category: DashboardEaFailureCategory,
+    readonly threadId: string,
+    readonly assistantMessageId: string,
+    message = "Dashboard EA stream failed",
+  ) {
+    super(message);
+    this.name = "DashboardEaStreamError";
+  }
+}
+
+const SAFE_FAILURE_MESSAGES: Record<DashboardEaFailureCategory, string> = {
+  aborted: "EA response was interrupted before completion.",
+  runner_failure: "EA response failed before completion.",
+  empty_output: "EA returned no response.",
+  preparation_failure: "EA response could not be started.",
+};
 
 export function dashboardChannelId(hiveId: string): string {
   return `dashboard:${hiveId}`.slice(0, 64);
+}
+
+function dashboardTurnLockKey(hiveId: string, channelId: string): string {
+  return `${DASHBOARD_TURN_LOCK_PREFIX}:${hiveId}:${channelId}`;
+}
+
+async function acquireDashboardTurnLock(
+  tx: TransactionSql,
+  hiveId: string,
+  channelId: string,
+): Promise<void> {
+  const [lock] = await tx<{ acquired: boolean }[]>`
+    SELECT pg_try_advisory_xact_lock(
+      hashtextextended(${dashboardTurnLockKey(hiveId, channelId)}, 0)
+    ) AS acquired
+  `;
+  if (lock?.acquired) return;
+
+  const [running] = await tx<{ threadId: string; assistantMessageId: string | null }[]>`
+    SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
+    FROM ea_threads AS thread
+    LEFT JOIN ea_messages AS message
+      ON message.thread_id = thread.id
+      AND message.role = 'assistant'
+      AND message.status = 'streaming'
+    WHERE thread.hive_id = ${hiveId}
+      AND thread.channel_id = ${channelId}
+      AND thread.status = 'active'
+    LIMIT 1
+  `;
+  throw new DashboardEaTurnInProgressError(
+    running?.threadId ?? "",
+    running?.assistantMessageId ?? "",
+  );
+}
+
+async function rejectStreamingDashboardTurn(
+  tx: TransactionSql,
+  hiveId: string,
+  channelId: string,
+): Promise<void> {
+  const [running] = await tx<{ threadId: string; assistantMessageId: string }[]>`
+    SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
+    FROM ea_threads AS thread
+    JOIN ea_messages AS message
+      ON message.thread_id = thread.id
+      AND message.role = 'assistant'
+      AND message.status = 'streaming'
+    WHERE thread.hive_id = ${hiveId}
+      AND thread.channel_id = ${channelId}
+      AND thread.status = 'active'
+    LIMIT 1
+  `;
+  if (running) {
+    throw new DashboardEaTurnInProgressError(
+      running.threadId,
+      running.assistantMessageId,
+    );
+  }
 }
 
 async function prepareDashboardTurn(
@@ -68,113 +160,248 @@ async function prepareDashboardTurn(
 ): Promise<{
   thread: EaThread;
   ownerMessage: EaMessage;
-  stream: AsyncIterable<string>;
+  assistantMessage: EaMessage;
+  stream: DashboardEaStream;
 }> {
-  const thread = await getOrCreateActiveThread(
-    sql,
-    input.hiveId,
-    dashboardChannelId(input.hiveId),
-  );
-
-  const [running] = await sql<{ id: string }[]>`
-    SELECT id
-    FROM ea_messages
-    WHERE thread_id = ${thread.id}
-      AND role = 'assistant'
-      AND status = 'streaming'
-    LIMIT 1
-  `;
-  if (running) {
-    throw new DashboardEaTurnInProgressError(thread.id, running.id);
-  }
   const attachments = input.attachments ?? [];
   const attachmentSection = renderEaAttachmentSection(attachments);
   const persistedOwnerContent = attachmentSection
     ? `${input.content}\n${attachmentSection}`
     : input.content;
-
-  const ownerMessage = await appendMessage(
-    sql,
-    thread.id,
-    "owner",
-    persistedOwnerContent,
-    null,
-    "dashboard",
-  );
-  await emitEaChatEvent(sql, {
-    type: "ea_message_created",
+  const { thread, ownerMessage, assistantMessage } = await claimDashboardTurn(sql, {
     hiveId: input.hiveId,
-    threadId: thread.id,
-    messageId: ownerMessage.id,
+    content: persistedOwnerContent,
   });
 
-  const [hive] = await sql<{ name: string }[]>`
-    SELECT name FROM hives WHERE id = ${input.hiveId}
-  `;
-  const history = await getThreadMessages(sql, thread.id);
-  const apiBaseUrl =
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.NEXT_PUBLIC_DASHBOARD_URL ??
-    DEFAULT_API_BASE_URL;
-  const prompt = await buildEaPrompt(sql, {
-    hiveId: input.hiveId,
-    hiveName: input.hiveName ?? hive?.name ?? "unknown",
-    history,
-    currentOwnerMessage: input.content,
-    apiBaseUrl,
-    auditContext: {
-      source: "dashboard",
-      sourceHiveId: input.hiveId,
-      threadId: thread.id,
-      ownerMessageId: ownerMessage.id,
-    },
-  });
-  const promptWithAttachments = attachments.length > 0
-    ? `${prompt}\n${attachmentSection}`
-    : prompt;
   const streamController = new AbortController();
   const signal = linkAbortSignals(input.signal, streamController.signal);
-  const eaStream = runEaStream(promptWithAttachments, {
-    signal,
-    attachmentPaths: attachments.map((attachment) => attachment.absolutePath),
-  });
+  let eaStream: AsyncIterable<string>;
+  try {
+    const [hive] = await sql<{ name: string }[]>`
+      SELECT name FROM hives WHERE id = ${input.hiveId}
+    `;
+    // Failed/partial output remains available to the owner for diagnosis, but
+    // is not replayed as if it were a completed assistant answer.
+    const history = (await getThreadMessages(sql, thread.id)).filter(
+      (message) => message.id !== assistantMessage.id && message.status === "sent",
+    );
+    const apiBaseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ??
+      process.env.NEXT_PUBLIC_DASHBOARD_URL ??
+      DEFAULT_API_BASE_URL;
+    const prompt = await buildEaPrompt(sql, {
+      hiveId: input.hiveId,
+      hiveName: input.hiveName ?? hive?.name ?? "unknown",
+      history,
+      currentOwnerMessage: input.content,
+      apiBaseUrl,
+      auditContext: {
+        source: "dashboard",
+        sourceHiveId: input.hiveId,
+        threadId: thread.id,
+        ownerMessageId: ownerMessage.id,
+      },
+    });
+    const promptWithAttachments = attachments.length > 0
+      ? `${prompt}\n${attachmentSection}`
+      : prompt;
+    const route = await resolveEaModelRoute(sql, input.hiveId);
+    await recordEaModelRouteTelemetry(sql, {
+      hiveId: input.hiveId,
+      transport: "dashboard",
+      route,
+    });
+    eaStream = runEaStream(promptWithAttachments, {
+      signal,
+      attachmentPaths: attachments.map((attachment) => attachment.absolutePath),
+      model: route.model,
+    });
+  } catch {
+    await finalizeAssistantMessage(sql, assistantMessage.id, {
+      content: "",
+      status: "failed",
+      error: SAFE_FAILURE_MESSAGES.preparation_failure,
+    });
+    throw new DashboardEaStreamError(
+      "preparation_failure",
+      thread.id,
+      assistantMessage.id,
+    );
+  }
 
-  const stream = (async function* () {
+  const generator = (async function* () {
     let accumulated = "";
     let completed = false;
+    let finalized = false;
     try {
-      for await (const chunk of eaStream) {
-        accumulated += chunk;
-        yield chunk;
+      try {
+        for await (const chunk of eaStream) {
+          accumulated += chunk;
+          yield chunk;
+        }
+      } catch (error) {
+        const category = signal.aborted || isAbortError(error)
+          ? "aborted"
+          : "runner_failure";
+        await finalizeAssistantMessage(sql, assistantMessage.id, {
+          content: accumulated,
+          status: "failed",
+          error: SAFE_FAILURE_MESSAGES[category],
+        });
+        finalized = true;
+        throw new DashboardEaStreamError(category, thread.id, assistantMessage.id);
       }
-      completed = true;
-    } finally {
-      if (!completed) {
-        streamController.abort();
+
+      if (signal.aborted) {
+        await finalizeAssistantMessage(sql, assistantMessage.id, {
+          content: accumulated,
+          status: "failed",
+          error: SAFE_FAILURE_MESSAGES.aborted,
+        });
+        finalized = true;
+        throw new DashboardEaStreamError("aborted", thread.id, assistantMessage.id);
       }
-      const assistantMessage = await appendMessage(
-        sql,
-        thread.id,
-        "assistant",
-        accumulated,
-        null,
-        "dashboard",
-      );
-      await emitEaChatEvent(sql, {
-        type: "ea_message_created",
-        hiveId: input.hiveId,
-        threadId: thread.id,
-        messageId: assistantMessage.id,
+
+      if (accumulated.trim().length === 0) {
+        await finalizeAssistantMessage(sql, assistantMessage.id, {
+          content: accumulated,
+          status: "failed",
+          error: SAFE_FAILURE_MESSAGES.empty_output,
+        });
+        finalized = true;
+        throw new DashboardEaStreamError(
+          "empty_output",
+          thread.id,
+          assistantMessage.id,
+          "EA returned an empty response",
+        );
+      }
+
+      await finalizeAssistantMessage(sql, assistantMessage.id, {
+        content: accumulated,
+        status: "sent",
+        error: null,
       });
+      finalized = true;
+      completed = true;
       scheduleImplicitQualityExtraction(sql, {
         hiveId: input.hiveId,
         ownerMessage: input.content,
         ownerMessageId: ownerMessage.id,
       });
+    } finally {
+      if (!completed) {
+        streamController.abort();
+      }
+      // Consumer cancellation (for example navigation away) calls return()
+      // on the generator rather than throwing through the loop. Preserve any
+      // partial owner-visible text, but never present it as a complete answer.
+      if (!finalized) {
+        await finalizeAssistantMessage(sql, assistantMessage.id, {
+          content: accumulated,
+          status: "failed",
+          error: SAFE_FAILURE_MESSAGES.aborted,
+        });
+      }
     }
   })();
+  const stream = Object.assign(generator, {
+    threadId: thread.id,
+    assistantMessageId: assistantMessage.id,
+  });
 
-  return { thread, ownerMessage, stream };
+  return { thread, ownerMessage, assistantMessage, stream };
+}
+
+async function claimDashboardTurn(
+  sql: Sql,
+  input: { hiveId: string; content: string },
+): Promise<{
+  thread: EaThread;
+  ownerMessage: EaMessage;
+  assistantMessage: EaMessage;
+}> {
+  const channelId = dashboardChannelId(input.hiveId);
+
+  return sql.begin(async (tx) => {
+    await acquireDashboardTurnLock(tx, input.hiveId, channelId);
+
+    const thread = await getOrCreateActiveThread(tx, input.hiveId, channelId);
+    const [running] = await tx<{ id: string }[]>`
+      SELECT id
+      FROM ea_messages
+      WHERE thread_id = ${thread.id}
+        AND role = 'assistant'
+        AND status = 'streaming'
+      LIMIT 1
+    `;
+    if (running) {
+      throw new DashboardEaTurnInProgressError(thread.id, running.id);
+    }
+
+    const ownerMessage = await appendMessage(
+      tx,
+      thread.id,
+      "owner",
+      input.content,
+      null,
+      "dashboard",
+    );
+    await emitEaChatEvent(tx, {
+      type: "ea_message_created",
+      hiveId: input.hiveId,
+      threadId: thread.id,
+      messageId: ownerMessage.id,
+    });
+
+    const assistantMessage = await appendMessage(
+      tx,
+      thread.id,
+      "assistant",
+      "",
+      null,
+      "dashboard",
+      null,
+      "streaming",
+    );
+    await emitEaChatEvent(tx, {
+      type: "ea_message_created",
+      hiveId: input.hiveId,
+      threadId: thread.id,
+      messageId: assistantMessage.id,
+    });
+
+    return { thread, ownerMessage, assistantMessage };
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+async function finalizeAssistantMessage(
+  sql: Sql,
+  messageId: string,
+  input: { content: string; status: "sent" | "failed"; error: string | null },
+): Promise<EaMessage | undefined> {
+  const [message] = await sql<EaMessage[]>`
+    UPDATE ea_messages AS target
+    SET content = ${input.content},
+        status = ${input.status},
+        error = ${input.error},
+        updated_at = NOW()
+    WHERE target.id = ${messageId}
+      AND target.status = 'streaming'
+    RETURNING id, thread_id as "threadId", role, content,
+              discord_message_id as "discordMessageId",
+              source,
+              voice_session_id as "voiceSessionId",
+              status,
+              error,
+              created_at as "createdAt",
+              updated_at as "updatedAt"
+  `;
+  return message;
 }
 
 function linkAbortSignals(
@@ -225,7 +452,7 @@ export async function getDashboardChat(
     FROM ea_messages
     WHERE thread_id = ${thread.id}
       AND (${input.before ?? null}::timestamp IS NULL OR created_at < ${input.before ?? null}::timestamp)
-    ORDER BY created_at DESC
+    ORDER BY ${sql.unsafe(EA_MESSAGE_NEWEST_FIRST_ORDER_SQL)}
     LIMIT ${limit + 1}
   `;
 
@@ -243,8 +470,12 @@ export async function startFreshDashboardThread(
   input: { hiveId: string; userId: string },
 ): Promise<EaThread> {
   const channelId = dashboardChannelId(input.hiveId);
-  await closeActiveThread(sql, input.hiveId, channelId);
-  return getOrCreateActiveThread(sql, input.hiveId, channelId);
+  return sql.begin(async (tx) => {
+    await acquireDashboardTurnLock(tx, input.hiveId, channelId);
+    await rejectStreamingDashboardTurn(tx, input.hiveId, channelId);
+    await closeActiveThread(tx, input.hiveId, channelId);
+    return getOrCreateActiveThread(tx, input.hiveId, channelId);
+  });
 }
 
 export async function sendDashboardMessage(
@@ -282,10 +513,7 @@ export async function sendDashboardMessage(
            created_at as "createdAt",
            updated_at as "updatedAt"
     FROM ea_messages
-    WHERE thread_id = ${turn.thread.id}
-      AND role = 'assistant'
-    ORDER BY created_at DESC
-    LIMIT 1
+    WHERE id = ${turn.assistantMessage.id}
   `;
   const assistantMessage = latestAssistant;
   if (!assistantMessage) {

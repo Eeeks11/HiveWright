@@ -14,6 +14,9 @@ if [ -f "$SECRETS_FILE" ]; then
   # shellcheck disable=SC1090
   source "$SECRETS_FILE"
 fi
+# The raw owner setup token is read from the file by the provisioning command
+# only. Never propagate it into dashboard, dispatcher, build, or test processes.
+unset HIVEWRIGHT_OWNER_SETUP_TOKEN
 set +a
 
 export PATH="$PWD/node_modules/.bin:$PATH"

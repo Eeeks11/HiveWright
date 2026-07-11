@@ -39,11 +39,12 @@ export function parseAllowedHostnames(value: unknown): string[] {
 export async function validateHttpWebhookDestination(
   rawUrl: string,
   allowedHostnamesConfig: unknown,
+  label = "http-webhook",
 ): Promise<HttpWebhookDestination> {
   const allowedHostnames = parseAllowedHostnames(allowedHostnamesConfig);
   if (allowedHostnames.length === 0) {
     throw new HttpWebhookBlockedError(
-      "http-webhook is disabled until Allowed hostnames is configured",
+      `${label} is disabled until Allowed hostnames is configured`,
     );
   }
 
@@ -51,17 +52,17 @@ export async function validateHttpWebhookDestination(
   try {
     url = new URL(rawUrl);
   } catch {
-    throw new HttpWebhookBlockedError("http-webhook target URL is invalid");
+    throw new HttpWebhookBlockedError(`${label} target URL is invalid`);
   }
 
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new HttpWebhookBlockedError("http-webhook only supports HTTP(S) URLs");
+    throw new HttpWebhookBlockedError(`${label} only supports HTTP(S) URLs`);
   }
 
   const hostname = normalizeHostname(url.hostname);
   if (!hostname || !allowedHostnames.includes(hostname)) {
     throw new HttpWebhookBlockedError(
-      `http-webhook hostname ${url.hostname} is not in Allowed hostnames`,
+      `${label} hostname ${url.hostname} is not in Allowed hostnames`,
     );
   }
 
@@ -70,19 +71,19 @@ export async function validateHttpWebhookDestination(
     answers = await dnsLookup(hostname, { all: true, verbatim: true });
   } catch (error) {
     throw new HttpWebhookBlockedError(
-      `http-webhook DNS resolution failed for ${hostname}: ${(error as Error).message}`,
+      `${label} DNS resolution failed for ${hostname}: ${(error as Error).message}`,
     );
   }
 
   if (answers.length === 0) {
-    throw new HttpWebhookBlockedError(`http-webhook DNS returned no addresses for ${hostname}`);
+    throw new HttpWebhookBlockedError(`${label} DNS returned no addresses for ${hostname}`);
   }
 
   const addresses = answers.map((answer) => answer.address);
   const unsafeAddress = addresses.find((address) => !isPublicIpAddress(address));
   if (unsafeAddress) {
     throw new HttpWebhookBlockedError(
-      `http-webhook destination resolved to unsafe address ${unsafeAddress}`,
+      `${label} destination resolved to unsafe address ${unsafeAddress}`,
     );
   }
 

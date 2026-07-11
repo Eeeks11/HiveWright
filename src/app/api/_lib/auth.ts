@@ -103,12 +103,6 @@ export function isInternalServiceAccountUser(
   return user.id === SERVICE_ACCOUNT_ID;
 }
 
-// Bootstrap identity — no users row yet, login uses the development-only
-// default or an explicit DASHBOARD_PASSWORD (see src/auth.ts `authorize`).
-// Treated as system owner since by construction no other principals exist
-// in that state.
-const BOOTSTRAP_EMAIL = "owner@hivewright.local";
-
 export async function requireApiUser():
   Promise<{ user: AuthenticatedApiUser } | { response: NextResponse }> {
   if (process.env.VITEST === "true") {
@@ -131,11 +125,6 @@ export async function requireApiUser():
   const email = session?.user?.email ?? null;
   if (!email) {
     return { response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
-  }
-  if (email === BOOTSTRAP_EMAIL) {
-    return {
-      user: { id: "owner-bootstrap", email, isSystemOwner: true },
-    };
   }
   const { sql } = await import("./db");
   const [row] = await sql<{ id: string; email: string; isSystemOwner: boolean }[]>`

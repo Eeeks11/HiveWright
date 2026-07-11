@@ -1,3 +1,5 @@
+import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
+
 export interface ModelPricing {
   inputPer1k: number;
   cachedInputPer1k?: number;
@@ -9,7 +11,7 @@ export interface ModelPricing {
 // for every model a task might report. When a model is missing we fall
 // back to a rough GPT-4o-class estimate so cost-spend never silently reads
 // as $0 — the dashboard and budget checks become meaningless otherwise.
-const PRICING: Record<string, ModelPricing> = {
+const ACTIVE_PRICING: Record<string, ModelPricing> = {
   // Anthropic via OpenRouter / direct
   "anthropic/claude-sonnet-4-6": { inputPer1k: 0.3, outputPer1k: 1.5 },
   "anthropic/claude-sonnet-4-5": { inputPer1k: 0.3, outputPer1k: 1.5 },
@@ -22,27 +24,18 @@ const PRICING: Record<string, ModelPricing> = {
   "openai/gpt-4o": { inputPer1k: 0.25, outputPer1k: 1.0 },
   "openai/gpt-4o-mini": { inputPer1k: 0.015, outputPer1k: 0.06 },
   "openai-codex/gpt-5.4": { inputPer1k: 0.25, outputPer1k: 1.0 },
+  "openai-codex/gpt-5.4-mini": { inputPer1k: 0.05, outputPer1k: 0.2 },
   "openai/gpt-5.4": { inputPer1k: 0.25, outputPer1k: 1.0 },
   "gpt-image-2": { inputPer1k: 0.8, outputPer1k: 3.0 },
   "gpt-image-2-2026-04-21": { inputPer1k: 0.8, outputPer1k: 3.0 },
   // Mistral
   "mistral/mistral-large-latest": { inputPer1k: 0.05, outputPer1k: 0.15 },
   "mistral/mistral-ocr-latest": { inputPer1k: 0.05, outputPer1k: 0.15 },
-  // Google
-  "google/gemini-2.0-flash-exp:free": { inputPer1k: 0, outputPer1k: 0 },
-  "gemini-2.0-flash-exp:free": { inputPer1k: 0, outputPer1k: 0 },
-  "google/gemini-2.5-flash": { inputPer1k: 0.015, outputPer1k: 0.06 },
-  "gemini-2.5-flash": { inputPer1k: 0.015, outputPer1k: 0.06 },
-  "google/gemini-2.5-pro": { inputPer1k: 0.125, outputPer1k: 0.5 },
-  "gemini-2.5-pro": { inputPer1k: 0.125, outputPer1k: 0.5 },
-  "google/gemini-3.1-pro-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "gemini-3.1-pro-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "google/gemini-3.1-pro-preview-customtools": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "gemini-3.1-pro-preview-customtools": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "google/gemini-3.1-flash-lite-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "gemini-3.1-flash-lite-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "google/gemini-3-flash-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
-  "gemini-3-flash-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  // Google. Keep this active list to stable, user-selectable models only.
+  "google/gemini-2.5-flash": { inputPer1k: 0.03, outputPer1k: 0.25 },
+  "gemini-2.5-flash": { inputPer1k: 0.03, outputPer1k: 0.25 },
+  "google/gemini-2.5-pro": { inputPer1k: 0.125, outputPer1k: 1.0 },
+  "gemini-2.5-pro": { inputPer1k: 0.125, outputPer1k: 1.0 },
   // OpenRouter free tier aliases (cost = 0)
   "openrouter/google/gemma-4-26b-a4b:free": { inputPer1k: 0, outputPer1k: 0 },
   "openrouter/meta-llama/llama-3.2-3b-instruct:free": { inputPer1k: 0, outputPer1k: 0 },
@@ -51,6 +44,21 @@ const PRICING: Record<string, ModelPricing> = {
   "ollama/qwen3.5:27b": { inputPer1k: 0, outputPer1k: 0 },
   "ollama/qwen3:32b": { inputPer1k: 0, outputPer1k: 0 },
   "ollama/mistral": { inputPer1k: 0, outputPer1k: 0 },
+};
+
+// Legacy compatibility only: these routes were once selectable/saved, but are
+// no longer seeded or returned by getKnownModelIds() for normal model picking.
+const LEGACY_PRICING: Record<string, ModelPricing> = {
+  "google/gemini-2.0-flash-exp:free": { inputPer1k: 0, outputPer1k: 0 },
+  "gemini-2.0-flash-exp:free": { inputPer1k: 0, outputPer1k: 0 },
+  "google/gemini-3.1-pro-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "gemini-3.1-pro-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "google/gemini-3.1-pro-preview-customtools": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "gemini-3.1-pro-preview-customtools": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "google/gemini-3.1-flash-lite-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "gemini-3.1-flash-lite-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "google/gemini-3-flash-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
+  "gemini-3-flash-preview": { inputPer1k: 0.2, outputPer1k: 1.2 },
 };
 
 /**
@@ -62,7 +70,7 @@ const FALLBACK_PRICING: ModelPricing = { inputPer1k: 0.25, outputPer1k: 1.0 };
 // Ollama endpoint on GPU machine (same LAN). Lazily read so importing this
 // module from client components doesn't trip Next's process.env inline.
 function ollamaEndpoint(): string {
-  return process.env.OLLAMA_ENDPOINT || "http://192.168.50.68:11434";
+  return getCanonicalOllamaEndpoint();
 }
 
 export function getProviderEndpoint(provider: string): string | null {
@@ -75,7 +83,7 @@ export function getModelEndpoint(model: string): string {
 }
 
 export function getModelPricing(model: string): ModelPricing | null {
-  return PRICING[model] ?? null;
+  return ACTIVE_PRICING[model] ?? LEGACY_PRICING[model] ?? null;
 }
 
 export function getEffectiveModelPricing(model: string): ModelPricing {
@@ -83,7 +91,7 @@ export function getEffectiveModelPricing(model: string): ModelPricing {
 }
 
 export function getKnownModelIds(): string[] {
-  return Object.keys(PRICING);
+  return Object.keys(ACTIVE_PRICING);
 }
 
 export function resolveModel(recommendedModel: string, override: string | null): string {

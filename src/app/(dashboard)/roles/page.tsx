@@ -52,15 +52,17 @@ const ANTHROPIC_MODELS = [
   "anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7", "anthropic/claude-opus-4-6",
 ];
 const CODEX_MODELS = [
+  "openai-codex/gpt-5.6-sol",
   "openai-codex/gpt-5.5",
-  "openai-codex/gpt-5.4", "openai-codex/gpt-5.3-codex",
+  "openai-codex/gpt-5.4",
+  "openai-codex/gpt-5.4-mini",
 ];
 const ALL_CLOUD_MODELS = [
   ...ANTHROPIC_MODELS,
   ...CODEX_MODELS,
   "mistral/mistral-large-latest",
   "mistral/mistral-ocr-latest",
-  "openai/gpt-4o", "openai/gpt-4o-mini", "google/gemini-2.5-flash", "google/gemini-3.1-pro-preview", "google/gemini-3.1-pro-preview-customtools", "google/gemini-3.1-flash-lite-preview", "google/gemini-3-flash-preview",
+  "openai/gpt-4o", "openai/gpt-4o-mini", "google/gemini-2.5-pro", "google/gemini-2.5-flash",
 ];
 
 const OLLAMA_MODELS_ENDPOINT = "/api/ollama/models";
@@ -95,7 +97,7 @@ export default function RolesPage() {
     if (includeInactive) params.set("includeInactive", "true");
     if (selectedHive?.id) params.set("hiveId", selectedHive.id);
     const query = params.toString();
-    return query ? `/api/roles?${query}` : "/api/roles";
+    return query ? `/api/roles?${query}` : "/api/roles/global";
   }, [selectedHive?.id]);
 
   useEffect(() => {
@@ -812,7 +814,7 @@ function DispatcherConcurrencyBanner() {
   const [flash, setFlash] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/adapter-config")
+    fetch("/api/adapter-config/global")
       .then((r) => r.json())
       .then((b) => {
         const row = (b.data || []).find((r: { adapterType: string }) => r.adapterType === "dispatcher");

@@ -1,5 +1,7 @@
 import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { getProviderEndpoint } from "@/adapters/provider-config";
+import { getCanonicalOllamaEndpoint } from "@/ollama/endpoint";
+import { isUnsupportedModelDiscoveryCandidate } from "./unsupported-models";
 import type { DiscoveredModel } from "./types";
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -38,32 +40,26 @@ interface OllamaModel {
 const OPENAI_PUBLIC_MODELS_URL = "https://developers.openai.com/api/docs/models/all/";
 const GEMINI_PUBLIC_MODELS_URL = "https://ai.google.dev/gemini-api/docs/models";
 const ANTHROPIC_PUBLIC_MODELS_URL = "https://docs.anthropic.com/en/docs/models-overview";
-const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
+
 const STATIC_OPENAI_MODELS = [
   "gpt-5",
   "gpt-5-mini",
   "gpt-5-codex",
   "gpt-5.1",
   "gpt-5.1-codex",
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  "gpt-5.3-codex",
   "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.5",
+  "gpt-5.6-sol",
   "gpt-4.1",
   "gpt-4.1-mini",
   "o4-mini",
   "o3",
 ];
 const STATIC_GEMINI_MODELS = [
-  "gemini-3.1-pro",
-  "gemini-3.1-flash-lite-preview",
-  "gemini-3-pro-preview",
-  "gemini-3-flash-preview",
   "gemini-2.5-pro",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
-  "gemini-2.0-flash-lite",
 ];
 const STATIC_ANTHROPIC_MODELS = [
   "claude-opus-4-7",
@@ -199,14 +195,9 @@ export async function discoverAnthropicModels(
 export async function discoverOllamaModels(
   options: OllamaDiscoveryOptions = {},
 ): Promise<DiscoveredModel[]> {
-  const baseUrl = trimTrailingSlash(
-    firstPresent(
-      options.baseUrl,
-      process.env.OLLAMA_ENDPOINT,
-      process.env.OLLAMA_BASE_URL,
-      getProviderEndpoint("ollama"),
-    ) ?? DEFAULT_OLLAMA_BASE_URL,
-  );
+  const baseUrl = getCanonicalOllamaEndpoint({
+    baseUrl: firstPresent(options.baseUrl, getProviderEndpoint("ollama")),
+  });
   const url = `${baseUrl}/api/tags`;
   const body = await fetchJson(url, {
     fetch: options.fetch,
@@ -305,6 +296,7 @@ function extractOpenAiModelIds(text: string): string[] {
     .filter((id) => !/^gpt-4(?:-turbo(?:-preview)?|\.5(?:-preview)?)?$/.test(id))
     .filter((id) => !/(?:image|ui)/.test(id))
     .filter((id) => !/^gpt-\d-\d$/.test(id))
+    .filter((id) => !isUnsupportedModelDiscoveryCandidate("codex", id))
     .filter((id) => inferOpenAiCapabilities(id).length > 0);
 }
 
@@ -313,6 +305,7 @@ function extractGeminiModelIds(text: string): string[] {
     .filter((id) => /^gemini-\d/.test(id))
     .filter((id) => !id.includes("deprecated"))
     .filter((id) => !/^gemini-\d-\d/.test(id))
+    .filter((id) => !isUnsupportedModelDiscoveryCandidate("gemini", id))
     .filter((id) => inferGeminiCapabilities(id).length > 0);
 }
 
@@ -494,10 +487,6 @@ function displayNameFromModelId(modelId: string): string {
 
 function stripPrefix(value: string, prefix: string): string {
   return value.startsWith(prefix) ? value.slice(prefix.length) : value;
-}
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, "");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

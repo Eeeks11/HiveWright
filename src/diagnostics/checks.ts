@@ -4,6 +4,9 @@ import type { Sql } from "postgres";
 import { sql as apiSql } from "@/app/api/_lib/db";
 import { getBundledMigrationFiles, getExpectedLatestMigration } from "@/db/migration-metadata";
 import { loadDispatcherHeartbeatStatus } from "@/dispatcher/heartbeat";
+import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
+import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import {
   buildFailureFingerprint,
   groupFailureFingerprints,
@@ -14,10 +17,13 @@ import {
   summarizeDiagnostics,
   type DiagnosticStatus,
   type DiagnosticSummary,
+  type HiveWrightDiagnosticsScope,
 } from "./types";
+import { resolveHiveWrightBuildProvenance } from "./build-provenance";
 
 export type HiveWrightDiagnosticsSnapshot = {
   checkedAt: string;
+  scope: HiveWrightDiagnosticsScope;
   summary: DiagnosticSummary;
   diagnostics: DiagnosticStatus[];
   recentFailureGroups: FailureFingerprintGroup[];
@@ -41,15 +47,26 @@ export type HiveWrightDiagnosticsOptions = {
 const REQUIRED_ENV = ["DATABASE_URL", "ENCRYPTION_KEY", "INTERNAL_SERVICE_TOKEN"] as const;
 const DISPATCHER_STALE_AFTER_MS = 2 * 60 * 1000;
 const EXECUTION_RUN_STALE_AFTER_MS = 15 * 60 * 1000;
+export const HIVEWRIGHT_DIAGNOSTICS_SCOPE: HiveWrightDiagnosticsScope = {
+  kind: "controller_global",
+  label: "Controller-global runtime diagnostics",
+  summary:
+    "/api/diagnostics reports controller-wide app, queue, execution-run, provider, and route-pool state across all hives; use /api/analyst-telemetry?hiveId=... for hive-scoped readiness evidence.",
+  hiveScopedReadinessEndpoint: "/api/analyst-telemetry?hiveId=...",
+};
 
-export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date } = {}): HiveWrightHealthSnapshot {
-  const env = input.env ?? process.env;
+export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; now?: Date; repoRoot?: string } = {}): HiveWrightHealthSnapshot {
+  const provenance = resolveHiveWrightBuildProvenance({
+    env: input.env,
+    now: input.now,
+    repoRoot: input.repoRoot,
+  });
   return {
     status: "ok",
     service: "hivewright",
-    version: env.npm_package_version ?? null,
-    buildHash: env.VERCEL_GIT_COMMIT_SHA ?? env.HIVEWRIGHT_BUILD_HASH ?? null,
-    checkedAt: (input.now ?? new Date()).toISOString(),
+    version: provenance.version,
+    buildHash: provenance.buildHash,
+    checkedAt: provenance.capturedAt,
   };
 }
 
@@ -71,6 +88,7 @@ export async function collectHiveWrightDiagnostics(
   diagnostics.push(await checkQueueState(sql, now));
   diagnostics.push(await checkExecutionRuns(sql, now));
   diagnostics.push(await checkProviderState(sql, now));
+  diagnostics.push(await checkModelRoutePoolCapacity(sql, now));
 
   const recentFailureGroups = await collectRecentFailureGroups(sql);
   if (recentFailureGroups.length > 0) {
@@ -94,6 +112,7 @@ export async function collectHiveWrightDiagnostics(
 
   return {
     checkedAt,
+    scope: HIVEWRIGHT_DIAGNOSTICS_SCOPE,
     summary: summarizeDiagnostics(diagnostics),
     diagnostics,
     recentFailureGroups,
@@ -118,14 +137,14 @@ function checkRuntimeConfig(env: NodeJS.ProcessEnv, now: Date): DiagnosticStatus
   });
 }
 
-function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
+export function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
   try {
-    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.W_OK);
+    fs.accessSync(repoRoot, fs.constants.R_OK | fs.constants.X_OK);
     return buildDiagnosticStatus({
       id: "app.workspace",
       label: "Application workspace",
       severity: "ok",
-      summary: "Application workspace is readable and writable.",
+      summary: "Application workspace is readable and executable.",
       details: path.resolve(repoRoot),
       checkedAt: now,
     });
@@ -134,9 +153,9 @@ function checkWorkspace(repoRoot: string, now: Date): DiagnosticStatus {
       id: "app.workspace",
       label: "Application workspace",
       severity: "critical",
-      summary: "Application workspace is not readable and writable.",
+      summary: "Application workspace is not readable/executable.",
       details: err instanceof Error ? err.message : String(err),
-      recommendedAction: "Fix filesystem permissions or run HiveWright from a writable workspace.",
+      recommendedAction: "Fix filesystem permissions or run HiveWright from a readable application workspace.",
       requiresOwnerAction: true,
       checkedAt: now,
     });
@@ -256,9 +275,9 @@ async function checkQueueState(sql: Sql, now: Date): Promise<DiagnosticStatus> {
     const blocked = (counts.blocked ?? 0) + (counts.failed ?? 0) + (counts.unresolvable ?? 0);
     return buildDiagnosticStatus({
       id: "queue.state",
-      label: "Queue state",
+      label: "Controller-global queue state",
       severity: blocked > 0 ? "warning" : "ok",
-      summary: `Queue has ${pending} pending, ${active} active, and ${blocked} blocked/failed/unresolvable task(s).`,
+      summary: `Controller-wide queue has ${pending} pending, ${active} active, and ${blocked} blocked/failed/unresolvable task(s) across all hives.`,
       recommendedAction: blocked > 0 ? "Review blocked and failed tasks before increasing autonomous throughput." : undefined,
       checkedAt: now,
     });
@@ -345,6 +364,205 @@ async function checkProviderState(sql: Sql, now: Date): Promise<DiagnosticStatus
       recommendedAction: "Configure model health probes if provider degradation should block runtime work.",
       checkedAt: now,
     });
+  }
+}
+
+export type ModelRoutePoolCapacityCounts = {
+  totalRoutes: number;
+  routableRoutes: number;
+  disabledRoutes: number;
+  unhealthyRoutes: number;
+  unknownHealthRoutes: number;
+  staleRoutes: number;
+  freshRoutes: number;
+  recoveryEligibleStaleRoutes: number;
+  recoveryEligibleUnknownRoutes: number;
+  configuredRoutes?: number;
+  excludedInventoryRoutes?: number;
+  intentionallyDisabledRoutes?: number;
+};
+
+export async function checkModelRoutePoolCapacity(sql: Sql, now: Date): Promise<DiagnosticStatus> {
+  try {
+    const modelRows = await sql<{
+      provider: string;
+      adapter_type: string;
+      model_id: string;
+      enabled: boolean;
+      credential_fingerprint: string | null;
+      capabilities: string[] | null;
+    }[]>`
+      SELECT
+        hm.provider,
+        hm.adapter_type,
+        hm.model_id,
+        hm.enabled,
+        hm.capabilities,
+        c.fingerprint AS credential_fingerprint
+      FROM hive_models hm
+      LEFT JOIN credentials c ON c.id = hm.credential_id
+    `;
+    const healthRows = await sql<{
+      fingerprint: string;
+      model_id: string;
+      status: string | null;
+      next_probe_at: Date | null;
+      last_failure_reason: string | null;
+    }[]>`
+      SELECT fingerprint, model_id, status, next_probe_at, last_failure_reason
+      FROM model_health
+    `;
+    const healthByRoute = new Map(healthRows.map((row) => [
+      `${row.fingerprint}:${row.model_id}`,
+      row,
+    ]));
+
+    const counts: ModelRoutePoolCapacityCounts = {
+      totalRoutes: 0,
+      routableRoutes: 0,
+      disabledRoutes: 0,
+      unhealthyRoutes: 0,
+      unknownHealthRoutes: 0,
+      staleRoutes: 0,
+      freshRoutes: 0,
+      recoveryEligibleStaleRoutes: 0,
+      recoveryEligibleUnknownRoutes: 0,
+      configuredRoutes: modelRows.length,
+      excludedInventoryRoutes: 0,
+      intentionallyDisabledRoutes: 0,
+    };
+
+    for (const model of modelRows) {
+      const fingerprint = model.credential_fingerprint ?? createRuntimeCredentialFingerprint({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        baseUrl: null,
+      });
+      const canonicalModelId = canonicalModelIdForAdapter(model.adapter_type, model.model_id);
+      const health = healthByRoute.get(`${fingerprint}:${canonicalModelId}`)
+        ?? healthByRoute.get(`${fingerprint}:${model.model_id}`);
+      const probeMode = getModelHealthProbePolicy({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        modelId: canonicalModelId,
+        capabilities: model.capabilities ?? [],
+        sampleCostUsd: null,
+      }).mode;
+      const status = health?.status ?? "unknown";
+      const stale = health?.next_probe_at ? health.next_probe_at <= now : false;
+      const excludedInventory = isExcludedRouteInventory({
+        provider: model.provider,
+        adapterType: model.adapter_type,
+        failureReason: health?.last_failure_reason ?? null,
+        probeMode,
+      });
+
+      if (!model.enabled) {
+        counts.disabledRoutes += 1;
+        counts.intentionallyDisabledRoutes = (counts.intentionallyDisabledRoutes ?? 0) + 1;
+        continue;
+      }
+
+      if (excludedInventory) {
+        counts.excludedInventoryRoutes = (counts.excludedInventoryRoutes ?? 0) + 1;
+        continue;
+      }
+
+      counts.totalRoutes += 1;
+      if (status === "unhealthy" || status === "quarantined") counts.unhealthyRoutes += 1;
+      if (status === "unknown" && probeMode === "automatic") counts.unknownHealthRoutes += 1;
+      if (stale && probeMode === "automatic") counts.staleRoutes += 1;
+      else counts.freshRoutes += 1;
+      if (status === "healthy" && !stale) counts.routableRoutes += 1;
+      if (probeMode === "automatic" && status !== "quarantined") {
+        if (stale) counts.recoveryEligibleStaleRoutes += 1;
+        if (status === "unknown") counts.recoveryEligibleUnknownRoutes += 1;
+      }
+    }
+
+    return buildModelRoutePoolCapacityDiagnostic(counts, now);
+  } catch (err) {
+    return buildDiagnosticStatus({
+      id: "providers.route_pool_capacity",
+      label: "Controller-global model route pool capacity",
+      severity: "warning",
+      summary: "Controller-wide model route-pool capacity could not be verified.",
+      details: err instanceof Error ? err.message : String(err),
+      recommendedAction: "Run hive-scoped analyst telemetry for readiness evidence and model health probes to verify controller-wide model-route capacity.",
+      checkedAt: now,
+    });
+  }
+}
+
+export function buildModelRoutePoolCapacityDiagnostic(
+  counts: ModelRoutePoolCapacityCounts,
+  now: Date,
+): DiagnosticStatus {
+  if (counts.totalRoutes === 0) {
+    return buildDiagnosticStatus({
+      id: "providers.route_pool_capacity",
+      label: "Controller-global model route pool capacity",
+      severity: "info",
+      summary: "No controller-wide automatic model routes are configured for capacity scoring.",
+      details: formatRoutePoolInventoryDetails(counts),
+      recommendedAction: "Configure at least one automatic model route before expecting autonomous runtime work.",
+      checkedAt: now,
+    });
+  }
+
+  const constrainedRatio = counts.routableRoutes / counts.totalRoutes;
+  const staleOrUnknownRoutes = counts.staleRoutes + counts.unknownHealthRoutes;
+  const staleOrUnknownRatio = staleOrUnknownRoutes / counts.totalRoutes;
+  const recoveryEligibleRoutes = counts.recoveryEligibleStaleRoutes + counts.recoveryEligibleUnknownRoutes;
+  const hasRecoverableRoutePool = counts.routableRoutes > 0 || recoveryEligibleRoutes > 0;
+  const severity = !hasRecoverableRoutePool
+    ? "critical"
+    : constrainedRatio < 0.5 || staleOrUnknownRatio >= 0.25
+      ? "warning"
+      : "ok";
+  const blockedRoutes = Math.max(0, counts.totalRoutes - counts.routableRoutes);
+
+  return buildDiagnosticStatus({
+    id: "providers.route_pool_capacity",
+    label: "Controller-global model route pool capacity",
+    severity,
+    summary: `Controller-wide route pool has ${counts.routableRoutes}/${counts.totalRoutes} automatic model route(s) currently routable across all hives; ${blockedRoutes} blocked, ${counts.staleRoutes} stale, ${counts.unknownHealthRoutes} unknown.`,
+    details: formatRoutePoolInventoryDetails(counts),
+    recommendedAction: severity === "critical"
+      ? "Treat route-pool capacity as degraded: run model health probe recovery and restore at least one routable or recoverable route before presenting runtime readiness as normal."
+      : counts.staleRoutes > 0 || counts.unknownHealthRoutes > 0
+        ? "Run or wait for model health probe recovery; compare stale/unknown recovery eligibility against total route debt to spot standing drift."
+        : undefined,
+    checkedAt: now,
+  });
+}
+
+function formatRoutePoolInventoryDetails(counts: ModelRoutePoolCapacityCounts): string {
+  const configuredRoutes = counts.configuredRoutes ?? counts.totalRoutes;
+  const excludedInventoryRoutes = counts.excludedInventoryRoutes ?? 0;
+  const intentionallyDisabledRoutes = counts.intentionallyDisabledRoutes ?? counts.disabledRoutes;
+  return `scope=controller_global hiveScopedReadinessEndpoint=/api/analyst-telemetry?hiveId=... readinessPolicy=critical_only_when_no_routable_or_recoverable_route fresh=${counts.freshRoutes} disabled=${counts.disabledRoutes} unhealthy=${counts.unhealthyRoutes} staleRecoveryEligible=${counts.recoveryEligibleStaleRoutes} unknownRecoveryEligible=${counts.recoveryEligibleUnknownRoutes} configuredRoutes=${configuredRoutes} automaticCandidateRoutes=${counts.totalRoutes} excludedInventoryRoutes=${excludedInventoryRoutes} intentionallyDisabledRoutes=${intentionallyDisabledRoutes}`;
+}
+
+function isExcludedRouteInventory(input: {
+  provider: string;
+  adapterType: string;
+  failureReason: string | null;
+  probeMode: "automatic" | "on_demand";
+}): boolean {
+  if (input.probeMode === "on_demand") return true;
+  return input.provider.trim().toLowerCase() === "openai" &&
+    input.adapterType.trim().toLowerCase() === "codex" &&
+    parseFailureClass(input.failureReason) === "scope";
+}
+
+function parseFailureClass(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { failureClass?: unknown };
+    return typeof parsed.failureClass === "string" ? parsed.failureClass : null;
+  } catch {
+    return null;
   }
 }
 

@@ -10,6 +10,8 @@ type ListItem = {
   summary?: string;
   status?: string | null;
   priority?: string | null;
+  href?: string | null;
+  targetLabel?: string | null;
 };
 
 type ListSummary = {
@@ -227,12 +229,26 @@ function DetailList({ title, items, empty }: { title: string; items: ListItem[];
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{empty}</p>
       ) : (
         <ul className="space-y-2">
-          {items.slice(0, 3).map((item) => (
-            <li key={item.id} className="rounded-md border p-3 text-sm text-zinc-700 dark:text-zinc-300">
-              {item.title ?? item.summary}
-              {item.priority && <span className="ml-2 text-xs text-zinc-500">({item.priority})</span>}
-            </li>
-          ))}
+          {items.slice(0, 3).map((item) => {
+            const label = item.title ?? item.summary ?? "Untitled item";
+            return (
+              <li key={item.id} className="rounded-md border p-3 text-sm text-zinc-700 dark:text-zinc-300">
+                {item.href ? (
+                  <a href={item.href} className="font-medium text-amber-700 hover:underline dark:text-amber-300">
+                    {label}
+                  </a>
+                ) : (
+                  <>
+                    <span>{label}</span>
+                    <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
+                      {item.targetLabel ?? "Informational"}
+                    </span>
+                  </>
+                )}
+                {item.priority && <span className="ml-2 text-xs text-zinc-500">({item.priority})</span>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -20,7 +20,8 @@ beforeEach(async () => {
     INSERT INTO role_templates (slug, name, department, type, adapter_type, active)
     VALUES
       ('dev-agent', 'Dev', 'engineering', 'executor', 'claude-code', true),
-      ('data-analyst', 'Data', 'research', 'executor', 'claude-code', true)
+      ('data-analyst', 'Data', 'research', 'executor', 'claude-code', true),
+      ('operations-coordinator', 'Operations Coordinator', 'operations', 'executor', 'claude-code', true)
     ON CONFLICT (slug) DO NOTHING
   `;
   const [biz] = await sql`
@@ -128,6 +129,61 @@ describe("POST /api/work with classifier", () => {
     expect(logs).toHaveLength(2);
     expect(logs[0].success).toBe(false);
     expect(logs[1].success).toBe(false);
+  });
+
+  it("routes an explicit receipt-only, no-action, no-spend outage fallback to operations", async () => {
+    stubOutcome = {
+      result: null,
+      attempts: [
+        { provider: "ollama", model: "qwen3:32b", prompt: "p", input: "request",
+          responseRaw: null, tokensIn: null, tokensOut: null, costCents: null,
+          latencyMs: 50, success: false, errorReason: "network" },
+        { provider: "openrouter", model: "g", prompt: "p", input: "request",
+          responseRaw: null, tokensIn: null, tokensOut: null, costCents: null,
+          latencyMs: 80, success: false, errorReason: "unavailable" },
+      ],
+      usedFallback: true, providerUsed: "default-goal-fallback", modelUsed: null,
+    };
+
+    const input = "Please only confirm receipt of this note. Take no further action and incur no expenditure.";
+    const res = await POST(req({ hiveId: bizId, input }));
+
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data.type).toBe("task");
+
+    const [task] = await sql`SELECT assigned_to, brief FROM tasks WHERE id = ${body.data.id}`;
+    expect(task.assigned_to).toBe("operations-coordinator");
+    expect(task.brief).toBe(input);
+
+    const [classification] = await sql`SELECT id, type, assigned_role, provider FROM classifications WHERE task_id = ${body.data.id}`;
+    expect(classification).toMatchObject({
+      type: "task",
+      assigned_role: "operations-coordinator",
+      provider: "default-goal-fallback",
+    });
+    const logs = await sql`SELECT * FROM classifier_logs WHERE classification_id = ${classification.id}`;
+    expect(logs).toHaveLength(2);
+  });
+
+  it.each([
+    "Please only confirm receipt of this note. Take no further action.",
+    "Please only confirm receipt of this note. Do not spend any funds.",
+    "Confirm receipt, then prepare a rollout plan. Take no action and incur no expenditure.",
+    "Only confirm receipt. Take no action and incur no expenditure. Also prepare a rollout plan.",
+  ])("keeps near-miss null-classifier input as a goal: %s", async (input) => {
+    stubOutcome = {
+      result: null,
+      attempts: [],
+      usedFallback: true,
+      providerUsed: "default-goal-fallback",
+      modelUsed: null,
+    };
+
+    const res = await POST(req({ hiveId: bizId, input }));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.data.type).toBe("goal");
   });
 
   it("explicit assignedTo bypasses classifier", async () => {

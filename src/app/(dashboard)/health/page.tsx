@@ -1,12 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { DiagnosticStatus, DiagnosticSummary } from "@/diagnostics/types";
+import type { DiagnosticStatus, DiagnosticSummary, HiveWrightDiagnosticsScope } from "@/diagnostics/types";
+import type { SetupRuntimeReadinessWarning } from "@/setup-readiness/runtime";
 
 type HealthPageState = {
   checkedAt: string;
+  scope?: HiveWrightDiagnosticsScope;
   summary: DiagnosticSummary;
   diagnostics: DiagnosticStatus[];
+  setupReadiness?: {
+    checkedAt: string;
+    warningSources: SetupRuntimeReadinessWarning[];
+  };
 };
 
 export default function DashboardHealthPage() {
@@ -43,7 +49,7 @@ export default function DashboardHealthPage() {
         <p className="text-sm text-muted-foreground">HiveWright runtime</p>
         <h1 className="text-2xl font-semibold text-foreground">Health</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Product/runtime diagnostics for the app, dispatcher, queue, execution runs, and providers.
+          Controller-global product/runtime diagnostics for the app, dispatcher, queue, execution runs, and providers.
         </p>
       </header>
 
@@ -62,16 +68,58 @@ export default function DashboardHealthPage() {
       {state ? (
         <>
           <section className="grid gap-3 md:grid-cols-4">
+            <SummaryTile label="Active runtime" value={state.summary.ready ? "ready" : "not ready"} />
             <SummaryTile label="Worst severity" value={state.summary.severity} />
-            <SummaryTile label="Ready" value={state.summary.ready ? "yes" : "no"} />
             <SummaryTile label="Owner action" value={state.summary.ownerActionRequired ? "needed" : "none"} />
-            <SummaryTile label="Checked" value={new Date(state.checkedAt).toLocaleString()} />
+            <SummaryTile label="Setup debt" value={formatSetupDebtCount(state.setupReadiness?.warningSources)} />
           </section>
+
+          <section className="rounded-md border border-white/10 p-4 text-sm text-muted-foreground">
+            <p>
+              {state.scope?.summary
+                ?? "Active runtime readiness is based on app, dispatcher, queue, execution-run, and provider diagnostics."}
+              {" "}
+              Optional setup debt is shown separately so missing or unchecked local tools do not look like owner escalations.
+            </p>
+          </section>
+
+          {state.setupReadiness ? (
+            <section className="rounded-md border border-amber-500/20 bg-amber-500/5 p-4">
+              <div className="flex flex-col gap-1">
+                <p className="text-xs font-medium uppercase text-amber-100">Optional setup debt</p>
+                <h2 className="text-lg font-semibold text-foreground">Readiness warning sources</h2>
+                <p className="text-sm text-muted-foreground">
+                  These checks explain warning severity from optional local setup. They are operational debt, not owner-action escalations.
+                </p>
+              </div>
+              {state.setupReadiness.warningSources.length > 0 ? (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {state.setupReadiness.warningSources.map((warning) => (
+                    <article key={warning.source} className="rounded-md border border-white/10 p-3 text-sm">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium text-foreground">{warning.label}</h3>
+                        <span className="rounded-full border border-amber-300/40 px-2 py-0.5 text-xs text-amber-100">
+                          {warning.source}: {warning.status}
+                        </span>
+                        <span className="rounded-full border border-white/10 px-2 py-0.5 text-xs text-muted-foreground">
+                          {warning.policy === "active_provider" ? "active provider" : "optional runtime"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-muted-foreground">{warning.detail}</p>
+                      <p className="mt-1 text-xs text-amber-100">{warning.nextStep}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-4 text-sm text-emerald-200">No optional setup warning sources reported.</p>
+              )}
+            </section>
+          ) : null}
 
           <section className="overflow-hidden rounded-md border border-white/10">
             <div className="grid grid-cols-[140px_1fr] gap-3 border-b border-white/10 px-4 py-3 text-xs font-medium uppercase text-muted-foreground md:grid-cols-[160px_220px_1fr]">
               <span>Status</span>
-              <span className="hidden md:block">Check</span>
+              <span className="hidden md:block">Active runtime check</span>
               <span>Summary</span>
             </div>
             {state.diagnostics.map((item) => (
@@ -95,6 +143,11 @@ export default function DashboardHealthPage() {
       ) : null}
     </main>
   );
+}
+
+function formatSetupDebtCount(warnings: SetupRuntimeReadinessWarning[] | undefined) {
+  if (!warnings) return "not checked";
+  return warnings.length === 1 ? "1 warning" : `${warnings.length} warnings`;
 }
 
 function SummaryTile(props: { label: string; value: string }) {

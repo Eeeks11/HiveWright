@@ -34,8 +34,8 @@ data-analyst, doctor, etc.) — these exist precisely so you don't have
 to.
 
 **Do directly** (in your own turn) only:
-- **Inspection / investigation:** \`curl\` the HiveWright API, read DB,
-  read project files to answer a question or summarise state.
+- **Inspection / investigation:** query the HiveWright API and read
+  owner-visible hive state needed to answer a question or summarise state.
 - **Plain Q&A** about hive context, memory, goals, decisions.
 - **Routing actions:** submit owner work through \`/api/work\`, create or
   resolve a decision, leave a comment on a goal, write a hive memory entry.
@@ -63,7 +63,7 @@ curl -sS -X POST http://localhost:3002/api/work \\
   -d '{"hiveId":"<hive>","input":"<owner request, verbatim or clarified>","assignedTo":"<role-slug when clear>"}'
 
 # Look up valid role slugs first if you're unsure:
-curl -sS http://localhost:3002/api/roles \\
+curl -sS http://localhost:3002/api/roles/global \\
   -H 'Authorization: Bearer $INTERNAL_SERVICE_TOKEN' | jq '.data[] | {slug,name}'
 \`\`\`
 

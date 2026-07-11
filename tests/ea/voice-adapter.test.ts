@@ -14,16 +14,31 @@ vi.mock("@/ea/native/prompt", () => ({
   buildEaPrompt: async () => "STUB PROMPT",
 }));
 
+const mocks = vi.hoisted(() => ({
+  getEaModelConfiguration: vi.fn(),
+  resolveEaModelRoute: vi.fn(),
+  recordEaModelRouteTelemetry: vi.fn(),
+  runEaStream: vi.fn(),
+}));
+
+vi.mock("@/ea/native/model-selection", () => ({
+  getEaModelConfiguration: mocks.getEaModelConfiguration,
+  resolveEaModelRoute: mocks.resolveEaModelRoute,
+  recordEaModelRouteTelemetry: mocks.recordEaModelRouteTelemetry,
+}));
+
 // Stub the streaming runner so we never spawn a `claude` subprocess.
 // Yields three deltas that the adapter should concatenate verbatim.
 vi.mock("@/ea/native/runner", () => ({
-  runEaStream: async function* () {
-    yield "Hello";
-    yield ", ";
-    yield "Trent.";
-  },
+  runEaStream: mocks.runEaStream,
   runEa: async () => ({ success: true, text: "" }),
 }));
+
+mocks.runEaStream.mockImplementation(async function* () {
+  yield "Hello";
+  yield ", ";
+  yield "Trent.";
+});
 
 import { eaVoiceClient } from "@/ea/native/voice-adapter";
 import { VOICE_MODE_PROMPT_SUFFIX } from "@/connectors/voice/prompt";
@@ -41,10 +56,32 @@ beforeEach(async () => {
     INSERT INTO voice_sessions (id, hive_id)
     VALUES (${SESSION_ID}, ${HIVE_ID})
   `;
+  vi.clearAllMocks();
+  mocks.getEaModelConfiguration.mockResolvedValue({ primaryModel: null, fallbackModel: null });
+  mocks.resolveEaModelRoute.mockResolvedValue({
+    model: undefined,
+    selected: "runtime_default",
+    reason: "configuration_missing",
+    primaryModel: null,
+    fallbackModel: null,
+  });
+  mocks.runEaStream.mockImplementation(async function* () {
+    yield "Hello";
+    yield ", ";
+    yield "Trent.";
+  });
 });
 
 describe("eaVoiceClient.submit", () => {
   it("streams EA chunks and persists both turns to ea_messages", async () => {
+    mocks.resolveEaModelRoute.mockResolvedValue({
+      model: "openai-codex/gpt-5.6-sol",
+      selected: "primary",
+      reason: "fresh_healthy_probe",
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
+
     const stream = await eaVoiceClient.submit("Hey, what's up?", {
       sessionId: SESSION_ID,
       hiveId: HIVE_ID,
@@ -55,6 +92,18 @@ describe("eaVoiceClient.submit", () => {
 
     expect(chunks).toEqual(["Hello", ", ", "Trent."]);
     expect(chunks.join("")).toBe("Hello, Trent.");
+    expect(mocks.runEaStream).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        model: "openai-codex/gpt-5.6-sol",
+      }),
+    );
+    expect(mocks.recordEaModelRouteTelemetry).toHaveBeenCalledWith(sql, {
+      hiveId: HIVE_ID,
+      transport: "voice",
+      voiceSessionId: SESSION_ID,
+      route: expect.objectContaining({ selected: "primary" }),
+    });
 
     const rows = await sql<
       {
@@ -82,6 +131,95 @@ describe("eaVoiceClient.submit", () => {
     expect(rows[1].content).toBe("Hello, Trent.");
     expect(rows[1].source).toBe("voice");
     expect(rows[1].voice_session_id).toBe(SESSION_ID);
+  });
+
+  it("selects and records the actual healthy fallback at 100% monthly spend", async () => {
+    await sql`
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, status)
+      VALUES (${HIVE_ID}, 'voice-ea', 'Voice EA', ${sql.json({ maxMonthlyLlmCents: 100 })}, 'active')
+    `;
+    await sql`UPDATE voice_sessions SET llm_cost_cents = 100 WHERE id = ${SESSION_ID}`;
+    mocks.resolveEaModelRoute.mockResolvedValue({
+      model: "openai-codex/gpt-5.5",
+      selected: "fallback",
+      reason: "budget_fallback",
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
+
+    const stream = await eaVoiceClient.submit("Keep going", {
+      sessionId: SESSION_ID,
+      hiveId: HIVE_ID,
+    });
+    for await (const chunk of stream) void chunk;
+
+    expect(mocks.resolveEaModelRoute).toHaveBeenCalledWith(sql, HIVE_ID, {
+      preferFallback: true,
+    });
+    expect(mocks.runEaStream).toHaveBeenCalledWith(expect.any(String), {
+      model: "openai-codex/gpt-5.5",
+    });
+    expect(mocks.recordEaModelRouteTelemetry).toHaveBeenCalledWith(sql, {
+      hiveId: HIVE_ID,
+      transport: "voice",
+      voiceSessionId: SESSION_ID,
+      route: expect.objectContaining({
+        selected: "fallback",
+        model: "openai-codex/gpt-5.5",
+      }),
+    });
+  });
+
+  it("warns at 80% while retaining the healthy primary route", async () => {
+    await sql`
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, status)
+      VALUES (${HIVE_ID}, 'voice-ea', 'Voice EA', ${sql.json({ maxMonthlyLlmCents: 100 })}, 'active')
+    `;
+    await sql`UPDATE voice_sessions SET llm_cost_cents = 80 WHERE id = ${SESSION_ID}`;
+
+    const stream = await eaVoiceClient.submit("Budget check", {
+      sessionId: SESSION_ID,
+      hiveId: HIVE_ID,
+    });
+    for await (const chunk of stream) void chunk;
+
+    expect(mocks.resolveEaModelRoute).toHaveBeenCalledWith(sql, HIVE_ID, {
+      preferFallback: false,
+    });
+    expect(mocks.runEaStream.mock.calls[0]?.[0]).toContain("## Budget warning");
+    expect(mocks.runEaStream.mock.calls[0]?.[0]).toContain("80¢ of 100¢");
+  });
+
+  it("hangs up at 120% without starting another model call and records pause telemetry", async () => {
+    await sql`
+      INSERT INTO connector_installs (hive_id, connector_slug, display_name, config, status)
+      VALUES (${HIVE_ID}, 'voice-ea', 'Voice EA', ${sql.json({ maxMonthlyLlmCents: 100 })}, 'active')
+    `;
+    await sql`UPDATE voice_sessions SET llm_cost_cents = 120 WHERE id = ${SESSION_ID}`;
+    mocks.getEaModelConfiguration.mockResolvedValue({
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
+
+    const stream = await eaVoiceClient.submit("One more thing", {
+      sessionId: SESSION_ID,
+      hiveId: HIVE_ID,
+    });
+    const chunks: string[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+
+    expect(chunks.join(" ")).toContain("monthly voice budget");
+    expect(mocks.runEaStream).not.toHaveBeenCalled();
+    expect(mocks.resolveEaModelRoute).not.toHaveBeenCalled();
+    expect(mocks.recordEaModelRouteTelemetry).toHaveBeenCalledWith(sql, {
+      hiveId: HIVE_ID,
+      transport: "voice",
+      voiceSessionId: SESSION_ID,
+      route: expect.objectContaining({
+        model: undefined,
+        reason: "budget_pause_120_percent",
+      }),
+    });
   });
 
   it("reuses the same voice thread across multiple turns in a session", async () => {

@@ -1,11 +1,11 @@
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { getDecisionActivity } from "@/decisions/activity";
 import { sql } from "../../../_lib/db";
 import { requireApiUser } from "../../../_lib/auth";
 import { jsonError, jsonOk } from "../../../_lib/responses";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
@@ -14,14 +14,12 @@ export async function GET(
 
   try {
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
     const [decision] = await sql<{ hive_id: string }[]>`
-      SELECT hive_id FROM decisions WHERE id = ${id}
+      SELECT hive_id FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decision) return jsonError("Decision not found", 404);
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decision.hive_id);
-      if (!hasAccess) return jsonError("Forbidden: caller cannot access this decision's hive", 403);
-    }
 
     const entries = await getDecisionActivity(sql, id);
     return jsonOk(

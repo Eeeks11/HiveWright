@@ -1,8 +1,7 @@
 const DEVELOPMENT_AUTH_SECRET = "dev-secret-change-in-production";
-const DEVELOPMENT_DASHBOARD_PASSWORD = "hivewright";
 
 type AuthEnv = Partial<
-  Record<"AUTH_SECRET" | "ENCRYPTION_KEY" | "DASHBOARD_PASSWORD" | "NODE_ENV", string>
+  Record<"AUTH_SECRET" | "ENCRYPTION_KEY" | "NODE_ENV", string>
 >;
 
 function readConfiguredValue(value: string | undefined): string | null {
@@ -37,20 +36,5 @@ export function resolveAuthSecret(env: AuthEnv = process.env): string {
 
   throw new Error(
     "AUTH_SECRET or ENCRYPTION_KEY must be configured outside NODE_ENV=development.",
-  );
-}
-
-export function resolveBootstrapDashboardPassword(
-  env: AuthEnv = process.env,
-): string {
-  const configuredPassword = readConfiguredValue(env.DASHBOARD_PASSWORD);
-  if (configuredPassword) return configuredPassword;
-
-  if (isDevelopment(env)) {
-    return DEVELOPMENT_DASHBOARD_PASSWORD;
-  }
-
-  throw new Error(
-    "DASHBOARD_PASSWORD must be configured before bootstrap login outside NODE_ENV=development.",
   );
 }

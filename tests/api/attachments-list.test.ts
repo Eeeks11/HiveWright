@@ -50,7 +50,7 @@ describe("GET /api/tasks/[id]/attachments", () => {
       VALUES (${taskId}, 'task.png', '/tmp/task.png', 'image/png', 200, '2026-04-16 10:00:00+00')
     `;
 
-    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments`);
+    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments?hiveId=${bizId}`);
     const response = await getTaskAttachments(request, {
       params: Promise.resolve({ id: taskId }),
     });
@@ -72,7 +72,7 @@ describe("GET /api/tasks/[id]/attachments", () => {
     `;
     const taskId = task.id as string;
 
-    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments`);
+    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments?hiveId=${bizId}`);
     const response = await getTaskAttachments(request, {
       params: Promise.resolve({ id: taskId }),
     });
@@ -94,7 +94,7 @@ describe("GET /api/tasks/[id]/attachments", () => {
       VALUES (${taskId}, 'only.txt', '/tmp/only.txt', 'text/plain', 5)
     `;
 
-    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments`);
+    const request = new Request(`http://localhost/api/tasks/${taskId}/attachments?hiveId=${bizId}`);
     const response = await getTaskAttachments(request, {
       params: Promise.resolve({ id: taskId }),
     });
@@ -108,7 +108,7 @@ describe("GET /api/tasks/[id]/attachments", () => {
 
   it("returns 404 when task does not exist", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000999";
-    const request = new Request(`http://localhost/api/tasks/${fakeId}/attachments`);
+    const request = new Request(`http://localhost/api/tasks/${fakeId}/attachments?hiveId=${bizId}`);
     const response = await getTaskAttachments(request, {
       params: Promise.resolve({ id: fakeId }),
     });
@@ -130,7 +130,7 @@ describe("GET /api/goals/[id]/attachments", () => {
       VALUES (${goalId}, 'a.pdf', '/tmp/a.pdf', 'application/pdf', 50)
     `;
 
-    const request = new Request(`http://localhost/api/goals/${goalId}/attachments`);
+    const request = new Request(`http://localhost/api/goals/${goalId}/attachments?hiveId=${bizId}`);
     const response = await getGoalAttachments(request, {
       params: Promise.resolve({ id: goalId }),
     });
@@ -148,7 +148,7 @@ describe("GET /api/goals/[id]/attachments", () => {
       RETURNING id
     `;
     const goalId = goal.id as string;
-    const request = new Request(`http://localhost/api/goals/${goalId}/attachments`);
+    const request = new Request(`http://localhost/api/goals/${goalId}/attachments?hiveId=${bizId}`);
     const response = await getGoalAttachments(request, {
       params: Promise.resolve({ id: goalId }),
     });
@@ -159,7 +159,7 @@ describe("GET /api/goals/[id]/attachments", () => {
 
   it("returns 404 when goal does not exist", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000999";
-    const request = new Request(`http://localhost/api/goals/${fakeId}/attachments`);
+    const request = new Request(`http://localhost/api/goals/${fakeId}/attachments?hiveId=${bizId}`);
     const response = await getGoalAttachments(request, {
       params: Promise.resolve({ id: fakeId }),
     });

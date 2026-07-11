@@ -15,6 +15,7 @@ import { parseSupervisorActions } from "./parse-actions";
 import { applySupervisorActions } from "./apply-actions";
 import { escalateMalformedSupervisorOutput } from "./escalate";
 import { reconcileUnresolvableTasks } from "./unresolvable-triage";
+import { reconcileReferenceOnlyTerminalDispositions } from "./reference-terminal-disposition";
 import type { AppliedOutcome, HiveHealthReport, SupervisorActions } from "./types";
 import { runInitiativeEvaluation, type InitiativeRunResult, type RunInitiativeEvaluationOptions } from "@/initiative-engine";
 import { normalizeBillableUsage } from "@/usage/billable-usage";
@@ -27,6 +28,7 @@ export {
 } from "./escalate";
 export { scanHive } from "./scan";
 export { reconcileUnresolvableTasks } from "./unresolvable-triage";
+export { reconcileReferenceOnlyTerminalDispositions } from "./reference-terminal-disposition";
 export type {
   AppliedOutcome,
   AppliedStatus,
@@ -185,6 +187,7 @@ export async function runSupervisor(
   opts: RunSupervisorOptions = {},
 ): Promise<RunSupervisorResult> {
   const unresolvableTriage = await reconcileUnresolvableTasks(sql, hiveId);
+  await reconcileReferenceOnlyTerminalDispositions(sql, hiveId);
   const report = await scanHive(sql, hiveId);
   const shouldRunInitiativeRecovery =
     opts.enableInitiativeRecovery || opts.initiativeEvaluation !== undefined;

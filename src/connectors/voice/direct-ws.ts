@@ -10,11 +10,28 @@ import {
 } from "@/connectors/voice/gpu-clients";
 import { eaVoiceClient } from "@/ea/native/voice-adapter";
 import {
-  verifyVoiceSessionToken,
   type VoiceSessionTokenPayload,
+  verifyVoiceSessionRequest,
 } from "@/lib/voice-session-token";
 import { loadVoiceServicesUrl } from "@/lib/voice-services-url";
 import type { VoiceTransport } from "./voice-transport";
+
+const DEFAULT_DIRECT_WS_MAX_BINARY_FRAME_BYTES = 256 * 1024;
+const DEFAULT_DIRECT_WS_MAX_CONTROL_MESSAGE_BYTES = 16 * 1024;
+const DEFAULT_DIRECT_WS_MAX_MESSAGES_PER_SESSION = 120_000;
+
+const DIRECT_WS_MAX_BINARY_FRAME_BYTES = readPositiveIntEnv(
+  "VOICE_WS_MAX_BINARY_FRAME_BYTES",
+  DEFAULT_DIRECT_WS_MAX_BINARY_FRAME_BYTES,
+);
+const DIRECT_WS_MAX_CONTROL_MESSAGE_BYTES = readPositiveIntEnv(
+  "VOICE_WS_MAX_CONTROL_MESSAGE_BYTES",
+  DEFAULT_DIRECT_WS_MAX_CONTROL_MESSAGE_BYTES,
+);
+const DIRECT_WS_MAX_MESSAGES_PER_SESSION = readPositiveIntEnv(
+  "VOICE_WS_MAX_MESSAGES_PER_SESSION",
+  DEFAULT_DIRECT_WS_MAX_MESSAGES_PER_SESSION,
+);
 
 /**
  * Direct PCM-over-WebSocket carrier for the Voice EA.
@@ -43,7 +60,7 @@ export async function mountDirectWsHandler(
   ws: WebSocket,
   req: IncomingMessage,
 ): Promise<void> {
-  const payload = authenticate(req);
+  const payload = authenticateDirectVoiceWsRequest(req);
   if (!payload) {
     try { ws.close(1008, "policy"); } catch { /* ignore */ }
     return;
@@ -51,6 +68,7 @@ export async function mountDirectWsHandler(
 
   // From here we're authenticated. Set up the runtime + GPU clients.
   let runtime: VoiceSessionRuntime | null = null;
+  let inboundMessageCount = 0;
   let sttClient: Awaited<ReturnType<typeof openSttClient>> | null = null;
   let ttsClient: Awaited<ReturnType<typeof openTtsClient>> | null = null;
 
@@ -90,9 +108,18 @@ export async function mountDirectWsHandler(
 
     ws.on("message", (raw, isBinary) => {
       if (!runtime) return;
+      inboundMessageCount += 1;
+      if (inboundMessageCount > DIRECT_WS_MAX_MESSAGES_PER_SESSION) {
+        try { ws.close(1008, "message limit"); } catch { /* ignore */ }
+        return;
+      }
       if (isBinary) {
         // Browser sends PCM16 mono 16 kHz directly. No transcoding needed.
         const buf = toBuffer(raw);
+        if (buf && buf.length > DIRECT_WS_MAX_BINARY_FRAME_BYTES) {
+          try { ws.close(1009, "frame too large"); } catch { /* ignore */ }
+          return;
+        }
         if (buf) runtime.feedMicAudio(buf);
         return;
       }
@@ -100,6 +127,10 @@ export async function mountDirectWsHandler(
       try {
         const text = typeof raw === "string" ? raw : toBuffer(raw)?.toString("utf8") ?? "";
         if (!text) return;
+        if (Buffer.byteLength(text, "utf8") > DIRECT_WS_MAX_CONTROL_MESSAGE_BYTES) {
+          try { ws.close(1009, "control frame too large"); } catch { /* ignore */ }
+          return;
+        }
         const msg = JSON.parse(text);
         if (msg?.type === "hangup") {
           runtime.stop("user_hangup");
@@ -160,22 +191,10 @@ export function createDirectWsTransport(ws: WebSocket): VoiceTransport {
  * return `null`-vs-payload and that's the only signal we expose;
  * we don't differentiate "no token" from "bad token" in logs at gate time.
  */
-function authenticate(req: IncomingMessage): VoiceSessionTokenPayload | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-  const queryToken = url.searchParams.get("token");
-  if (queryToken) {
-    const payload = verifyVoiceSessionToken(queryToken);
-    if (payload) return payload;
-  }
-  const authHeader = req.headers.authorization;
-  if (typeof authHeader === "string") {
-    const m = /^Bearer\s+(.+)$/i.exec(authHeader);
-    if (m) {
-      const payload = verifyVoiceSessionToken(m[1]);
-      if (payload) return payload;
-    }
-  }
-  return null;
+export function authenticateDirectVoiceWsRequest(
+  req: Pick<IncomingMessage, "url" | "headers">,
+): VoiceSessionTokenPayload | null {
+  return verifyVoiceSessionRequest(req);
 }
 
 function toBuffer(raw: unknown): Buffer | null {
@@ -183,4 +202,11 @@ function toBuffer(raw: unknown): Buffer | null {
   if (raw instanceof ArrayBuffer) return Buffer.from(raw);
   if (Array.isArray(raw)) return Buffer.concat(raw as Buffer[]);
   return null;
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

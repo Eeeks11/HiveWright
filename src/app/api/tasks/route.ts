@@ -8,12 +8,12 @@ import {
   type AuthenticatedApiUser,
 } from "../_lib/auth";
 import { readIdempotencyKey, runIdempotentCreate } from "../_lib/idempotency";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 import {
   recordEaDirectCreateBypass,
   requireEaDirectCreateBypassReason,
 } from "@/ea/native/direct-create-bypass";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
 import { DefaultProjectResolutionError, resolveDefaultProjectIdForHive } from "@/projects/default-project";
 import { rejectDirectContentTaskWhenPipelineFits } from "@/goals/supervisor-tools";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
@@ -142,7 +142,9 @@ export async function GET(request: Request) {
   const { user } = authz;
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
     const status = params.get("status");
     const goalId = params.get("goalId");
     const assignedTo = params.get("assignedTo");
@@ -154,19 +156,8 @@ export async function GET(request: Request) {
     const values: unknown[] = [];
     let paramIdx = 1;
 
-    if (hiveId) {
-      if (!user.isSystemOwner) {
-        const hasAccess = await canAccessHive(sql, user.id, hiveId);
-        if (!hasAccess) {
-          return jsonError("Forbidden: caller cannot access this hive", 403);
-        }
-      }
-      conditions.push(`hive_id = $${paramIdx++}`);
-      values.push(hiveId);
-    } else if (!user.isSystemOwner) {
-      conditions.push(`hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = $${paramIdx++})`);
-      values.push(user.id);
-    }
+    conditions.push(`hive_id = $${paramIdx++}`);
+    values.push(hiveId);
     if (status) {
       conditions.push(`status = $${paramIdx++}`);
       values.push(status);
@@ -273,6 +264,9 @@ export async function POST(request: Request) {
       createdBy: requestedCreatedBy,
     });
     if (supervisorProof) return supervisorProof;
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, requestedHiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const eaBypassResult = requireEaDirectCreateBypassReason(request, body);
     if (!eaBypassResult.ok) return eaBypassResult.response;

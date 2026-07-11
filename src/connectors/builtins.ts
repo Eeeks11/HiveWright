@@ -254,6 +254,147 @@ const httpWebhook: ConnectorDefinitionDraft = {
 };
 
 // ---------------------------------------------------------------------
+// Website forms — read-only pull adapter for form/lead capture tools that
+// expose a JSON endpoint. Ingested form text is kept as untrusted data;
+// command-like fields are dropped from the metric snapshot path.
+// ---------------------------------------------------------------------
+const WEBSITE_FORMS_SYNC_TIMEOUT_MS = 10_000;
+const WEBSITE_FORMS_MAX_RESPONSE_BYTES = 1_000_000;
+
+async function readWebsiteFormsJsonResponse(res: Response): Promise<Record<string, unknown>> {
+  const contentLength = res.headers.get("content-length");
+  if (contentLength && Number(contentLength) > WEBSITE_FORMS_MAX_RESPONSE_BYTES) {
+    throw new Error("website forms sync response is too large");
+  }
+
+  const text = await res.text();
+  if (new TextEncoder().encode(text).byteLength > WEBSITE_FORMS_MAX_RESPONSE_BYTES) {
+    throw new Error("website forms sync response is too large");
+  }
+
+  const parsed = JSON.parse(text) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+const websiteForms: ConnectorDefinitionDraft = {
+  slug: "website-forms",
+  name: "Website forms",
+  category: "crm",
+  description:
+    "Read website form submissions from a JSON endpoint and sync them as untrusted connector data for marketing metrics and funnel snapshots.",
+  icon: "📝",
+  authType: "api_key",
+  setupFields: [
+    { key: "submissionsUrl", label: "Submissions JSON URL", type: "url", required: true },
+    {
+      key: "allowedHostnames",
+      label: "Allowed hostnames",
+      type: "textarea",
+      placeholder: "forms.example.com\napi.example.com",
+      helpText:
+        "Exact public hostnames this connector may read form submissions from. Must include the hostname in the submissions URL.",
+      required: true,
+    },
+    { key: "authHeader", label: "Authorization header (optional)", type: "password" },
+  ],
+  secretFields: ["submissionsUrl", "authHeader"],
+  capabilities: ["sync", "record_import"],
+  operations: [
+    {
+      slug: "sync_submissions",
+      label: "Sync form submissions",
+      inputSchema: {
+        type: "object",
+        required: [],
+        properties: {
+          cursor: { type: "string", description: "Opaque cursor from the previous sync" },
+        },
+      },
+      outputSummary: "Reads form submissions and returns connector sync items without creating replies, emails, tasks, spend, or public actions.",
+      governance: {
+        effectType: "read",
+        defaultDecision: "allow",
+        riskTier: "medium",
+        summary: "Pulls website form submission data as untrusted marketing/funnel evidence only.",
+        dryRunSupported: false,
+        externalSideEffect: false,
+      },
+      args: [{ key: "cursor", label: "Cursor", type: "text" }],
+      handler: async ({ config, secrets, args }) => {
+        const rawUrl = String(secrets.submissionsUrl ?? config.submissionsUrl ?? "").trim();
+        if (!rawUrl) throw new Error("submissionsUrl is required");
+        const url = new URL(rawUrl);
+        const cursor = typeof args.cursor === "string" && args.cursor.trim() ? args.cursor.trim() : "";
+        if (cursor) url.searchParams.set("cursor", cursor);
+        const destination = await validateHttpWebhookDestination(
+          url.toString(),
+          config.allowedHostnames,
+          "website-forms",
+        );
+
+        const headers: Record<string, string> = { Accept: "application/json" };
+        if (secrets.authHeader) headers.Authorization = secrets.authHeader;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), WEBSITE_FORMS_SYNC_TIMEOUT_MS);
+        let res: Response;
+        try {
+          res = await fetch(destination.url.toString(), {
+            method: "GET",
+            headers,
+            redirect: "manual",
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (res.status >= 300 && res.status < 400) {
+          throw new Error("website forms sync redirects are not allowed");
+        }
+        if (!res.ok) throw new Error(`website forms sync failed: ${res.status} ${res.statusText}`);
+
+        const body = await readWebsiteFormsJsonResponse(res);
+        const submissions = Array.isArray(body.submissions) ? body.submissions : [];
+        return {
+          stream: "submissions",
+          nextCursor: typeof body.nextCursor === "string" || body.nextCursor === null ? body.nextCursor : undefined,
+          items: submissions.map((submission, index) => normalizeWebsiteFormSubmission(submission, index)),
+        };
+      },
+    },
+  ],
+};
+
+function normalizeWebsiteFormSubmission(submission: unknown, index: number) {
+  const record = submission && typeof submission === "object" && !Array.isArray(submission)
+    ? submission as Record<string, unknown>
+    : {};
+  const externalId = String(record.id ?? record.submissionId ?? record.externalId ?? `submission-${index}`);
+  const occurredAt = typeof record.submittedAt === "string"
+    ? record.submittedAt
+    : typeof record.occurredAt === "string"
+      ? record.occurredAt
+      : undefined;
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (["instructions", "instruction", "prompt", "systemPrompt", "toolCall", "action"].includes(key)) continue;
+    payload[key] = value;
+  }
+  payload.provenance = {
+    sourceConnector: "website-forms",
+    source: "website_form_submission",
+    untrustedInput: true,
+    trustBoundary: "connector_data_only_not_instructions",
+    ownerApprovalRequiredForActions: true,
+  };
+  return {
+    stream: "submissions",
+    externalId,
+    occurredAt,
+    payload,
+  };
+}
+
+// ---------------------------------------------------------------------
 // SMTP email — outbound only. Uses the owner's own SMTP creds (Gmail,
 // Outlook, Mailgun, SendGrid SMTP bridge, etc.) so we don't need OAuth.
 // ---------------------------------------------------------------------
@@ -574,12 +715,19 @@ const voiceEa: ConnectorDefinitionDraft = {
         "Base URL of the GPU-hosted voice services (faster-whisper STT + Kokoro TTS + Pyannote voiceprint). Hostname:port; no trailing slash. Reachable over the tailnet from the dispatcher.",
     },
     {
+      key: "model",
+      label: "Model — optional",
+      type: "text",
+      placeholder: "openai-codex/<model-id>",
+      helpText: "Seeds the shared per-hive EA primary model used by Voice, Dashboard, and Discord. Manage both routes in Connector settings.",
+    },
+    {
       key: "maxMonthlyLlmCents",
       label: "Max monthly LLM spend (cents)",
       type: "text",
       placeholder: "0",
       helpText:
-        "Optional safety cap for voice-call LLM spend. 0 or blank = no cap. When set, the EA verbally warns at 80%, downgrades to Sonnet at 100%, and hangs up at 120%.",
+        "Optional safety cap for voice-call LLM spend. 0 or blank = no cap. When set, the EA verbally warns at 80%, selects the configured healthy fallback at 100%, and hangs up at 120%.",
     },
   ],
   secretFields: [],
@@ -1175,7 +1323,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
   name: "HiveWright EA (Discord)",
   category: "messaging",
   description:
-    "Hosts this hive's Executive Assistant on Discord. The dispatcher runs a bot that listens in the configured channel (and DMs), handles /status + /new slash commands, and replies to owner messages with full shell + HiveWright API access. Replaces the OpenClaw-gateway EA.",
+    "Hosts this hive's Executive Assistant on Discord. The dispatcher runs a bot that listens only in the configured channel/guild and only accepts messages or slash commands from configured owner Discord user IDs. DMs are disabled unless explicitly enabled. This PR keeps existing installs fail-closed until owner IDs are configured.",
   icon: "🐝",
   authType: "api_key",
   setupFields: [
@@ -1183,7 +1331,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
       key: "applicationId",
       label: "Discord Application ID",
       type: "text",
-      placeholder: "1234567890...",
+      placeholder: "123456789012345678",
       helpText:
         "From the Discord developer portal → your app → General Information → Application ID.",
       required: true,
@@ -1192,10 +1340,27 @@ const eaDiscord: ConnectorDefinitionDraft = {
       key: "channelId",
       label: "Discord channel ID",
       type: "text",
-      placeholder: "1234567890...",
+      placeholder: "123456789012345678",
       helpText:
-        "Right-click the channel in Discord with Developer Mode on → Copy Channel ID.",
+        "Required. Right-click the single channel this EA may read with Developer Mode on → Copy Channel ID. Non-DM messages outside this channel are rejected before any side effect.",
       required: true,
+    },
+    {
+      key: "ownerUserIds",
+      label: "Owner Discord user IDs",
+      type: "textarea",
+      placeholder: "123456789012345678\n234567890123456789",
+      helpText:
+        "Required allowlist. Add one Discord user ID per line (Developer Mode → right-click user → Copy User ID). Installs without at least one valid owner user ID will not start.",
+      required: true,
+    },
+    {
+      key: "directMessagesEnabled",
+      label: "Enable DMs — optional",
+      type: "text",
+      placeholder: "false",
+      helpText:
+        "DMs are disabled by default. Set exactly 'true' only if this EA should accept DMs, and only from the allowed owner Discord user IDs.",
     },
     {
       key: "botToken",
@@ -1219,7 +1384,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
       label: "Model — optional",
       type: "text",
       placeholder: "openai-codex/<model-id>",
-      helpText: "Optional runtime model override. Leave blank to use the configured runtime default.",
+      helpText: "Seeds the shared per-hive EA primary model used by Discord, Dashboard, and Voice. Manage both routes in Connector settings.",
     },
   ],
   secretFields: ["botToken"],
@@ -1258,7 +1423,13 @@ const eaDiscord: ConnectorDefinitionDraft = {
           botUsername: me.username,
           applicationId: config.applicationId,
           channelId: config.channelId,
-          note: "After saving, restart the dispatcher to take the EA online. The dispatcher auto-registers /status and /new on startup.",
+          ownerUserIdsConfigured: Array.isArray(config.ownerUserIds)
+            ? config.ownerUserIds.length
+            : typeof config.ownerUserIds === "string"
+              ? config.ownerUserIds.split(/[\s,]+/).filter(Boolean).length
+              : 0,
+          directMessagesEnabled: config.directMessagesEnabled === true || config.directMessagesEnabled === "true",
+          note: "After saving, restart the dispatcher to take the EA online. The dispatcher refuses to start ea-discord installs without valid owner Discord user IDs; DMs stay disabled unless explicitly enabled.",
         };
       },
     },
@@ -1316,6 +1487,7 @@ export const builtinConnectorPlugin = defineConnectorPlugin({
     discordWebhook,
     slackWebhook,
     httpWebhook,
+    websiteForms,
     smtpEmail,
     githubPat,
     stripe,

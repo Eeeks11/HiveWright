@@ -180,4 +180,38 @@ describe("connector install domain helpers", () => {
     expect(JSON.stringify(installs[0])).not.toContain("secret");
     expect(installs[0]).not.toHaveProperty("credentialId");
   });
+
+  it("seeds and updates shared EA routing from backward-compatible connector model fields", async () => {
+    const install = await createConnectorInstall(sql, {
+      hiveId: HIVE_ID,
+      connectorSlug: "voice-ea",
+      displayName: "Voice EA",
+      fields: { voiceServicesUrl: "http://voice.internal:8790" },
+    });
+
+    let [config] = await sql<{ primary_model: string | null; fallback_model: string | null }[]>`
+      SELECT primary_model, fallback_model
+      FROM ea_model_configurations
+      WHERE hive_id = ${HIVE_ID}
+    `;
+    expect(config).toEqual({
+      primary_model: "openai-codex/gpt-5.6-sol",
+      fallback_model: "openai-codex/gpt-5.5",
+    });
+
+    await updateConnectorInstall(sql, {
+      hiveId: HIVE_ID,
+      installId: install.id,
+      fields: { model: "openai-codex/gpt-5.4" },
+    });
+    [config] = await sql<{ primary_model: string | null; fallback_model: string | null }[]>`
+      SELECT primary_model, fallback_model
+      FROM ea_model_configurations
+      WHERE hive_id = ${HIVE_ID}
+    `;
+    expect(config).toEqual({
+      primary_model: "openai-codex/gpt-5.4",
+      fallback_model: "openai-codex/gpt-5.5",
+    });
+  });
 });

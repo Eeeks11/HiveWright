@@ -88,6 +88,21 @@ export const CURATED_MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     provider: "openai",
     adapterType: "codex",
+    modelId: "openai-codex/gpt-5.6-sol",
+    displayName: "GPT-5.6 Sol",
+    family: "gpt-5",
+    capabilities: ["text", "code", "reasoning"],
+    local: false,
+    costPerInputToken: "0.000005",
+    costPerOutputToken: "0.000030",
+    benchmarkQualityScore: null,
+    routingCostScore: 70,
+    metadataSourceName: "OpenAI GPT-5.6 Sol pricing",
+    metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+  },
+  {
+    provider: "openai",
+    adapterType: "codex",
     modelId: "openai-codex/gpt-5.5",
     displayName: "GPT-5.5",
     family: "gpt-5",
@@ -116,6 +131,21 @@ export const CURATED_MODEL_CATALOG: ModelCatalogEntry[] = [
     metadataSourceUrl: "https://openai.com/api/pricing/",
   },
   {
+    provider: "openai",
+    adapterType: "codex",
+    modelId: "openai-codex/gpt-5.4-mini",
+    displayName: "GPT-5.4 Mini",
+    family: "gpt-5",
+    capabilities: ["text", "code", "reasoning"],
+    local: false,
+    costPerInputToken: "0.0000005",
+    costPerOutputToken: "0.000002",
+    benchmarkQualityScore: null,
+    routingCostScore: 20,
+    metadataSourceName: "OpenAI API pricing",
+    metadataSourceUrl: "https://openai.com/api/pricing/",
+  },
+  {
     provider: "anthropic",
     adapterType: "claude-code",
     modelId: "anthropic/claude-opus-4-7",
@@ -133,30 +163,30 @@ export const CURATED_MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     provider: "google",
     adapterType: "gemini",
-    modelId: "google/gemini-3.1-pro-preview",
-    displayName: "Gemini 3.1 Pro Preview",
+    modelId: "google/gemini-2.5-pro",
+    displayName: "Gemini 2.5 Pro",
     family: "gemini-pro",
     capabilities: ["text", "code", "reasoning"],
     local: false,
-    costPerInputToken: "0.000002",
-    costPerOutputToken: "0.000012",
+    costPerInputToken: "0.00000125",
+    costPerOutputToken: "0.000010",
     benchmarkQualityScore: null,
-    routingCostScore: 40,
+    routingCostScore: 45,
     metadataSourceName: "Google Gemini API pricing",
     metadataSourceUrl: "https://ai.google.dev/gemini-api/docs/pricing",
   },
   {
     provider: "google",
     adapterType: "gemini",
-    modelId: "google/gemini-3.1-flash-lite-preview",
-    displayName: "Gemini 3.1 Flash Lite Preview",
+    modelId: "google/gemini-2.5-flash",
+    displayName: "Gemini 2.5 Flash",
     family: "gemini-flash",
     capabilities: ["text", "code"],
     local: false,
-    costPerInputToken: "0.00000025",
-    costPerOutputToken: "0.0000015",
+    costPerInputToken: "0.0000003",
+    costPerOutputToken: "0.0000025",
     benchmarkQualityScore: null,
-    routingCostScore: 8,
+    routingCostScore: 12,
     metadataSourceName: "Google Gemini API pricing",
     metadataSourceUrl: "https://ai.google.dev/gemini-api/docs/pricing",
   },
@@ -668,6 +698,10 @@ async function retireUnbenchmarkedAutoDiscoveredModels(sql: Sql) {
           'ollama_tags_api'
         )
         AND mc.benchmark_quality_score IS NULL
+        AND mc.cost_per_input_token IS NULL
+        AND mc.cost_per_output_token IS NULL
+        AND mc.routing_cost_score IS NULL
+        AND mc.metadata_source_name IS NULL
         AND NOT EXISTS (
           SELECT 1
           FROM model_capability_scores mcs

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
 import { startPipelineRun } from "@/pipelines/service";
+import { ANALYST_OUTPUT_DISPOSITION_KIND } from "@/tasks/output-disposition";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
@@ -278,6 +279,133 @@ describe("completeTask", () => {
     expect(updated.failure_reason).toBe(warning);
     expect(updated.completed_at).not.toBeNull();
   });
+  it("marks the task completed and records canonical disposition for GitHub routing publication output", async () => {
+    const [inserted] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${bizId},
+        'claimer-test-role',
+        'owner',
+        'Publish prior findings to GitHub',
+        'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.',
+        'active'
+      )
+      RETURNING *
+    `;
+
+    await completeTask(sql, inserted.id, "Published prior findings to GitHub issue #191 with verification evidence.");
+
+    const [updated] = await sql`
+      SELECT status, terminal_disposition
+      FROM tasks WHERE id = ${inserted.id}
+    `;
+    expect(updated.status).toBe("completed");
+    expect(updated.terminal_disposition).toMatchObject({
+      kind: ANALYST_OUTPUT_DISPOSITION_KIND,
+      terminal: true,
+      final_disposition_label: "github_issue_backlog_open",
+      evidence: { disposition: "github_route", githubRefs: expect.arrayContaining(["GitHub issue #191"]) },
+    });
+  });
+
+  it("rejects routing publication completion without route or terminal disposition evidence", async () => {
+    const [inserted] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${bizId},
+        'claimer-test-role',
+        'owner',
+        'Publish prior findings to GitHub',
+        'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.',
+        'active'
+      )
+      RETURNING *
+    `;
+
+    await completeTask(sql, inserted.id, "Prepared a summary of prior findings but did not publish or close out routing.");
+
+    const [updated] = await sql`
+      SELECT status, failure_reason, completed_at, terminal_disposition
+      FROM tasks WHERE id = ${inserted.id}
+    `;
+    expect(updated.status).toBe("failed");
+    expect(updated.failure_reason).toContain("Routing/publication task completion rejected");
+    expect(updated.completed_at).toBeNull();
+    expect(updated.terminal_disposition).toBeNull();
+  });
+
+  it("rejects routing publication completion when disposition evidence exists only in task instructions", async () => {
+    const instructionOnlyBriefs = [
+      "Route prior analyst findings to a GitHub issue. Example accepted output: Published to GitHub issue #191.",
+      "Route prior analyst findings or record an explicit no-follow-up terminal disposition if no action is needed.",
+    ];
+
+    for (const [index, brief] of instructionOnlyBriefs.entries()) {
+      const [inserted] = await sql`
+        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+        VALUES (
+          ${bizId},
+          'claimer-test-role',
+          'owner',
+          ${`Publish prior findings to GitHub ${index}`},
+          ${brief},
+          'active'
+        )
+        RETURNING *
+      `;
+
+      await completeTask(sql, inserted.id, "Prepared routing notes.");
+
+      const [updated] = await sql`
+        SELECT status, failure_reason, completed_at, terminal_disposition
+        FROM tasks WHERE id = ${inserted.id}
+      `;
+      expect(updated.status).toBe("failed");
+      expect(updated.failure_reason).toContain("Routing/publication task completion rejected");
+      expect(updated.completed_at).toBeNull();
+      expect(updated.terminal_disposition).toBeNull();
+    }
+  });
+
+  it("blocks deployment-sensitive direct completion when live runtime hash lacks the expected commit", async () => {
+    const previousHash = process.env.HIVEWRIGHT_BUILD_HASH;
+    process.env.HIVEWRIGHT_BUILD_HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try {
+      const [project] = await sql<{ id: string }[]>`
+        INSERT INTO projects (hive_id, slug, name, git_repo)
+        VALUES (${bizId}, 'claimer-deploy-sensitive', 'Claimer Deploy Sensitive', true)
+        RETURNING id
+      `;
+      const [inserted] = await sql`
+        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, project_id)
+        VALUES (
+          ${bizId},
+          'claimer-test-role',
+          'owner',
+          'Deploy dashboard fix',
+          'Deploy the fix to the live operational checkout and prove the same build is running.',
+          'active',
+          ${project.id}
+        )
+        RETURNING *
+      `;
+
+      await completeTask(sql, inserted.id, "Expected commit 36cb96c passed focused tests in task worktree.");
+
+      const [updated] = await sql`
+        SELECT status, result_summary, failure_reason, completed_at
+        FROM tasks WHERE id = ${inserted.id}
+      `;
+      expect(updated.status).toBe("blocked");
+      expect(updated.result_summary).toBeNull();
+      expect(updated.completed_at).toBeNull();
+      expect(updated.failure_reason).toContain("Deployment-sensitive completion blocked");
+      expect(updated.failure_reason).toContain("Current runtime build hash");
+    } finally {
+      if (previousHash === undefined) delete process.env.HIVEWRIGHT_BUILD_HASH;
+      else process.env.HIVEWRIGHT_BUILD_HASH = previousHash;
+    }
+  });
 });
 
 async function seedTwoStepPipelineForClaimedTask() {
@@ -421,6 +549,43 @@ Unit checked and source request preserved.`);
     expect(stepRun.status).toBe("failed");
     expect(task.status).toBe("failed");
     expect(task.failure_reason).toContain("missing required field");
+  });
+
+  it("fails the pipeline cleanly when a routing publication step lacks route disposition evidence", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+    await sql`
+      UPDATE tasks
+      SET
+        title = 'Publish prior findings to GitHub',
+        brief = 'Route prior analyst findings to a GitHub issue or record why no follow-up is needed.'
+      WHERE id = ${started.taskId}
+    `;
+
+    await completeTask(sql, started.taskId, `summary: Reviewed existing work for the routing pipeline handoff but left publication unresolved.
+verification: Checked notes only; no route or terminal closeout evidence recorded.`);
+
+    const [run] = await sql<{ status: string; supervisor_handoff: string | null }[]>`
+      SELECT status, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [stepRun] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM pipeline_step_runs WHERE task_id = ${started.taskId}
+    `;
+    const [task] = await sql<{ status: string; failure_reason: string | null; completed_at: Date | null }[]>`
+      SELECT status, failure_reason, completed_at FROM tasks WHERE id = ${started.taskId}
+    `;
+
+    expect(task.status).toBe("failed");
+    expect(task.completed_at).toBeNull();
+    expect(task.failure_reason).toContain("Routing/publication task completion rejected");
+    expect(stepRun.status).toBe("failed");
+    expect(stepRun.result_summary).toContain("Routing/publication task completion rejected");
+    expect(run.status).toBe("failed");
+    expect(run.supervisor_handoff).toContain("Routing/publication task completion rejected");
   });
 
   it("fails the pipeline cleanly when schema-valid output drifts from original source task intent", async () => {

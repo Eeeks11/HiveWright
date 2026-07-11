@@ -46,9 +46,11 @@ describe("POST /api/hives — default-schedule seeding", () => {
       SELECT cron_expression, enabled, task_template, created_by, origin_key
       FROM schedules WHERE hive_id = ${hiveId}::uuid
     `;
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
 
-    const heartbeat = rows[0];
+    const heartbeat = rows.find((row) => row.origin_key === "hive-supervisor-heartbeat");
+    expect(heartbeat).toBeDefined();
+    if (!heartbeat) throw new Error("Expected supervisor heartbeat schedule");
     expect(heartbeat).toMatchObject({
       cron_expression: "*/15 * * * *",
       enabled: true,
@@ -84,13 +86,13 @@ describe("POST /api/hives — default-schedule seeding", () => {
       name: "Idempotent Co",
       description: null,
     });
-    expect(second).toEqual({ created: 0, skipped: 1 });
+    expect(second).toEqual({ created: 0, skipped: 2 });
 
     const [{ total }] = (await sql`
       SELECT COUNT(*)::int AS total FROM schedules
       WHERE hive_id = ${hiveId}::uuid
     `) as unknown as { total: number }[];
-    expect(total).toBe(1);
+    expect(total).toBe(2);
 
     const [{ hb }] = (await sql`
       SELECT COUNT(*)::int AS hb FROM schedules

@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonOk, jsonError } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
 import { recordDecisionAuditEvent } from "../_audit";
 
@@ -31,55 +31,63 @@ export async function PATCH(
     if (!ownerResponse) {
       return jsonError("Missing required field: ownerResponse", 400);
     }
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [decisionRow] = await sql<{ hiveId: string; goalId: string | null; taskId: string | null }[]>`
-      SELECT hive_id AS "hiveId", goal_id AS "goalId", task_id AS "taskId" FROM decisions WHERE id = ${id}
+      SELECT hive_id AS "hiveId", goal_id AS "goalId", task_id AS "taskId" FROM decisions WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!decisionRow) {
       return jsonError("Decision not found", 404);
     }
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, decisionRow.hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this decision's hive", 403);
-      }
-    }
-
-    const rows = await sql`
-      UPDATE decisions
-      SET status = 'resolved', owner_response = ${ownerResponse}, resolved_at = NOW()
-      WHERE id = ${id}
-      RETURNING id, task_id
-    `;
-
-    if (rows.length === 0) {
-      return jsonError("Decision not found", 404);
-    }
-
-    const decision = rows[0] as { id: string; task_id: string | null };
-
-    if (decision.task_id) {
-      // Cross-hive mutation hardening (audit 2026-04-22): bind the task
-      // reopen to the decision's hive so a mismatched decisions.task_id
-      // (bad data, future code path) cannot reopen a task in another hive.
-      // Caller auth only covers decisionRow.hiveId; tasks in any other
-      // hive must be untouched regardless of decisions.task_id state.
-      const reopened = await sql`
-        UPDATE tasks
-        SET
-          status = 'pending',
-          brief = brief || chr(10) || chr(10) || '## Owner Decision' || chr(10) || ${ownerResponse},
-          updated_at = NOW()
-        WHERE id = ${decision.task_id} AND hive_id = ${decisionRow.hiveId}
-        RETURNING id
+    const decision = await sql.begin(async (tx) => {
+      const rows = await tx`
+        UPDATE decisions
+        SET status = 'resolved', owner_response = ${ownerResponse}, resolved_at = NOW()
+        WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
+        RETURNING id, task_id
       `;
-      if (reopened.length === 0) {
-        console.error(
-          `[PATCH /api/decisions/${id}] task ${decision.task_id} not reopened: ` +
-            `hive mismatch with decision hive ${decisionRow.hiveId}`,
-        );
-        return jsonError("Failed to resolve decision", 500);
+
+      if (rows.length === 0) {
+        return null;
       }
+
+      const updatedDecision = rows[0] as { id: string; task_id: string | null };
+
+      if (updatedDecision.task_id) {
+        // Cross-hive mutation hardening (audit 2026-04-22): bind the task
+        // reopen to the decision's hive so a mismatched decisions.task_id
+        // (bad data, future code path) cannot reopen a task in another hive.
+        // Caller auth only covers decisionRow.hiveId; tasks in any other
+        // hive must be untouched regardless of decisions.task_id state.
+        const reopened = await tx`
+          UPDATE tasks
+          SET
+            status = 'pending',
+            brief = brief || chr(10) || chr(10) || '## Owner Decision' || chr(10) || ${ownerResponse},
+            updated_at = NOW()
+          WHERE id = ${updatedDecision.task_id} AND hive_id = ${decisionRow.hiveId}
+          RETURNING id
+        `;
+        if (reopened.length === 0) {
+          console.error(
+            `[PATCH /api/decisions/${id}] task ${updatedDecision.task_id} not reopened: ` +
+              `hive mismatch with decision hive ${decisionRow.hiveId}`,
+          );
+          throw new Error("linked task reopen failed");
+        }
+      }
+
+      return updatedDecision;
+    });
+
+    if (!decision) {
+      return jsonError("Decision not found", 404);
     }
 
     await recordDecisionAuditEvent({

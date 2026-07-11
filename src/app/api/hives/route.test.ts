@@ -198,6 +198,20 @@ describe("GET /api/hives", () => {
       workspacePath: configuredHivePath("member-hive", "projects"),
       isSystemFixture: false,
       createdAt: "2026-04-27T00:00:00.000Z",
+      businessOs: {
+        status: "setup_required",
+        mode: null,
+        profileId: null,
+        href: "/hives/hive-1/business-os/setup",
+        readiness: {
+          state: "unknown",
+          averageScore: null,
+          label: "Not measured",
+        },
+        openGapsCount: 0,
+        approvalsRequiredCount: 0,
+        nextAction: "Set up or audit this business",
+      },
     }]);
     expect(mockSql).toHaveBeenCalledTimes(1);
     expect(String(mockSql.mock.calls[0][0])).toContain("INNER JOIN hive_memberships");

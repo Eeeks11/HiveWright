@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveAuthSecret,
-  resolveBootstrapDashboardPassword,
-} from "@/auth/defaults";
+import { resolveAuthSecret } from "@/auth/defaults";
 
 describe("resolveAuthSecret", () => {
   it("uses the development auth secret only in NODE_ENV=development", () => {
@@ -42,28 +39,5 @@ describe("resolveAuthSecret", () => {
         ENCRYPTION_KEY: "configured-encryption-key",
       }),
     ).toBe("configured-encryption-key");
-  });
-});
-
-describe("resolveBootstrapDashboardPassword", () => {
-  it("uses the known bootstrap password only in NODE_ENV=development", () => {
-    expect(resolveBootstrapDashboardPassword({ NODE_ENV: "development" })).toBe(
-      "hivewright",
-    );
-  });
-
-  it("fails outside development when DASHBOARD_PASSWORD is missing", () => {
-    expect(() =>
-      resolveBootstrapDashboardPassword({ NODE_ENV: "production" }),
-    ).toThrow(/DASHBOARD_PASSWORD/);
-  });
-
-  it("accepts an explicit DASHBOARD_PASSWORD outside development", () => {
-    expect(
-      resolveBootstrapDashboardPassword({
-        NODE_ENV: "production",
-        DASHBOARD_PASSWORD: "configured-dashboard-password",
-      }),
-    ).toBe("configured-dashboard-password");
   });
 });

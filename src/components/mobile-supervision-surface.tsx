@@ -277,7 +277,7 @@ export function MobileSupervisionSurface({
       const res = await fetch(`/api/goals/${goalId}/comments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, createdBy: "owner" }),
+        body: JSON.stringify({ hiveId, body, createdBy: "owner" }),
       });
       if (!res.ok) throw new Error("Failed to send redirect");
     },

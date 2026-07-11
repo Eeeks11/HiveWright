@@ -175,7 +175,7 @@ describe("LLM release scan owner-gated flow", () => {
     const req = new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ response: "approved", comment: "Proceed with the registry patch" }),
+      body: JSON.stringify({ hiveId: HIVE, response: "approved", comment: "Proceed with the registry patch" }),
     });
     const res = await respondToDecision(req, {
       params: Promise.resolve({ id: decision.id }),
@@ -211,7 +211,7 @@ describe("LLM release scan owner-gated flow", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Proceed with the registry patch" }),
+        body: JSON.stringify({ hiveId: HIVE, response: "approved", comment: "Proceed with the registry patch" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
@@ -221,7 +221,7 @@ describe("LLM release scan owner-gated flow", () => {
     expect(await countReleasePatchTasks()).toBe(1);
   });
 
-  it("suppresses duplicate proposals when an approved decision with a comment has active patch work", async () => {
+  it("suppresses duplicate proposals while a commented approval has active patch work", async () => {
     await runWithSourceText(NEW_MODEL_HTML);
     const [decision] = await sql<Array<{ id: string }>>`
       SELECT id FROM decisions WHERE hive_id = ${HIVE}
@@ -231,29 +231,24 @@ describe("LLM release scan owner-gated flow", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Proceed with the registry patch" }),
+        body: JSON.stringify({
+          hiveId: HIVE,
+          response: "approved",
+          comment: "Proceed with the registry patch",
+        }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
     expect(approval.status).toBe(200);
     expect(await countReleasePatchTasks()).toBe(1);
 
-    await sql`
-      UPDATE tasks
-      SET status = 'running'
-      WHERE hive_id = ${HIVE}
-        AND created_by = 'decision-release-scan'
-    `;
-
-    const [resolvedDecision] = await sql<Array<{
+    const [recordedDecision] = await sql<Array<{
       owner_response: string | null;
       selected_option_key: string | null;
     }>>`
-      SELECT owner_response, selected_option_key
-      FROM decisions
-      WHERE id = ${decision.id}
+      SELECT owner_response, selected_option_key FROM decisions WHERE id = ${decision.id}
     `;
-    expect(resolvedDecision.owner_response).toBe("approved: Proceed with the registry patch");
+    expect(recordedDecision.owner_response).toBe("approved: Proceed with the registry patch");
 
     const result = await runWithSourceText(NEW_MODEL_HTML);
     expect(result).toMatchObject({
@@ -262,24 +257,76 @@ describe("LLM release scan owner-gated flow", () => {
       heartbeatRecorded: false,
     });
 
-    const decisions = await sql`SELECT id FROM decisions WHERE hive_id = ${HIVE}`;
+    const decisions = await sql<Array<{ id: string }>>`
+      SELECT id FROM decisions WHERE hive_id = ${HIVE}
+    `;
     expect(decisions).toHaveLength(1);
     expect(await countReleasePatchTasks()).toBe(1);
 
-    const [suppression] = await sql<Array<{
-      action_taken: string;
-      suppression_reason: string | null;
-      evidence: { priorOwnerResponse?: string | null };
-    }>>`
+    const [runDecision] = await sql<
+      Array<{
+        action_taken: string;
+        suppression_reason: string | null;
+        evidence: { priorOwnerResponse?: string | null };
+      }>
+    >`
       SELECT action_taken, suppression_reason, evidence
       FROM initiative_run_decisions
       WHERE run_id = ${result.runId}
     `;
-    expect(suppression).toMatchObject({
+    expect(runDecision).toMatchObject({
       action_taken: "suppress",
       suppression_reason: "cooldown_active",
     });
-    expect(suppression.evidence.priorOwnerResponse).toBe("approved: Proceed with the registry patch");
+    expect(runDecision.evidence.priorOwnerResponse).toBe("approved: Proceed with the registry patch");
+  });
+
+  it("suppresses duplicate proposals while an approved release-scan patch task is running", async () => {
+    await runWithSourceText(NEW_MODEL_HTML);
+    const [decision] = await sql<Array<{ id: string }>>`
+      SELECT id FROM decisions WHERE hive_id = ${HIVE}
+    `;
+
+    const approval = await respondToDecision(
+      new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hiveId: HIVE, response: "approved", comment: "Proceed with the registry patch" }),
+      }),
+      { params: Promise.resolve({ id: decision.id }) },
+    );
+    expect(approval.status).toBe(200);
+    const approvalBody = await approval.json();
+    expect(approvalBody.data.queuedTaskId).toBeTruthy();
+
+    await sql`
+      UPDATE tasks
+      SET status = 'running'
+      WHERE id = ${approvalBody.data.queuedTaskId}
+    `;
+
+    const result = await runWithSourceText(NEW_MODEL_HTML);
+    expect(result).toMatchObject({
+      newModelsDetected: 1,
+      decisionsCreated: 0,
+      heartbeatRecorded: false,
+    });
+
+    const decisions = await sql<Array<{ id: string }>>`
+      SELECT id FROM decisions WHERE hive_id = ${HIVE}
+    `;
+    expect(decisions).toHaveLength(1);
+    expect(await countReleasePatchTasks()).toBe(1);
+
+    const [runDecision] = await sql<Array<{ action_taken: string; suppression_reason: string | null }>>`
+      SELECT action_taken, suppression_reason
+      FROM initiative_run_decisions
+      WHERE run_id = ${result.runId}
+    `;
+    expect(runDecision).toMatchObject({
+      action_taken: "suppress",
+      suppression_reason: "cooldown_active",
+    });
   });
 
   it("does not queue patch tasks while the decision is pending or after rejection", async () => {
@@ -293,7 +340,7 @@ describe("LLM release scan owner-gated flow", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "rejected", comment: "Do not patch this model" }),
+        body: JSON.stringify({ hiveId: HIVE, response: "rejected", comment: "Do not patch this model" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );

@@ -159,7 +159,7 @@ describe("Goals API", () => {
   });
 
   it("GET /api/goals/[id] — returns goal detail with taskSummary and subGoals", async () => {
-    const req = new Request(`http://localhost/api/goals/${goalId}`);
+    const req = new Request(`http://localhost/api/goals/${goalId}?hiveId=${hiveId}`);
     const res = await getGoalDetail(req, {
       params: Promise.resolve({ id: goalId }),
     });
@@ -175,7 +175,7 @@ describe("Goals API", () => {
 
   it("GET /api/goals/[id] — returns 404 for unknown id", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
-    const req = new Request(`http://localhost/api/goals/${fakeId}`);
+    const req = new Request(`http://localhost/api/goals/${fakeId}?hiveId=${hiveId}`);
     const res = await getGoalDetail(req, {
       params: Promise.resolve({ id: fakeId }),
     });
@@ -191,7 +191,7 @@ describe("Goals API", () => {
       RETURNING id
     `;
 
-    const req = new Request(`http://localhost/api/goals/${goalId}`);
+    const req = new Request(`http://localhost/api/goals/${goalId}?hiveId=${hiveId}`);
     const res = await getGoalDetail(req, {
       params: Promise.resolve({ id: goalId }),
     });
@@ -393,6 +393,20 @@ describe("Decisions API", () => {
       )
       RETURNING id
     `;
+    const [notNormalized] = await sql<{ id: string }[]>`
+      INSERT INTO decisions (hive_id, goal_id, title, context, priority, status, kind, route_metadata)
+      VALUES (
+        ${hiveId},
+        ${goalId},
+        'Raw producer payload needs rewrite',
+        'This row deliberately opts out of the normal owner inbox until a producer normalizes it.',
+        'normal',
+        'pending',
+        'decision',
+        ${sql.json({ normalizedOwnerQuestion: false })}
+      )
+      RETURNING id
+    `;
     const [fixtureHive] = await sql<{ id: string }[]>`
       INSERT INTO hives (slug, name, type, is_system_fixture)
       VALUES (${PREFIX + "fixture"}, 'System Fixture Hive', 'digital', true)
@@ -436,6 +450,7 @@ describe("Decisions API", () => {
     expect(allDefaultIds).not.toContain(learningGateFollowup.id);
     expect(allDefaultIds).not.toContain(qaTaskDecision.id);
     expect(allDefaultIds).not.toContain(notificationApproval.id);
+    expect(allDefaultIds).not.toContain(notNormalized.id);
 
     const includeRes = await getDecisions(new Request(
       `http://localhost/api/decisions?hiveId=${hiveId}&kind=all&includeInternalSystem=true&includeAiPeerQualityFeedback=true`,
@@ -452,6 +467,7 @@ describe("Decisions API", () => {
       learningGateFollowup.id,
       qaTaskDecision.id,
       notificationApproval.id,
+      notNormalized.id,
     ]));
     expect(includedIds).not.toContain(fixtureDecision.id);
   });
@@ -483,7 +499,7 @@ describe("Decisions API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Looks good" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "Looks good" }),
       },
     );
 
@@ -523,7 +539,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${decision.id}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ selectedOptionKey: "gca-login" }),
+        body: JSON.stringify({ hiveId, selectedOptionKey: "gca-login" }),
       }),
       { params: Promise.resolve({ id: decision.id }) },
     );
@@ -583,6 +599,7 @@ describe("Decisions API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          hiveId,
           response: instruction,
           selectedOptionKey: "generic_education_only",
           selectedOptionLabel: "Keep it general",
@@ -624,7 +641,7 @@ describe("Decisions API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Ship it" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "Ship it" }),
       },
     );
 
@@ -669,7 +686,7 @@ describe("Decisions API", () => {
         new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ response, comment: "Not yet" }),
+          body: JSON.stringify({ hiveId, response, comment: "Not yet" }),
         }),
         { params: Promise.resolve({ id: releaseDecisionId }) },
       );
@@ -695,7 +712,7 @@ describe("Decisions API", () => {
         new Request(`http://localhost/api/decisions/${direct.decisionId}/respond`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ response, comment: "Use the latest QA notes" }),
+          body: JSON.stringify({ hiveId, response, comment: "Use the latest QA notes" }),
         }),
         { params: Promise.resolve({ id: direct.decisionId }) },
       );
@@ -729,7 +746,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${direct.decisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "abandon", comment: "No longer useful" }),
+        body: JSON.stringify({ hiveId, response: "abandon", comment: "No longer useful" }),
       }),
       { params: Promise.resolve({ id: direct.decisionId }) },
     );
@@ -754,7 +771,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "rejected", comment: "Do not ship" }),
+        body: JSON.stringify({ hiveId, response: "rejected", comment: "Do not ship" }),
       }),
       { params: Promise.resolve({ id: releaseDecisionId }) },
     );
@@ -762,7 +779,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Changed my mind" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "Changed my mind" }),
       }),
       { params: Promise.resolve({ id: releaseDecisionId }) },
     );
@@ -786,7 +803,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Approved" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "Approved" }),
       }),
       { params: Promise.resolve({ id: releaseDecisionId }) },
     );
@@ -794,7 +811,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${releaseDecisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "Approved again" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "Approved again" }),
       }),
       { params: Promise.resolve({ id: releaseDecisionId }) },
     );
@@ -821,7 +838,7 @@ describe("Decisions API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "maybe" }),
+        body: JSON.stringify({ hiveId, response: "maybe" }),
       },
     );
 
@@ -841,7 +858,7 @@ describe("Decisions API", () => {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "rejected" }),
+        body: JSON.stringify({ hiveId, response: "rejected" }),
       },
     );
 
@@ -858,7 +875,7 @@ describe("Decisions API", () => {
       new Request(`http://localhost/api/decisions/${decisionId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ response: "approved", comment: "done" }),
+        body: JSON.stringify({ hiveId, response: "approved", comment: "done" }),
       }),
       { params: Promise.resolve({ id: decisionId }) },
     );
@@ -1013,7 +1030,7 @@ describe("PATCH /api/decisions/[id] cross-hive guard", () => {
     const req = new Request(`http://localhost/api/decisions/${decisionId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "resolved", ownerResponse: "go ahead" }),
+      body: JSON.stringify({ hiveId, status: "resolved", ownerResponse: "go ahead" }),
     });
     const res = await patchDecision(req, {
       params: Promise.resolve({ id: decisionId }),
@@ -1026,6 +1043,13 @@ describe("PATCH /api/decisions/[id] cross-hive guard", () => {
     `;
     expect(task.status).toBe("completed");
     expect(task.brief).toBe("Untouched brief");
+
+    const [decision] = await sql<{ status: string; owner_response: string | null; resolved_at: Date | null }[]>`
+      SELECT status, owner_response, resolved_at FROM decisions WHERE id = ${decisionId}
+    `;
+    expect(decision.status).toBe("pending");
+    expect(decision.owner_response).toBeNull();
+    expect(decision.resolved_at).toBeNull();
   });
 });
 

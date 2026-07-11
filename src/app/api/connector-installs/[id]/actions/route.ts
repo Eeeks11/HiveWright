@@ -1,8 +1,8 @@
-import { canAccessHive } from "@/auth/users";
+import { requireResourceOwnedByHive, requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { redactActionPayload, sanitizeAuditString } from "@/actions/redaction";
 import { requireApiUser } from "../../../_lib/auth";
 import { sql } from "../../../_lib/db";
-import { jsonError, jsonOk } from "../../../_lib/responses";
+import { jsonOk } from "../../../_lib/responses";
 
 export async function GET(
   request: Request,
@@ -12,18 +12,16 @@ export async function GET(
   if ("response" in authz) return authz.response;
 
   const { id } = await ctx.params;
+  const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+  if (!target.ok) return target.response;
   const [install] = await sql<{ id: string; hive_id: string; connector_slug: string }[]>`
     SELECT id, hive_id, connector_slug
     FROM connector_installs
     WHERE id = ${id}
     LIMIT 1
   `;
-  if (!install) return jsonError("install not found", 404);
-
-  if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, install.hive_id);
-    if (!hasAccess) return jsonError("Forbidden: caller cannot access this hive", 403);
-  }
+  const ownership = requireResourceOwnedByHive(install?.hive_id, target.hiveId, { resourceName: "Install" });
+  if (!ownership.ok) return ownership.response;
 
   const limit = Math.min(
     Math.max(Number(new URL(request.url).searchParams.get("limit") ?? 20), 1),

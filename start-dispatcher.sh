@@ -12,6 +12,7 @@ ENV_FILE="${HIVEWRIGHT_ENV_FILE:-${HIVEWRIGHT_RUNTIME_ROOT:-$HOME/.hivewright}/c
 # missing env-var substitution and every agent crashes at boot.
 SECRETS_FILE="${HIVEWRIGHT_SECRETS_FILE:-${HIVEWRIGHT_RUNTIME_ROOT:-$HOME/.hivewright}/secrets.env}"
 [ -f "$SECRETS_FILE" ] && source "$SECRETS_FILE"
+unset HIVEWRIGHT_OWNER_SETUP_TOKEN
 set +a
 
 echo "[start-dispatcher] applying database migrations"

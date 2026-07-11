@@ -73,6 +73,14 @@ const globalSetupLinks = [
   },
 ];
 
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId || href === "/hives/new") return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
+}
+
 function SetupLinkCard({ href, title, description }: { href: string; title: string; description: string }) {
   return (
     <Link
@@ -85,7 +93,17 @@ function SetupLinkCard({ href, title, description }: { href: string; title: stri
   );
 }
 
-export default function SetupPage() {
+export default async function SetupPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ targetHiveId?: string | string[] }>;
+}) {
+  const resolvedSearchParams = await searchParams;
+  const rawTargetHiveId = Array.isArray(resolvedSearchParams?.targetHiveId)
+    ? resolvedSearchParams?.targetHiveId[0]
+    : resolvedSearchParams?.targetHiveId;
+  const targetHiveId = rawTargetHiveId?.trim() || null;
+
   return (
     <div className="space-y-8">
       <div>
@@ -102,7 +120,7 @@ export default function SetupPage() {
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {recommendedSetupSteps.map((link) => (
-            <SetupLinkCard key={link.href} {...link} />
+            <SetupLinkCard key={link.href} {...link} href={withTargetHiveId(link.href, targetHiveId)} />
           ))}
         </div>
       </section>
@@ -114,7 +132,7 @@ export default function SetupPage() {
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {hiveSetupLinks.map((link) => (
-            <SetupLinkCard key={link.href} {...link} />
+            <SetupLinkCard key={link.href} {...link} href={withTargetHiveId(link.href, targetHiveId)} />
           ))}
         </div>
       </section>
@@ -126,7 +144,7 @@ export default function SetupPage() {
         </div>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {globalSetupLinks.map((link) => (
-            <SetupLinkCard key={link.href} {...link} />
+            <SetupLinkCard key={link.href} {...link} href={withTargetHiveId(link.href, targetHiveId)} />
           ))}
         </div>
       </section>

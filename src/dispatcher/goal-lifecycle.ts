@@ -25,6 +25,85 @@ export async function findNewGoals(sql: Sql): Promise<NewGoal[]> {
   }));
 }
 
+export interface StaleZeroProgressGoal {
+  goalId: string;
+  sessionId: string;
+  updatedAt: Date;
+}
+
+export async function findStaleZeroProgressGoals(
+  sql: Sql,
+  staleAfterMinutes = 10,
+): Promise<StaleZeroProgressGoal[]> {
+  const rows = await sql`
+    SELECT g.id AS goal_id, g.session_id, g.updated_at
+    FROM goals g
+    WHERE g.status = 'active'
+      AND g.session_id IS NOT NULL
+      AND g.updated_at < NOW() - (${staleAfterMinutes} * INTERVAL '1 minute')
+      AND NOT EXISTS (
+        SELECT 1
+        FROM pg_locks l
+        WHERE l.locktype = 'advisory'
+          AND l.granted
+          AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+          AND l.objid = ((hashtext(g.id::text)::bigint & 4294967295))::oid
+      )
+      AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id)
+      AND NOT EXISTS (SELECT 1 FROM goal_documents d WHERE d.goal_id = g.id)
+      AND NOT EXISTS (SELECT 1 FROM goal_comments c WHERE c.goal_id = g.id)
+      AND NOT EXISTS (SELECT 1 FROM decisions x WHERE x.goal_id = g.id)
+  `;
+  return rows.map((row) => ({
+    goalId: row.goal_id as string,
+    sessionId: row.session_id as string,
+    updatedAt: row.updated_at as Date,
+  }));
+}
+
+/** Atomically release stale zero-progress sessions so normal discovery retries them. */
+export async function recoverStaleZeroProgressGoals(
+  sql: Sql,
+  staleAfterMinutes = 10,
+): Promise<StaleZeroProgressGoal[]> {
+  const rows = await sql`
+    WITH stale_candidates AS MATERIALIZED (
+      SELECT g.id, g.session_id, g.updated_at
+      FROM goals g
+      WHERE g.status = 'active'
+        AND g.session_id IS NOT NULL
+        AND g.updated_at < NOW() - (${staleAfterMinutes} * INTERVAL '1 minute')
+        AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.goal_id = g.id)
+        AND NOT EXISTS (SELECT 1 FROM goal_documents d WHERE d.goal_id = g.id)
+        AND NOT EXISTS (SELECT 1 FROM goal_comments c WHERE c.goal_id = g.id)
+        AND NOT EXISTS (SELECT 1 FROM decisions x WHERE x.goal_id = g.id)
+    ), candidates AS MATERIALIZED (
+      SELECT c.*
+      FROM stale_candidates c
+      WHERE pg_try_advisory_xact_lock(
+        hashtext('hivewright:goal-supervisor-wake'),
+        hashtext(c.id::text)
+      )
+    ), recovered AS (
+      UPDATE goals g
+      SET session_id = NULL, updated_at = NOW()
+      FROM candidates c
+      WHERE g.id = c.id
+        AND g.status = 'active'
+        AND g.session_id = c.session_id
+      RETURNING g.id
+    )
+    SELECT c.id AS goal_id, c.session_id, c.updated_at
+    FROM candidates c
+    JOIN recovered r ON r.id = c.id
+  `;
+  return rows.map((row) => ({
+    goalId: row.goal_id as string,
+    sessionId: row.session_id as string,
+    updatedAt: row.updated_at as Date,
+  }));
+}
+
 export interface CompletedSprintForWakeUp {
   goalId: string;
   sprintNumber: number;

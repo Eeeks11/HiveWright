@@ -1,7 +1,7 @@
 import { sql } from "../../_lib/db";
 import { jsonError, jsonOk } from "../../_lib/responses";
 import { requireApiUser } from "../../_lib/auth";
-import { canMutateHive } from "@/auth/users";
+import { requireResourceOwnedByHive, requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
@@ -37,25 +37,28 @@ export async function PATCH(
   if ("response" in authz) return authz.response;
   try {
     const { id } = await ctx.params;
-    const body = (await request.json().catch(() => ({}))) as { status?: unknown };
+    const body = (await request.json().catch(() => ({}))) as { hiveId?: unknown; status?: unknown };
     if (typeof body.status !== "string" || !ALLOWED_STATUSES.has(body.status)) {
       return jsonError("status must be active or disabled", 400);
     }
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "body", body },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
 
     const [install] = await sql<{ hiveId: string }[]>`
       SELECT hive_id AS "hiveId" FROM connector_installs WHERE id = ${id}
     `;
-    if (!install) return jsonError("install not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const canMutate = await canMutateHive(sql, authz.user.id, install.hiveId);
-      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
-    }
+    const ownership = requireResourceOwnedByHive(install?.hiveId, target.hiveId, { resourceName: "Install" });
+    if (!ownership.ok) return ownership.response;
 
     const [row] = await sql<InstallRow[]>`
       UPDATE connector_installs
       SET status = ${body.status}, updated_at = NOW()
-      WHERE id = ${id}
+      WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
       RETURNING
         id,
         hive_id AS "hiveId",
@@ -87,13 +90,21 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
   if ("response" in authz) return authz.response;
   try {
     const { id } = await ctx.params;
+    const target = await requireStrictHiveTarget(
+      sql,
+      authz.user,
+      { kind: "query", request },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
+
     const [install] = await sql<{
       hiveId: string;
       connectorSlug: string;
@@ -106,17 +117,13 @@ export async function DELETE(
       FROM connector_installs
       WHERE id = ${id}
     `;
-    if (!install) return jsonError("install not found", 404);
-
-    if (!authz.user.isSystemOwner) {
-      const canMutate = await canMutateHive(sql, authz.user.id, install.hiveId);
-      if (!canMutate) return jsonError("Forbidden: caller cannot mutate this hive", 403);
-    }
+    const ownership = requireResourceOwnedByHive(install?.hiveId, target.hiveId, { resourceName: "Install" });
+    if (!ownership.ok) return ownership.response;
 
     // Cascade-deletes connector_events via FK; credential row survives so
     // the audit of "who had access and when" is preserved — the owner can
     // rotate/delete it explicitly from the credentials settings page.
-    await sql`DELETE FROM connector_installs WHERE id = ${id}`;
+    await sql`DELETE FROM connector_installs WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid`;
     await recordAgentAuditEventBestEffort(sql, {
       actor: { type: "owner", id: authz.user.id, label: authz.user.email },
       eventType: AGENT_AUDIT_EVENTS.connectorRevokedByOwner,

@@ -20,6 +20,8 @@ vi.mock("@/auth/users", () => ({
 
 const { GET } = await import("@/app/api/connector-installs/[id]/actions/route");
 
+const hiveId = "11111111-1111-4111-8111-111111111111";
+
 describe("GET /api/connector-installs/[id]/actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -28,7 +30,8 @@ describe("GET /api/connector-installs/[id]/actions", () => {
     });
     mocks.canAccessHive.mockResolvedValue(true);
     mocks.sql
-      .mockResolvedValueOnce([{ id: "install-1", hive_id: "hive-a", connector_slug: "discord-webhook" }])
+      .mockResolvedValueOnce([{ id: hiveId }])
+      .mockResolvedValueOnce([{ id: "install-1", hive_id: hiveId, connector_slug: "discord-webhook" }])
       .mockResolvedValueOnce([
         {
           id: "action-1",
@@ -60,7 +63,7 @@ describe("GET /api/connector-installs/[id]/actions", () => {
 
   it("returns redacted recent action and connector event history for an install", async () => {
     const response = await GET(
-      new Request("http://localhost/api/connector-installs/install-1/actions"),
+      new Request(`http://localhost/api/connector-installs/install-1/actions?hiveId=${hiveId}`),
       { params: Promise.resolve({ id: "install-1" }) },
     );
 
@@ -94,10 +97,10 @@ describe("GET /api/connector-installs/[id]/actions", () => {
     });
     mocks.canAccessHive.mockResolvedValueOnce(false);
     mocks.sql.mockReset();
-    mocks.sql.mockResolvedValueOnce([{ id: "install-1", hive_id: "hive-a", connector_slug: "discord-webhook" }]);
+    mocks.sql.mockResolvedValueOnce([{ id: hiveId }]);
 
     const response = await GET(
-      new Request("http://localhost/api/connector-installs/install-1/actions"),
+      new Request(`http://localhost/api/connector-installs/install-1/actions?hiveId=${hiveId}`),
       { params: Promise.resolve({ id: "install-1" }) },
     );
 

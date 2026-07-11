@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { upsertModelCapabilityScores } from "@/model-catalog/capability-scores";
-import { refreshModelCatalogMetadata } from "@/model-catalog/catalog";
+import { CURATED_MODEL_CATALOG, refreshModelCatalogMetadata } from "@/model-catalog/catalog";
 import {
   buildLiveModelCapabilityScores,
   buildLiveModelCatalogEntries,
@@ -21,6 +21,23 @@ async function createHive(slug: string): Promise<string> {
 }
 
 describe("model catalog capability scores", () => {
+  it("ships canonical GPT-5.6 Sol with official token pricing in curated and static metadata", async () => {
+    expect(CURATED_MODEL_CATALOG).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      costPerInputToken: "0.000005",
+      costPerOutputToken: "0.000030",
+      metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    }));
+
+    const entries = await buildLiveModelCatalogEntries(async () => new Response(""));
+    expect(entries).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.6-sol",
+      costPerInputToken: "0.000005",
+      costPerOutputToken: "0.00003",
+      metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    }));
+  });
   it("extracts BenchLM benchmark quality and categories for dynamic catalog targets", async () => {
     const targets = [
       {
@@ -87,6 +104,44 @@ describe("model catalog capability scores", () => {
       axis: "vision",
       score: 77,
       benchmarkName: "multimodalGrounded",
+    }));
+  });
+
+  it("marks alias-only BenchLM capability matches below high confidence", async () => {
+    const targets = [
+      {
+        provider: "openai",
+        adapterType: "codex",
+        modelId: "openai-codex/gpt-5.4-pro-20260501",
+        displayName: "GPT 5.4 Pro Latest",
+        family: "gpt-5",
+        capabilities: ["text", "code", "reasoning"],
+        local: false,
+      },
+    ];
+    const benchLm = JSON.stringify({
+      models: [
+        {
+          model: "GPT-5.4 Pro",
+          creator: "OpenAI",
+          overallScore: 91,
+          categoryScores: { coding: 89 },
+        },
+      ],
+    });
+
+    const fetchImpl = async (url: string | URL) => {
+      const href = String(url);
+      return new Response(href.includes("benchlm.ai/api/data/leaderboard") ? benchLm : "");
+    };
+
+    const scores = await buildLiveModelCapabilityScores(fetchImpl, targets);
+
+    expect(scores).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.4-pro-20260501",
+      axis: "coding",
+      modelVersionMatched: "GPT-5.4 Pro",
+      confidence: "medium",
     }));
   });
 
@@ -888,7 +943,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
     expect(result.missingMetadata).toBe(0);
   });
 
-  it("retires auto-discovered models that still have no real benchmark data after live refresh", async () => {
+  it("retires auto-discovered models that still have no official metadata after live refresh", async () => {
     const hiveId = await createHive("catalog-retire-unbenchmarked-discovered-models");
     await sql`
       INSERT INTO hive_models (
@@ -929,8 +984,8 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
         'gpt',
         ${sql.json(["text", "code", "reasoning"])},
         false,
-        'OpenAI public model docs',
-        'https://developers.openai.com/api/docs/models/all/',
+        null,
+        null,
         'openai_public_model_docs'
       )
     `;
@@ -956,6 +1011,97 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
     expect(result.missingMetadata).toBe(0);
     expect(hiveRow.count).toBe("0");
     expect(catalogRow.count).toBe("0");
+  });
+
+  it("retains GPT-5.6 Sol when live refresh can attach official metadata but the model is still unbenchmarked", async () => {
+    const hiveId = await createHive("catalog-retain-official-gpt-5-6");
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        adapter_type,
+        model_id,
+        enabled,
+        auto_discovered
+      )
+      VALUES (
+        ${hiveId},
+        'openai',
+        'codex',
+        'openai-codex/gpt-5.6-sol',
+        true,
+        true
+      )
+    `;
+    await sql`
+      INSERT INTO model_catalog (
+        provider,
+        adapter_type,
+        model_id,
+        display_name,
+        family,
+        capabilities,
+        local,
+        metadata_source_name,
+        metadata_source_url,
+        discovery_source
+      )
+      VALUES (
+        'openai',
+        'codex',
+        'openai-codex/gpt-5.6-sol',
+        'GPT-5.6 Sol',
+        'gpt-5',
+        ${sql.json(["text", "code", "reasoning"])},
+        false,
+        'OpenAI public model docs',
+        'https://developers.openai.com/api/docs/models/all/',
+        'openai_public_model_docs'
+      )
+    `;
+
+    await refreshModelCatalogMetadata(sql, {
+      hiveId,
+      fetchLiveMetadata: true,
+      fetchImpl: async (url) => {
+        const href = String(url);
+        if (href === "https://openai.com/api/pricing/") {
+          return new Response(`
+            GPT-5.6 Sol
+            Input price $5.00 / 1M tokens
+            Output price $30.00 / 1M tokens
+          `);
+        }
+        return new Response("");
+      },
+    });
+
+    const [hiveRow] = await sql<{ count: string }[]>`
+      SELECT COUNT(*)::text AS count
+      FROM hive_models
+      WHERE hive_id = ${hiveId}
+        AND model_id = 'openai-codex/gpt-5.6-sol'
+    `;
+    const [catalogRow] = await sql<{
+      count: string;
+      metadata_source_name: string | null;
+      cost_per_input_token: string | null;
+      cost_per_output_token: string | null;
+    }[]>`
+      SELECT
+        COUNT(*)::text AS count,
+        MAX(metadata_source_name) AS metadata_source_name,
+        MAX(cost_per_input_token) AS cost_per_input_token,
+        MAX(cost_per_output_token) AS cost_per_output_token
+      FROM model_catalog
+      WHERE model_id = 'openai-codex/gpt-5.6-sol'
+    `;
+
+    expect(hiveRow.count).toBe("1");
+    expect(catalogRow.count).toBe("1");
+    expect(catalogRow.metadata_source_name).toBe("OpenAI GPT-5.6 Sol pricing");
+    expect(catalogRow.cost_per_input_token).toBe("0.000005000000");
+    expect(catalogRow.cost_per_output_token).toBe("0.000030000000");
   });
 
   it("keeps auto-discovered models when real benchmark data exists", async () => {
@@ -1426,5 +1572,49 @@ GPT-5 Mini Closed 400k $0.25 $2.00 300 c/s 980 41.0 35.0 52.0 31.0 28.0 33.0 30.
       score: "41.00",
       model_version_matched: "GPT-5 Mini",
     });
+  });
+  it("preserves raw speed values above 100 while bounding non-speed scores", async () => {
+    await upsertModelCapabilityScores(sql, [
+      {
+        modelCatalogId: null,
+        provider: "local",
+        adapterType: "ollama",
+        modelId: "qwen3:32b",
+        canonicalModelId: "qwen3:32b",
+        axis: "speed",
+        score: 220.25,
+        rawScore: "220.25",
+        source: "LLM Stats",
+        sourceUrl: "https://example.test",
+        benchmarkName: "Throughput",
+        modelVersionMatched: "Qwen3 32B",
+        confidence: "high",
+      },
+      {
+        modelCatalogId: null,
+        provider: "local",
+        adapterType: "ollama",
+        modelId: "qwen3:32b",
+        canonicalModelId: "qwen3:32b",
+        axis: "coding",
+        score: 120,
+        rawScore: "120",
+        source: "LLM Stats",
+        sourceUrl: "https://example.test",
+        benchmarkName: "Code Index",
+        modelVersionMatched: "Qwen3 32B",
+        confidence: "high",
+      },
+    ]);
+
+    const rows = await sql<{ axis: string; score: number }[]>`
+      SELECT axis, score
+      FROM model_capability_scores
+      WHERE canonical_model_id = 'qwen3:32b'
+      ORDER BY axis ASC
+    `;
+
+    expect(rows).toContainEqual({ axis: "coding", score: "100.00" });
+    expect(rows).toContainEqual({ axis: "speed", score: "220.25" });
   });
 });

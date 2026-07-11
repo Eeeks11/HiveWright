@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useHiveContext } from "@/components/hive-context";
 import { RunsTable, type RunsTableBadgeTone, type RunsTableRow } from "@/components/runs-table";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 const STATUS_TONE: Record<string, RunsTableBadgeTone> = {
   pending: "amber",
@@ -34,19 +35,22 @@ function GoalsPageInner() {
   const { selected, loading: bizLoading } = useHiveContext();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const showArchived = searchParams.get("showArchived") === "1";
+  const requestedTargetHiveId = searchParams?.get("targetHiveId") ?? null;
+  const target = useResolvedHiveTarget(requestedTargetHiveId ?? selected?.id ?? null);
+  const effectiveHiveId = target.effectiveHiveId;
+  const showArchived = searchParams?.get("showArchived") === "1";
   const [goals, setGoals] = useState<GoalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!effectiveHiveId) return;
     let cancelled = false;
 
     const fetchGoals = async () => {
       setLoading(true);
       try {
-        const url = `/api/goals?hiveId=${selected.id}${showArchived ? "&includeArchived=1" : ""}`;
+        const url = `/api/goals?hiveId=${effectiveHiveId}${showArchived ? "&includeArchived=1" : ""}`;
         const r = await fetch(url);
         const body = await r.json();
         if (!cancelled) setGoals(body.data || []);
@@ -57,7 +61,7 @@ function GoalsPageInner() {
 
     fetchGoals();
     return () => { cancelled = true; };
-  }, [selected, showArchived]);
+  }, [effectiveHiveId, showArchived]);
 
   function toggleShowArchived() {
     const params = new URLSearchParams(searchParams.toString());
@@ -67,10 +71,11 @@ function GoalsPageInner() {
   }
 
   async function postAction(goalId: string, action: "cancel" | "archive" | "unarchive") {
-    const body = action === "cancel" ? JSON.stringify({}) : undefined;
+    if (!target.confirmCrossHiveWrite(`${action[0].toUpperCase()}${action.slice(1)} goal`)) return;
+    const body = action === "cancel" ? JSON.stringify({ hiveId: effectiveHiveId }) : JSON.stringify({ hiveId: effectiveHiveId });
     const r = await fetch(`/api/goals/${goalId}/${action}`, {
       method: "POST",
-      headers: action === "cancel" ? { "content-type": "application/json" } : undefined,
+      headers: { "content-type": "application/json" },
       body,
     });
     if (!r.ok) {
@@ -79,8 +84,8 @@ function GoalsPageInner() {
       return;
     }
     setOpenMenuId(null);
-    if (selected) {
-      const url = `/api/goals?hiveId=${selected.id}${showArchived ? "&includeArchived=1" : ""}`;
+    if (effectiveHiveId) {
+      const url = `/api/goals?hiveId=${effectiveHiveId}${showArchived ? "&includeArchived=1" : ""}`;
       const refreshed = await fetch(url);
       const body = await refreshed.json();
       setGoals(body.data || []);
@@ -92,8 +97,9 @@ function GoalsPageInner() {
     postAction(goal.id, "cancel");
   }
 
-  if (bizLoading) return <p className="text-zinc-400">Loading...</p>;
-  if (!selected) return <p className="text-zinc-400">No hive selected.</p>;
+  if (bizLoading || target.isResolvingTarget) return <p className="text-zinc-400">Loading...</p>;
+  if (target.isUnresolvedTarget) return <UnresolvedHiveTargetMessage hiveId={requestedTargetHiveId} />;
+  if (!effectiveHiveId) return <p className="text-zinc-400">No hive selected.</p>;
 
   const rows: RunsTableRow[] = goals.map((goal) => {
     const total = goal.totalTasks ?? 0;
@@ -110,7 +116,7 @@ function GoalsPageInner() {
     return {
       id: goal.id,
       title: goal.title,
-      href: `/goals/${goal.id}`,
+      href: target.withTargetHiveId(`/goals/${goal.id}`),
       status: {
         label: isArchived ? `${goal.status} / archived` : goal.status,
         tone: isArchived ? "neutral" : STATUS_TONE[goal.status] ?? "neutral",
@@ -188,6 +194,8 @@ function GoalsPageInner() {
 
   return (
     <div className="space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
+
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Goals</h1>
         <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">

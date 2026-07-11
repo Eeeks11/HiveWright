@@ -1,10 +1,10 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -12,18 +12,14 @@ export async function GET(
     if ("response" in authz) return authz.response;
     const { user } = authz;
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
 
     const [goal] = await sql<{ id: string; hive_id: string }[]>`
-      SELECT id, hive_id FROM goals WHERE id = ${id}
+      SELECT id, hive_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) {
       return jsonError("Goal not found", 404);
-    }
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, goal.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal", 403);
-      }
     }
 
     const rows = await sql`

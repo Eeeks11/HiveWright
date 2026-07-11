@@ -79,21 +79,55 @@ export function ownerOutcomeActionLabel(renderMode: OwnerOutcomeRenderMode | nul
   }
 }
 
+function ownerReadableSummary(value: string | null, goalTitle: string): string {
+  const text = value
+    ?.replace(/durable owner-visible handoff/gi, "owner review card")
+    .replace(/durable handoff/gi, "review card")
+    .replace(/task artifacts/gi, "audit files")
+    .trim();
+  return text || `Finished: ${goalTitle}. Review the result and choose whether to accept it, request changes, or archive it.`;
+}
+
+function ownerReadableWhy(value: string | null): string {
+  const text = value
+    ?.replace(/durable owner-visible handoff/gi, "clear owner review card")
+    .replace(/durable handoff/gi, "review card")
+    .replace(/lower-level task artifacts/gi, "internal audit files")
+    .trim();
+  return text || "This packages the finished work separately from internal logs so the owner can quickly see what changed and act on it.";
+}
+
+function ownerReadableNextAction(value: string | null, hasPrimaryOutput: boolean): string {
+  const text = value?.trim();
+  if (text) return text;
+  return hasPrimaryOutput
+    ? "Open the final output first, then accept it, request a bounded revision, archive it, or flag it as a reusable idea."
+    : "Review the handoff summary and audit evidence, then accept it, request a bounded revision, archive it, or flag it as a reusable idea.";
+}
+
+function ownerReadableImpact(value: string | null): string {
+  const text = value
+    ?.replace(/owner-visible handoff with review state/gi, "owner-reviewable result")
+    .trim();
+  return text || "Hive impact: completed work is ready for owner review.";
+}
+
 export function mapOwnerOutcomeRow(row: OwnerOutcomeRow): OwnerOutcomeSummary {
   const evidenceWorkProductIds = parseEvidenceWorkProductIds(row.evidence);
   const primaryWorkProductId = row.primary_work_product_id ?? evidenceWorkProductIds[0] ?? null;
   const primaryDetailUrl = row.primary_work_product_id ? `/deliverables/${row.primary_work_product_id}` : null;
   const renderMode = normalizeRenderMode(row.primary_artifact_render_mode);
+  const hasPrimaryOutput = Boolean(row.primary_open_url);
 
   return {
     id: row.id,
     goalId: row.goal_id,
     hiveId: row.hive_id,
     goalTitle: row.goal_title,
-    summary: row.summary?.trim() || "Goal completed. Review the final owner handoff and linked audit evidence.",
-    whyItMatters: row.why_it_matters?.trim() || "This durable handoff separates the owner outcome from lower-level task artifacts.",
-    recommendedNextAction: row.recommended_next_action?.trim() || "Review the handoff and accept it, request revision, archive it, or mark it as a process candidate.",
-    impactStatement: row.impact_statement?.trim() || "Hive impact: completed work is ready for owner review.",
+    summary: ownerReadableSummary(row.summary, row.goal_title),
+    whyItMatters: ownerReadableWhy(row.why_it_matters),
+    recommendedNextAction: ownerReadableNextAction(row.recommended_next_action, hasPrimaryOutput),
+    impactStatement: ownerReadableImpact(row.impact_statement),
     status: normalizeStatus(row.review_state),
     createdAt: toIso(row.created_at),
     evidenceWorkProductIds,

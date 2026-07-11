@@ -1,7 +1,7 @@
 import { sql } from "../../../_lib/db";
 import { jsonOk, jsonError } from "../../../_lib/responses";
 import { requireApiUser } from "../../../_lib/auth";
-import { canAccessHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { loadSupervisorActivity } from "@/goals/supervisor-rollout";
 
 /**
@@ -13,7 +13,7 @@ import { loadSupervisorActivity } from "@/goals/supervisor-rollout";
  * dispatcher or running supervisor.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
@@ -24,14 +24,12 @@ export async function GET(
     return jsonError("id must be a valid UUID", 400);
   }
 
+  const target = await requireStrictHiveTarget(sql, authz.user, { kind: "query", request });
+  if (!target.ok) return target.response;
   const [row] = await sql<{ hive_id: string; session_id: string | null; status: string }[]>`
-    SELECT hive_id, session_id, status FROM goals WHERE id = ${id}
+    SELECT hive_id, session_id, status FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
   `;
   if (!row) return jsonError("Goal not found", 404);
-  if (!authz.user.isSystemOwner) {
-    const hasAccess = await canAccessHive(sql, authz.user.id, row.hive_id);
-    if (!hasAccess) return jsonError("Forbidden: caller cannot access this goal", 403);
-  }
   if (!row.session_id) {
     return jsonOk({
       threadId: null,

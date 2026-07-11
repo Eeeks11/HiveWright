@@ -1,6 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Sql, TransactionSql } from "postgres";
+import {
+  businessOsKindProfile,
+  createExistingBusinessAuditState,
+  createNewBusinessSetupState,
+  upsertBusinessOsProfile,
+  type BusinessOsProfileInput,
+  type ExistingBusinessAuditInput,
+  type NewBusinessSetupInput,
+} from "@/business-os/profile";
 import { getConnectorDefinition } from "@/connectors/registry";
 import { invokeConnectorReadOnlyOrSystem } from "@/connectors/runtime";
 import { storeCredential } from "@/credentials/manager";
@@ -10,6 +19,7 @@ import { deriveOperatingProfileDefaults, upsertOperatingProfile } from "@/hives/
 import { seedDefaultSchedules } from "@/hives/seed-schedules";
 import { hiveProjectsPath, hiveRootPath, resolveHiveWorkspaceRoot } from "@/hives/workspace-root";
 import { saveHiveRoleOverride } from "@/roles/hive-overrides";
+import { DEFAULT_EA_FALLBACK_MODEL, DEFAULT_EA_PRIMARY_MODEL } from "@/ea/native/model-selection";
 
 const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -57,6 +67,12 @@ export type HiveSetupRequest = {
     kind?: HiveKind | string;
     description?: string;
     mission?: string;
+  };
+  businessOs?: {
+    mode?: BusinessOsProfileInput["mode"];
+    profile?: Omit<BusinessOsProfileInput, "mode">;
+    setup?: NewBusinessSetupInput;
+    audit?: ExistingBusinessAuditInput;
   };
   roleOverrides?: Record<string, RoleOverride>;
   connectors?: ConnectorSetup[];
@@ -200,7 +216,7 @@ function workIntakeConfigForPreset(preset: Required<OperatingPreferences>["reque
     primaryProvider: "ollama",
     primaryModel: "qwen3:32b",
     fallbackProvider: "openrouter",
-    fallbackModel: "google/gemini-2.0-flash-exp:free",
+    fallbackModel: "google/gemini-2.5-flash",
     timeoutMs: 15000,
     temperature: 0.1,
     maxTokens: 512,
@@ -479,6 +495,18 @@ async function installConnector(tx: SqlExecutor, hiveId: string, connector: Conn
     RETURNING id, connector_slug AS "connectorSlug", display_name AS "displayName"
   `;
 
+  if (def.slug === "ea-discord" || def.slug === "voice-ea") {
+    const configuredPrimary = publicConfig.model?.trim() || DEFAULT_EA_PRIMARY_MODEL;
+    await tx`
+      INSERT INTO ea_model_configurations (hive_id, primary_model, fallback_model)
+      VALUES (${hiveId}::uuid, ${configuredPrimary}, ${DEFAULT_EA_FALLBACK_MODEL})
+      ON CONFLICT (hive_id) DO UPDATE SET
+        primary_model = EXCLUDED.primary_model,
+        fallback_model = COALESCE(ea_model_configurations.fallback_model, EXCLUDED.fallback_model),
+        updated_at = NOW()
+    `;
+  }
+
   const testOperation = def.operations.find((operation) =>
     ["test_connection", "self_test"].includes(operation.slug)
     && operation.governance.effectType === "system"
@@ -613,6 +641,42 @@ export async function runHiveSetup(
       await seedSafetyPolicies(tx, hiveId, body.safetyPreset ?? "owner_review_first");
       maybeFailSetup("action-policies", options);
 
+      let businessKindProfile: Record<string, unknown> = {};
+      if (hiveKind === "business") {
+        const businessProfile = await upsertBusinessOsProfile(tx, hiveId, {
+          mode: body.businessOs?.mode,
+          ...(body.businessOs?.profile ?? {}),
+          businessName: body.businessOs?.profile?.businessName ?? (hiveRow.name as string),
+          summary: body.businessOs?.profile?.summary ?? ((description as string | null | undefined) ?? null),
+          sourceProfile: {
+            ...(typeof body.businessOs?.profile?.sourceProfile === "object" && body.businessOs.profile.sourceProfile !== null && !Array.isArray(body.businessOs.profile.sourceProfile)
+              ? body.businessOs.profile.sourceProfile as Record<string, unknown>
+              : {}),
+            setupWizard: true,
+          },
+        });
+        businessKindProfile = businessOsKindProfile(businessProfile);
+        if (businessProfile.businessMode === "new_business") {
+          await createNewBusinessSetupState(
+            tx,
+            hiveId,
+            businessProfile,
+            body.businessOs?.setup,
+            {
+              mode: body.businessOs?.mode,
+              ...(body.businessOs?.profile ?? {}),
+            },
+          );
+        } else if (businessProfile.businessMode === "existing_business") {
+          await createExistingBusinessAuditState(
+            tx,
+            hiveId,
+            businessProfile,
+            body.businessOs?.audit,
+          );
+        }
+      }
+
       const initialGoal = body.initialGoal?.trim() || defaultInitialGoalForHiveKind(hiveKind, hiveRow.name as string);
       const defaultOperatingProfile = deriveOperatingProfileDefaults({
         hiveId,
@@ -623,7 +687,13 @@ export async function runHiveSetup(
         initialGoal,
         safetyPreset: body.safetyPreset ?? "owner_review_first",
       });
-      await upsertOperatingProfile(tx, hiveId, defaultOperatingProfile);
+      await upsertOperatingProfile(tx, hiveId, {
+        ...defaultOperatingProfile,
+        kindProfile: {
+          ...defaultOperatingProfile.kindProfile,
+          ...businessKindProfile,
+        },
+      });
 
       const installedConnectors: InstalledConnectorSetupResult[] = [];
       for (const connector of connectors) {

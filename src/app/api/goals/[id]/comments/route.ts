@@ -1,7 +1,7 @@
 import { sql } from "@/app/api/_lib/db";
 import { jsonOk, jsonError } from "@/app/api/_lib/responses";
 import { isInternalServiceAccountUser, requireApiUser } from "@/app/api/_lib/auth";
-import { canAccessHive, canMutateHive } from "@/auth/users";
+import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 
 type CommentRow = {
   id: string;
@@ -22,7 +22,7 @@ function mapComment(r: CommentRow) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const authz = await requireApiUser();
@@ -30,17 +30,13 @@ export async function GET(
   const { user } = authz;
   try {
     const { id } = await params;
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
     const [goal] = await sql<{ id: string; hive_id: string }[]>`
-      SELECT id, hive_id FROM goals WHERE id = ${id}
+      SELECT id, hive_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid
     `;
     if (!goal) {
       return jsonError("Goal not found", 404);
-    }
-    if (!user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, goal.hive_id);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this goal", 403);
-      }
     }
 
     const rows = await sql<CommentRow[]>`
@@ -100,6 +96,13 @@ export async function POST(
     const { id } = await params;
 
     const body = await request.json();
+    const target = await requireStrictHiveTarget(
+      sql,
+      user,
+      { kind: "body", body: body as Record<string, unknown> },
+      { mode: "mutate" },
+    );
+    if (!target.ok) return target.response;
     const commentBody = typeof body?.body === "string" ? body.body.trim() : "";
     const callerCreatedBy =
       typeof body?.createdBy === "string" ? body.createdBy.trim() : "";
@@ -110,7 +113,7 @@ export async function POST(
 
     const [goal] = await sql<
       { id: string; hive_id: string; session_id: string | null }[]
-    >`SELECT id, hive_id, session_id FROM goals WHERE id = ${id}`;
+    >`SELECT id, hive_id, session_id FROM goals WHERE id = ${id} AND hive_id = ${target.hiveId}::uuid`;
     if (!goal) {
       return jsonError("Goal not found", 404);
     }
@@ -148,13 +151,6 @@ export async function POST(
       if (supervisorAttribution) {
         effectiveCreatedBy = supervisorAttribution;
       } else {
-        const hasAccess = await canMutateHive(sql, user.id, goal.hive_id);
-        if (!hasAccess) {
-          return jsonError(
-            "Forbidden: caller cannot access this goal",
-            403,
-          );
-        }
         effectiveCreatedBy = "system";
       }
     }

@@ -80,10 +80,10 @@ const mockRecordAudit = vi.mocked(recordAgentAuditEventBestEffort);
 const testUser = {
   id: "user-test",
   email: "test@local",
-  isSystemOwner: true,
+  isSystemOwner: false,
 };
 
-const hiveId = "hive-111";
+const hiveId = "11111111-1111-4111-8111-111111111111";
 
 const baseSessionRow = {
   id: "session-abc",
@@ -153,11 +153,17 @@ function makeRequest(
 ): Request {
   const headers: Record<string, string> = {};
   let bodyStr: string | undefined;
+  const targetedUrl = url.includes("/api/capture-sessions/") && !url.includes("hiveId=")
+    ? `${url}${url.includes("?") ? "&" : "?"}hiveId=${hiveId}`
+    : url;
   if (body !== undefined) {
     headers["content-type"] = "application/json";
-    bodyStr = JSON.stringify(body);
+    const targetBody = typeof body === "object" && body !== null && !("hiveId" in body)
+      ? { hiveId, ...(body as Record<string, unknown>) }
+      : body;
+    bodyStr = JSON.stringify(targetBody);
   }
-  return new Request(url, { method, headers, body: bodyStr });
+  return new Request(targetedUrl, { method, headers, body: bodyStr });
 }
 
 function authAsOwner() {
@@ -333,8 +339,10 @@ describe("POST /api/capture-sessions", () => {
 
   it("rejects missing hiveId", async () => {
     authAsOwner();
-    const req = makeRequest("POST", "http://test/api/capture-sessions", {
-      consent: true,
+    const req = new Request("http://test/api/capture-sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ consent: true }),
     });
     const res = await createSession(req);
     expect(res.status).toBe(400);
@@ -367,10 +375,11 @@ describe("PATCH /api/capture-sessions/[id]", () => {
     authAsOwner();
     const stoppedRow = { ...baseSessionRow, status: "stopped", stopped_at: new Date().toISOString() };
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([baseSessionRow]) // loadSession
       .mockResolvedValueOnce([stoppedRow]);     // UPDATE
 
-    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}`, {
+    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`, {
       status: "stopped",
     });
     const res = await patchSession(req, makeParams(baseSessionRow.id));
@@ -396,10 +405,11 @@ describe("PATCH /api/capture-sessions/[id]", () => {
     authAsOwner();
     const cancelledRow = { ...baseSessionRow, status: "cancelled", cancelled_at: new Date().toISOString() };
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([baseSessionRow])
       .mockResolvedValueOnce([cancelledRow]);
 
-    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}`, {
+    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`, {
       status: "cancelled",
     });
     const res = await patchSession(req, makeParams(baseSessionRow.id));
@@ -424,9 +434,9 @@ describe("PATCH /api/capture-sessions/[id]", () => {
   it("rejects an invalid state transition (stopped → recording)", async () => {
     authAsOwner();
     const stoppedRow = { ...baseSessionRow, status: "stopped" };
-    mockSql.mockResolvedValueOnce([stoppedRow]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([stoppedRow]);
 
-    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}`, {
+    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`, {
       status: "recording",
     });
     const res = await patchSession(req, makeParams(baseSessionRow.id));
@@ -439,7 +449,7 @@ describe("PATCH /api/capture-sessions/[id]", () => {
     authAsOwner();
     mockSql.mockResolvedValueOnce([baseSessionRow]);
 
-    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}`, {
+    const req = makeRequest("PATCH", `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`, {
       status: "stopped",
       screenshots: ["img1"],
     });
@@ -451,9 +461,9 @@ describe("PATCH /api/capture-sessions/[id]", () => {
 
   it("returns 404 for unknown session id", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([]);
 
-    const req = makeRequest("PATCH", "http://test/api/capture-sessions/ghost-id", {
+    const req = makeRequest("PATCH", `http://test/api/capture-sessions/ghost-id?hiveId=${hiveId}`, {
       status: "stopped",
     });
     const res = await patchSession(req, makeParams("ghost-id"));
@@ -472,11 +482,12 @@ describe("DELETE /api/capture-sessions/[id]", () => {
   it("hard-purges the session row and returns purged: true", async () => {
     authAsOwner();
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([baseSessionRow]) // loadSession
       .mockResolvedValueOnce([]);              // DELETE
 
     const req = new Request(
-      `http://test/api/capture-sessions/${baseSessionRow.id}`,
+      `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`,
       { method: "DELETE" },
     );
     const res = await deleteSession(req, makeParams(baseSessionRow.id));
@@ -502,9 +513,9 @@ describe("DELETE /api/capture-sessions/[id]", () => {
 
   it("returns 404 for unknown session id", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([]);
 
-    const req = new Request("http://test/api/capture-sessions/ghost-id", {
+    const req = new Request(`http://test/api/capture-sessions/ghost-id?hiveId=${hiveId}`, {
       method: "DELETE",
     });
     const res = await deleteSession(req, makeParams("ghost-id"));
@@ -523,10 +534,10 @@ describe("GET /api/capture-sessions/[id]", () => {
   it("returns session data for review page load", async () => {
     authAsOwner();
     const stoppedRow = { ...baseSessionRow, status: "stopped" };
-    mockSql.mockResolvedValueOnce([stoppedRow]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([stoppedRow]);
 
     const req = new Request(
-      `http://test/api/capture-sessions/${baseSessionRow.id}`,
+      `http://test/api/capture-sessions/${baseSessionRow.id}?hiveId=${hiveId}`,
     );
     const res = await getSession(req, makeParams(baseSessionRow.id));
     expect(res.status).toBe(200);
@@ -537,9 +548,9 @@ describe("GET /api/capture-sessions/[id]", () => {
 
   it("returns 404 for unknown session", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([]);
 
-    const req = new Request("http://test/api/capture-sessions/ghost");
+    const req = new Request(`http://test/api/capture-sessions/ghost?hiveId=${hiveId}`);
     const res = await getSession(req, makeParams("ghost"));
     expect(res.status).toBe(404);
   });
@@ -555,7 +566,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
 
   function draftRequest() {
     return new Request(
-      `http://test/api/capture-sessions/${baseSessionRow.id}/draft`,
+      `http://test/api/capture-sessions/${baseSessionRow.id}/draft?hiveId=${hiveId}`,
       { method: "POST" },
     );
   }
@@ -582,11 +593,12 @@ describe("/api/capture-sessions/[id]/draft", () => {
       redacted_summary: "Opened settings and captured workflow steps.",
     };
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([reviewReadyRow])
       .mockResolvedValueOnce([]);
 
     const res = await getDraftPreview(
-      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft`),
+      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft?hiveId=${hiveId}`),
       makeParams(baseSessionRow.id),
     );
 
@@ -621,7 +633,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
       "redactedSummary",
       "captureScope",
     ]);
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
   });
 
   it("creates a pending inactive skill draft from metadata-only capture data", async () => {
@@ -640,12 +652,13 @@ describe("/api/capture-sessions/[id]/draft", () => {
       redacted_summary: "Opened settings and captured workflow steps.",
     };
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([reviewReadyRow])
       .mockResolvedValueOnce([]);
     mockProposeSkill.mockResolvedValueOnce(draftRow);
 
     const res = await createDraftFromSession(
-      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft`, {
+      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -699,7 +712,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
     expect(input.evidence[0]?.summary).toContain("Raw media accepted: false");
     expect(input.qaReviewStatus).toBe("pending");
     expect(input.securityReviewStatus).toBe("not_required");
-    expect(mockSql).toHaveBeenCalledTimes(3);
+    expect(mockSql).toHaveBeenCalledTimes(4);
     expect(mockRecordAudit).toHaveBeenCalledWith(
       mockSql,
       expect.objectContaining({
@@ -754,10 +767,10 @@ describe("/api/capture-sessions/[id]/draft", () => {
 
   it("returns 404 for a missing capture session", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([]);
 
     const res = await createDraftFromSession(
-      new Request("http://test/api/capture-sessions/ghost/draft", {
+      new Request(`http://test/api/capture-sessions/ghost/draft?hiveId=${hiveId}`, {
         method: "POST",
       }),
       makeParams("ghost"),
@@ -769,7 +782,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
 
   it("returns 404 for a deleted capture session", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([{ ...baseSessionRow, status: "deleted" }]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([{ ...baseSessionRow, status: "deleted" }]);
 
     const res = await createDraftFromSession(
       draftRequest(),
@@ -783,7 +796,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
   it("rejects a caller without mutate access to the capture hive", async () => {
     authAsHiveMember();
     mockCanMutateHive.mockResolvedValueOnce(false);
-    mockSql.mockResolvedValueOnce([stoppedSessionRow]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([stoppedSessionRow]);
 
     const res = await createDraftFromSession(
       draftRequest(),
@@ -797,6 +810,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
   it("returns an existing pending draft for duplicate create requests", async () => {
     authAsOwner();
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([stoppedSessionRow])
       .mockResolvedValueOnce([{ ...draftRow, id: "draft-existing" }])
       .mockResolvedValueOnce([]);
@@ -815,12 +829,13 @@ describe("/api/capture-sessions/[id]/draft", () => {
     expect(body.data.created).toBe(false);
     expect(body.data.duplicate).toBe(true);
     expect(mockProposeSkill).not.toHaveBeenCalled();
-    expect(mockSql).toHaveBeenCalledTimes(2);
+    expect(mockSql).toHaveBeenCalledTimes(3);
   });
 
   it("returns 409 when the pending skill draft cap blocks a new draft", async () => {
     authAsOwner();
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([stoppedSessionRow])
       .mockResolvedValueOnce([]);
     mockProposeSkill.mockRejectedValueOnce(
@@ -839,13 +854,13 @@ describe("/api/capture-sessions/[id]/draft", () => {
 
   it("rejects raw-media-shaped create payloads before creating a draft", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([stoppedSessionRow]);
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([stoppedSessionRow]);
 
     const res = await createDraftFromSession(
-      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft`, {
+      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft?hiveId=${hiveId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reviewNotes: "looks ready", screenshot: "raw-frame" }),
+        body: JSON.stringify({ hiveId, reviewNotes: "looks ready", screenshot: "raw-frame" }),
       }),
       makeParams(baseSessionRow.id),
     );
@@ -856,7 +871,7 @@ describe("/api/capture-sessions/[id]/draft", () => {
 
   it("rejects raw-media-shaped stored metadata and does not create or activate anything", async () => {
     authAsOwner();
-    mockSql.mockResolvedValueOnce([
+    mockSql.mockResolvedValueOnce([{ id: hiveId }]).mockResolvedValueOnce([
       { ...stoppedSessionRow, evidence_summary: { screenshots: ["raw-frame"] } },
     ]);
 
@@ -872,14 +887,15 @@ describe("/api/capture-sessions/[id]/draft", () => {
   it("rejects/deletes the generated preview metadata without creating a skill draft", async () => {
     authAsOwner();
     mockSql
+      .mockResolvedValueOnce([{ id: hiveId }])
       .mockResolvedValueOnce([stoppedSessionRow])
       .mockResolvedValueOnce([]);
 
     const res = await rejectDraftPreview(
-      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft`, {
+      new Request(`http://test/api/capture-sessions/${baseSessionRow.id}/draft?hiveId=${hiveId}`, {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason: "Needs more owner context" }),
+        body: JSON.stringify({ hiveId, reason: "Needs more owner context" }),
       }),
       makeParams(baseSessionRow.id),
     );

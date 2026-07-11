@@ -4,7 +4,9 @@ const mocks = vi.hoisted(() => ({
   sql: vi.fn(),
   requireApiUser: vi.fn(),
   canAccessHive: vi.fn(),
+  canMutateHive: vi.fn(),
   maybeRecordEaHiveSwitch: vi.fn(),
+  requireEaDestinationHiveConfirmation: vi.fn(),
   loadOwnerFeedbackSamplingConfigState: vi.fn(),
   saveOwnerFeedbackSamplingConfig: vi.fn(),
 }));
@@ -19,10 +21,12 @@ vi.mock("../../_lib/auth", () => ({
 
 vi.mock("@/auth/users", () => ({
   canAccessHive: mocks.canAccessHive,
+  canMutateHive: mocks.canMutateHive,
 }));
 
 vi.mock("@/ea/native/hive-switch-audit", () => ({
   maybeRecordEaHiveSwitch: mocks.maybeRecordEaHiveSwitch,
+  requireEaDestinationHiveConfirmation: mocks.requireEaDestinationHiveConfirmation,
 }));
 
 vi.mock("@/quality/owner-feedback-config", async (importOriginal) => {
@@ -52,6 +56,7 @@ describe("/api/quality/config", () => {
     mocks.requireApiUser.mockResolvedValue({
       user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
     });
+    mocks.requireEaDestinationHiveConfirmation.mockResolvedValue({ ok: true });
     mocks.loadOwnerFeedbackSamplingConfigState.mockResolvedValue({
       source: "hive",
       rawRow: { hiveId: HIVE_ID, config: { ai_peer_feedback_sample_rate: 0.15 } },
@@ -89,11 +94,11 @@ describe("/api/quality/config", () => {
     expect(mocks.saveOwnerFeedbackSamplingConfig).not.toHaveBeenCalled();
   });
 
-  it("enforces hive access for authenticated non-owner callers", async () => {
+  it("denies viewer mutation without saving or auditing", async () => {
     mocks.requireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
-    mocks.canAccessHive.mockResolvedValueOnce(false);
+    mocks.canMutateHive.mockResolvedValueOnce(false);
 
     const res = await PATCH(patchRequest({
       hiveId: HIVE_ID,
@@ -102,8 +107,9 @@ describe("/api/quality/config", () => {
     }));
 
     expect(res.status).toBe(403);
-    expect(mocks.canAccessHive).toHaveBeenCalledWith(mocks.sql, "member-1", HIVE_ID);
+    expect(mocks.canMutateHive).toHaveBeenCalledWith(mocks.sql, "member-1", HIVE_ID);
     expect(mocks.saveOwnerFeedbackSamplingConfig).not.toHaveBeenCalled();
+    expect(mocks.maybeRecordEaHiveSwitch).not.toHaveBeenCalled();
   });
 
   it("saves valid sample-rate updates for the selected hive", async () => {

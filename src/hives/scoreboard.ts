@@ -14,6 +14,8 @@ export type ScoreboardListItem = {
   occurredAt?: Date | null;
   createdAt?: Date | null;
   source?: string;
+  href?: string | null;
+  targetLabel?: string | null;
 };
 
 export type ScoreboardListSummary = {
@@ -212,6 +214,7 @@ export async function getHiveScoreboard(
     priority: row.priority,
     createdAt: row.created_at,
     source: "decision",
+    href: `/decisions/${row.id}`,
   }));
   const recentCompletions = rowsToListSummary(completionRows, (row) => ({
     id: row.id,
@@ -219,6 +222,7 @@ export async function getHiveScoreboard(
     summary: row.summary,
     createdAt: row.created_at,
     source: "goal_completion",
+    targetLabel: "Informational",
   }));
 
   const activeGoalSummary = rowsToListSummary(activeGoals, (row) => ({
@@ -227,6 +231,7 @@ export async function getHiveScoreboard(
     status: row.status,
     createdAt: row.updated_at,
     source: "goal",
+    href: `/goals/${row.id}`,
   }));
 
   const kindMetrics = buildKindMetrics(kind, {
@@ -398,6 +403,7 @@ function combineBlockedItems(taskRows: TaskBlockedRow[], recordRows: RecordBlock
     status: row.status,
     occurredAt: row.occurred_at,
     source: "record",
+    targetLabel: "Informational",
   }));
   const taskItems = taskRows.map((row) => ({
     id: row.id,
@@ -405,6 +411,7 @@ function combineBlockedItems(taskRows: TaskBlockedRow[], recordRows: RecordBlock
     status: row.status,
     createdAt: row.updated_at,
     source: "task",
+    href: `/tasks/${row.id}`,
   }));
 
   return {

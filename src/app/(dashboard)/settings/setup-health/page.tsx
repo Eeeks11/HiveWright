@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, CheckCircle2, CircleDashed, Clock3 } from "lucide-react";
 import { useHiveContext } from "@/components/hive-context";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 import type { SetupHealthRow, SetupHealthStatus } from "@/setup-health/status";
 
 type SetupHealthResponse = {
@@ -26,17 +28,24 @@ const statusIcon = {
   not_set_up: CircleDashed,
 };
 
-export default function SetupHealthPage() {
+function SetupHealthPageContent() {
   const { selected, hives, loading: hivesLoading } = useHiveContext();
-  const hive = selected ?? hives[0] ?? null;
+  const searchParams = useSearchParams();
+  const targetHiveId = searchParams?.get("targetHiveId")?.trim() || null;
+  const fallbackHive = selected ?? hives[0] ?? null;
+  const target = useResolvedHiveTarget(targetHiveId ?? fallbackHive?.id ?? null);
+  const effectiveHiveId = targetHiveId
+    ? (target.isResolvingTarget || target.isUnresolvedTarget ? null : target.effectiveHiveId)
+    : fallbackHive?.id;
+  const effectiveHiveName = targetHiveId && target.targetHive ? target.targetHive.name : fallbackHive?.name;
   const [health, setHealth] = useState<SetupHealthResponse | null>(null);
   const [error, setError] = useState<{ hiveId: string; message: string } | null>(null);
 
   useEffect(() => {
-    if (!hive?.id) return;
+    if (!effectiveHiveId) return;
 
     const controller = new AbortController();
-    fetch(`/api/setup-health?hiveId=${hive.id}`, { signal: controller.signal })
+    fetch(`/api/setup-health?hiveId=${effectiveHiveId}`, { signal: controller.signal })
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error || "Could not load setup health.");
@@ -47,25 +56,25 @@ export default function SetupHealthPage() {
         if ((err as Error).name !== "AbortError") {
           setHealth(null);
           setError({
-            hiveId: hive.id,
+            hiveId: effectiveHiveId,
             message: err instanceof Error ? err.message : "Could not load setup health.",
           });
         }
       });
 
     return () => controller.abort();
-  }, [hive?.id]);
+  }, [effectiveHiveId]);
 
   const rows = useMemo(
-    () => (health && hive?.id && health.hiveId === hive.id ? health.rows ?? [] : []),
-    [health, hive],
+    () => (health && effectiveHiveId && health.hiveId === effectiveHiveId ? health.rows ?? [] : []),
+    [health, effectiveHiveId],
   );
   const readyCount = useMemo(
     () => rows.filter((row) => row.status === "ready").length,
     [rows],
   );
-  const errorMessage = error && hive?.id && error.hiveId === hive.id ? error.message : null;
-  const loading = Boolean(hive?.id) && !errorMessage && health?.hiveId !== hive?.id;
+  const errorMessage = error && effectiveHiveId && error.hiveId === effectiveHiveId ? error.message : null;
+  const loading = Boolean(effectiveHiveId) && !errorMessage && health?.hiveId !== effectiveHiveId;
 
   return (
     <div className="space-y-6">
@@ -75,7 +84,7 @@ export default function SetupHealthPage() {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Setup health</h1>
             <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-              A plain-English checklist for whether this hive is ready to run work reliably.
+              A plain-English checklist for whether {effectiveHiveName ?? "this hive"} is ready to run work reliably.
             </p>
           </div>
           {rows.length > 0 ? (
@@ -86,7 +95,13 @@ export default function SetupHealthPage() {
         </div>
       </header>
 
-      {!hive && !hivesLoading ? (
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/health" />
+
+      {targetHiveId && target.isUnresolvedTarget ? (
+        <UnresolvedHiveTargetMessage hiveId={targetHiveId} />
+      ) : null}
+
+      {!fallbackHive && !hivesLoading ? (
         <section className="rounded-lg border border-dashed p-5">
           <h2 className="text-lg font-medium">No hive selected</h2>
           <p className="mt-1 text-sm text-muted-foreground">Create or select a hive before checking setup health.</p>
@@ -96,7 +111,7 @@ export default function SetupHealthPage() {
         </section>
       ) : null}
 
-      {loading || hivesLoading ? (
+      {loading || hivesLoading || target.isResolvingTarget ? (
         <section className="rounded-lg border p-5 text-sm text-muted-foreground">
           Checking setup health...
         </section>
@@ -129,7 +144,7 @@ export default function SetupHealthPage() {
                     ) : null}
                   </div>
                   <Link
-                    href={row.href}
+                    href={withTargetHiveId(row.href, targetHiveId)}
                     className="inline-flex w-fit items-center justify-center rounded-md border border-amber-200/70 px-3 py-2 text-sm font-medium transition-colors hover:bg-amber-100/70 focus-visible:ring-2 focus-visible:ring-amber-500/45 dark:border-white/[0.1] dark:hover:bg-white/[0.06]"
                   >
                     {row.hrefLabel}
@@ -141,5 +156,21 @@ export default function SetupHealthPage() {
         </section>
       ) : null}
     </div>
+  );
+}
+
+function withTargetHiveId(href: string, targetHiveId: string | null) {
+  if (!targetHiveId) return href;
+  const [base, query = ""] = href.split("?");
+  const params = new URLSearchParams(query);
+  params.set("targetHiveId", targetHiveId);
+  return `${base}?${params.toString()}`;
+}
+
+export default function SetupHealthPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Setup health loading...</div>}>
+      <SetupHealthPageContent />
+    </Suspense>
   );
 }

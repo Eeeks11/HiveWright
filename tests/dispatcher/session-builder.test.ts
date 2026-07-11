@@ -5,12 +5,54 @@ import { buildSessionContext } from "@/dispatcher/session-builder";
 import { renderSessionPrompt } from "@/adapters/context-renderer";
 import { storeCredential } from "@/credentials/manager";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
+import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
 import { syncRoleLibrary } from "@/roles/sync";
 import type { ClaimedTask } from "@/dispatcher/types";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
+vi.mock("@/memory/embeddings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/memory/embeddings")>();
+  return {
+    ...actual,
+    checkPgvectorAvailable: vi.fn(async () => false),
+    findSimilar: vi.fn(async () => []),
+  };
+});
+
 let bizId: string;
 const TEST_ENCRYPTION_KEY = "session-builder-audit-test-key";
+const SESSION_BUILDER_TEST_TIMEOUT_MS = 120_000;
+
+async function upsertHealthyModelHealth(input: { fingerprint: string; modelId: string }) {
+  await sql`
+    INSERT INTO model_health (
+      fingerprint,
+      model_id,
+      status,
+      last_probed_at,
+      next_probe_at
+    )
+    VALUES (
+      ${input.fingerprint},
+      ${input.modelId},
+      'healthy',
+      NOW(),
+      NOW() + INTERVAL '1 hour'
+    )
+    ON CONFLICT (fingerprint, model_id) DO UPDATE
+    SET status = EXCLUDED.status,
+        last_probed_at = EXCLUDED.last_probed_at,
+        last_failed_at = NULL,
+        last_failure_reason = NULL,
+        next_probe_at = EXCLUDED.next_probe_at
+  `;
+}
+
+// These tests exercise full dispatcher session assembly against the real test
+// database and role library. The per-test DB reset + role resync routinely
+// takes longer than Vitest's 5000ms default on clean installs, so set an
+// explicit file timeout instead of letting every case fail before assertions run.
+vi.setConfig({ testTimeout: SESSION_BUILDER_TEST_TIMEOUT_MS });
 
 beforeEach(async () => {
   await truncateAll(sql);
@@ -41,11 +83,10 @@ beforeEach(async () => {
     )
     VALUES (${bizId}, 'openai', 'openai-codex/gpt-5.5', 'codex', 90, 20, true)
   `;
-  await sql`
-    INSERT INTO model_health (fingerprint, model_id, status)
-    VALUES (${defaultFingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-    ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-  `;
+  await upsertHealthyModelHealth({
+    fingerprint: defaultFingerprint,
+    modelId: "openai-codex/gpt-5.5",
+  });
   await sql`
     INSERT INTO adapter_config (hive_id, adapter_type, config)
     VALUES (
@@ -85,28 +126,24 @@ describe("buildSessionContext", () => {
       )
       VALUES (${bizId}, 'openai', 'gpt-image-3', 'openai-image', 99, 10, true)
     `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "openai",
+        adapterType: "openai-image",
+        baseUrl: null,
+      }),
+      modelId: "gpt-image-3",
+    });
     await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (
-        ${createRuntimeCredentialFingerprint({
-          provider: "openai",
-          adapterType: "openai-image",
-          baseUrl: null,
-        })},
-        'gpt-image-3',
-        'healthy'
-      )
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
-    await sql`
-      INSERT INTO adapter_config (hive_id, adapter_type, config)
-      VALUES (${bizId}, 'model-routing', ${sql.json({
+      UPDATE adapter_config
+      SET config = ${sql.json({
         routeOverrides: {
           "openai:openai-image:gpt-image-3": {
             roleSlugs: ["image-designer"],
           },
         },
-      })})
+      })}
+      WHERE hive_id = ${bizId} AND adapter_type = 'model-routing'
     `;
 
     const task: ClaimedTask = {
@@ -129,13 +166,83 @@ describe("buildSessionContext", () => {
       projectId: null,
     };
 
+    const previousExpensiveProbeMode = process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE;
+    process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE = "automatic";
     const ctx = await buildSessionContext(sql, task);
+    if (previousExpensiveProbeMode === undefined) {
+      delete process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE;
+    } else {
+      process.env.MODEL_HEALTH_EXPENSIVE_PROBE_MODE = previousExpensiveProbeMode;
+    }
 
     expect(ctx.primaryAdapterType).toBe("openai-image");
     expect(ctx.model).toBe("gpt-image-3");
-    expect(ctx.fallbackAdapterType).toBeNull();
-    expect(ctx.fallbackModel).toBeNull();
+    expect(ctx.fallbackAdapterType).toBe("codex");
+    expect(ctx.fallbackModel).toBe("openai-codex/gpt-5.5");
     expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "executor_default" });
+  });
+
+  it("declares the next auto-routing candidate as fallback for a selected local Ollama route", async () => {
+    await sql`
+      UPDATE role_templates
+      SET adapter_type = 'auto',
+          recommended_model = 'auto',
+          fallback_adapter_type = NULL,
+          fallback_model = NULL
+      WHERE slug = 'dev-agent'
+    `;
+    await sql`
+      INSERT INTO hive_models (
+        hive_id,
+        provider,
+        model_id,
+        adapter_type,
+        benchmark_quality_score,
+        routing_cost_score,
+        enabled
+      )
+      VALUES (${bizId}, 'local', 'ollama/qwen3:32b', 'ollama', 76, 0, true)
+    `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "local",
+        adapterType: "ollama",
+        baseUrl: getCanonicalOllamaHealthBaseUrl({ provider: "local", adapterType: "ollama" }),
+      }),
+      modelId: "ollama/qwen3:32b",
+    });
+    await sql`
+      UPDATE adapter_config
+      SET config = ${sql.json({ preferences: { costQualityBalance: 17 } })}
+      WHERE hive_id = ${bizId} AND adapter_type = 'model-routing'
+    `;
+
+    const task: ClaimedTask = {
+      id: "00000000-0000-0000-0000-000000000198",
+      hiveId: bizId,
+      assignedTo: "dev-agent",
+      createdBy: "owner",
+      status: "active",
+      priority: 5,
+      title: "Auto route local implementation task",
+      brief: "Use the configured automatic local model route with fallback",
+      parentTaskId: null,
+      goalId: null,
+      sprintNumber: null,
+      qaRequired: false,
+      acceptanceCriteria: null,
+      retryCount: 0,
+      doctorAttempts: 0,
+      failureReason: null,
+      projectId: null,
+    };
+
+    const ctx = await buildSessionContext(sql, task);
+
+    expect(ctx.primaryAdapterType).toBe("ollama");
+    expect(ctx.model).toBe("ollama/qwen3:32b");
+    expect(ctx.fallbackAdapterType).toBe("codex");
+    expect(ctx.fallbackModel).toBe("openai-codex/gpt-5.5");
   });
 
   it("builds context with role template data", async () => {
@@ -289,11 +396,10 @@ describe("buildSessionContext", () => {
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (${fingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint,
+      modelId: "openai-codex/gpt-5.5",
+    });
     await sql`
       INSERT INTO adapter_config (hive_id, adapter_type, config)
       VALUES (
@@ -424,36 +530,29 @@ describe("buildSessionContext", () => {
       )
       VALUES
         (${bizId}, 'openai', 'openai-codex/gpt-5.5', 'codex', 96, 80, true),
-        (${bizId}, 'google', 'google/gemini-3.1-flash-lite-preview', 'gemini', 88, 0, true)
+        (${bizId}, 'google', 'google/gemini-2.5-flash', 'gemini', 88, 0, true)
       ON CONFLICT (hive_id, provider, model_id) DO UPDATE
       SET adapter_type = EXCLUDED.adapter_type,
           benchmark_quality_score = EXCLUDED.benchmark_quality_score,
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES
-        (
-          ${createRuntimeCredentialFingerprint({
-            provider: "openai",
-            adapterType: "codex",
-            baseUrl: null,
-          })},
-          'openai-codex/gpt-5.5',
-          'healthy'
-        ),
-        (
-          ${createRuntimeCredentialFingerprint({
-            provider: "google",
-            adapterType: "gemini",
-            baseUrl: null,
-          })},
-          'google/gemini-3.1-flash-lite-preview',
-          'healthy'
-        )
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "openai",
+        adapterType: "codex",
+        baseUrl: null,
+      }),
+      modelId: "openai-codex/gpt-5.5",
+    });
+    await upsertHealthyModelHealth({
+      fingerprint: createRuntimeCredentialFingerprint({
+        provider: "google",
+        adapterType: "gemini",
+        baseUrl: null,
+      }),
+      modelId: "google/gemini-2.5-flash",
+    });
     await sql`
       INSERT INTO model_capability_scores (
         provider,
@@ -475,12 +574,12 @@ describe("buildSessionContext", () => {
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'coding', 80, '80', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'writing', 45, '45', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
         ('openai', 'codex', 'openai-codex/gpt-5.5', 'openai-codex/gpt-5.5', 'tool_use', 100, '100', 'test', 'https://example.test/openai', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'overall_quality', 50, '50', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'reasoning', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'coding', 45, '45', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'writing', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'tool_use', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
-        ('google', 'gemini', 'google/gemini-3.1-flash-lite-preview', 'google/gemini-3.1-flash-lite-preview', 'speed', 100, '100', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high')
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'overall_quality', 50, '50', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'reasoning', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'coding', 45, '45', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'writing', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'tool_use', 95, '95', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high'),
+        ('google', 'gemini', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash', 'speed', 100, '100', 'test', 'https://example.test/google', 'session-builder-context', 'exact', 'high')
     `;
     await sql`
       UPDATE adapter_config
@@ -490,7 +589,7 @@ describe("buildSessionContext", () => {
             "openai:codex:openai-codex/gpt-5.5": {
               roleSlugs: ["content-writer"],
             },
-            "google:gemini:google/gemini-3.1-flash-lite-preview": {
+            "google:gemini:google/gemini-2.5-flash": {
               roleSlugs: ["content-writer"],
             },
           },
@@ -575,7 +674,7 @@ describe("buildSessionContext", () => {
     const goalContextCtx = await buildSessionContext(sql, goalContextTask);
 
     expect(writingCtx.primaryAdapterType).toBe("gemini");
-    expect(writingCtx.model).toBe("google/gemini-3.1-flash-lite-preview");
+    expect(writingCtx.model).toBe("google/gemini-2.5-flash");
     expect(ctx.primaryAdapterType).toBe("codex");
     expect(ctx.model).toBe("openai-codex/gpt-5.5");
     expect(goalContextCtx.primaryAdapterType).toBe("codex");
@@ -612,11 +711,10 @@ describe("buildSessionContext", () => {
           routing_cost_score = EXCLUDED.routing_cost_score,
           enabled = EXCLUDED.enabled
     `;
-    await sql`
-      INSERT INTO model_health (fingerprint, model_id, status)
-      VALUES (${fingerprint}, 'openai-codex/gpt-5.5', 'healthy')
-      ON CONFLICT (fingerprint, model_id) DO UPDATE SET status = EXCLUDED.status
-    `;
+    await upsertHealthyModelHealth({
+      fingerprint,
+      modelId: "openai-codex/gpt-5.5",
+    });
     await sql`
       INSERT INTO adapter_config (hive_id, adapter_type, config)
       VALUES (

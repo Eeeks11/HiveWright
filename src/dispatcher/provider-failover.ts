@@ -1,6 +1,7 @@
 import type { DispatcherModelRouteHealthDecision } from "./adapter-health";
 
 export interface ProviderFailoverInput {
+  roleSlug?: string | null;
   primaryAdapterType: string;
   primaryModel: string;
   fallbackAdapterType: string | null | undefined;
@@ -27,6 +28,25 @@ export interface ProviderFailoverDecision {
  *   so known-bad runtime paths do not burn tokens or create recovery churn.
  */
 export function decideProviderFailoverRoute(input: ProviderFailoverInput): ProviderFailoverDecision {
+  if (input.primaryHealth.healthy) {
+    return {
+      adapterType: input.primaryAdapterType,
+      model: input.primaryModel,
+      canRun: true,
+      usedFallback: false,
+      clearFallbackModel: false,
+      reason: "primary_adapter_healthy",
+      diagnostic: buildDiagnostic(input, {
+        adapterType: input.primaryAdapterType,
+        model: input.primaryModel,
+        canRun: true,
+        usedFallback: false,
+        clearFallbackModel: false,
+        reason: "primary_adapter_healthy",
+      }),
+    };
+  }
+
   const fallbackDeclared = Boolean(input.fallbackAdapterType && input.fallbackModel);
 
   if (!fallbackDeclared) {
@@ -44,25 +64,6 @@ export function decideProviderFailoverRoute(input: ProviderFailoverInput): Provi
         usedFallback: false,
         clearFallbackModel: false,
         reason: "no_declared_fallback_route",
-      }),
-    };
-  }
-
-  if (input.primaryHealth.healthy) {
-    return {
-      adapterType: input.primaryAdapterType,
-      model: input.primaryModel,
-      canRun: true,
-      usedFallback: false,
-      clearFallbackModel: false,
-      reason: "primary_adapter_healthy",
-      diagnostic: buildDiagnostic(input, {
-        adapterType: input.primaryAdapterType,
-        model: input.primaryModel,
-        canRun: true,
-        usedFallback: false,
-        clearFallbackModel: false,
-        reason: "primary_adapter_healthy",
       }),
     };
   }
@@ -121,7 +122,7 @@ function buildDiagnostic(
   ];
 
   if (!input.fallbackAdapterType || !input.fallbackModel) {
-    lines.push("Fallback route declaration: missing.");
+    lines.push(missingFallbackDiagnostic(input));
     return lines.join(" ");
   }
 
@@ -136,6 +137,23 @@ function buildDiagnostic(
   }
 
   return lines.join(" ");
+}
+
+function missingFallbackDiagnostic(input: ProviderFailoverInput): string {
+  const role = input.roleSlug?.trim() || "unknown-role";
+  return `Fallback route declaration: missing. Affected role: ${role}; route family: ${routeFamily(input.primaryAdapterType)}.`;
+}
+
+function routeFamily(adapterType: string): string {
+  const adapter = adapterType.trim().toLowerCase();
+  if (adapter === "ollama") {
+    return "local/ollama";
+  }
+  if (adapter === "claude-code") return "cloud/claude-code";
+  if (adapter === "codex") return "cloud/codex";
+  if (adapter === "gemini") return "cloud/gemini";
+  if (adapter === "openai-image") return "cloud/openai-image";
+  return adapter || "unknown";
 }
 
 function describeRoute(

@@ -6,6 +6,7 @@ import { HiveConnectorsPanel } from "@/components/hives/hive-connectors-panel";
 import { HiveRecordsPanel } from "@/components/hives/hive-records-panel";
 import { HiveScoreboard } from "@/components/hives/hive-scoreboard";
 import { HiveSectionNav } from "@/components/hive-section-nav";
+import { TargetHiveBanner, UnresolvedHiveTargetMessage, useResolvedHiveTarget } from "@/components/hive-target-mode";
 
 interface OperatingProfile {
   kind: string;
@@ -40,6 +41,125 @@ interface Hive {
   createdAt: string;
 }
 
+type BusinessOsOwnerDashboard = {
+  status?: "setup_required";
+  headline: string;
+  summary: string | null;
+  setupRequired?: {
+    label: string;
+    href: string;
+    description?: string;
+  };
+  mode: "new_business" | "existing_business";
+  stage: string | null;
+  ownerGoals: string[];
+  setupProgress: {
+    label: string;
+    completedSteps: number;
+    totalSteps: number;
+    percent: number;
+    nextStep: string;
+  };
+  auditScorecard: {
+    status: string;
+    score: number | null;
+    confidence: string | null;
+    scope: string[];
+    evidence: string[];
+    knownUnknowns: string[];
+  };
+  operatingModelMap: {
+    overallScore: number | null;
+    nextReviewAt: string | null;
+    modules: Array<{
+      key: string;
+      label: string;
+      domain: string;
+      href: string | null;
+      score: number | null;
+      maturity: string | null;
+      confidence: string | null;
+      summary: string | null;
+      evidenceState: "measured" | "partial" | "missing";
+      evidence: string[];
+      gaps: string[];
+      actions: string[];
+      connectedSystems: string[];
+      nextReviewAt: string | null;
+    }>;
+  };
+  systemMaturity: {
+    averageReadinessScore: number | null;
+    readinessEvidenceState: "measured" | "unknown";
+    readinessEvidenceMessage: string;
+    atRiskSystems: string[];
+    systems: Array<{
+      key: string;
+      label: string;
+      score: number;
+      maturity: string | null;
+      confidence: string | null;
+      summary: string | null;
+      evidence: string[];
+    }>;
+  };
+  priorityActions: Array<{
+    id?: string | null;
+    title: string;
+    brief: string;
+    status: string;
+    priority: number;
+    riskLevel: string | null;
+    approvalRequired: boolean;
+    expectedOutcome: string | null;
+    measurementMetric: string | null;
+    evidence: string[];
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
+  }>;
+  approvalsRequired: Array<{
+    id?: string | null;
+    title: string;
+    brief: string;
+    status: string;
+    priority: number;
+    riskLevel: string | null;
+    expectedOutcome: string | null;
+    evidence: string[];
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
+  }>;
+  openGaps: Array<{
+    title: string;
+    severity: string | null;
+    status: string;
+    systemKey: string | null;
+    confidence: string | null;
+    evidence: string[];
+  }>;
+  agentActivity: Array<{
+    title: string;
+    summary: string | null;
+    status: string;
+    role: string | null;
+    evidenceUrl: string | null;
+    hasEvidence: boolean;
+    updatedAt: string | null;
+  }>;
+  changedSinceLastReview: Array<{
+    type: string;
+    label: string;
+    detail: string;
+    changedAt: string | null;
+  }>;
+  governance: {
+    aiSpendBudgetLabel: string;
+  };
+  ownerNextReviewChecklist: string[];
+};
+
 type TargetStatus = "open" | "achieved" | "abandoned";
 
 interface Target {
@@ -56,8 +176,10 @@ interface Target {
 export default function HiveDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const target = useResolvedHiveTarget(id);
 
   const [hive, setHive] = useState<Hive | null>(null);
+  const [businessOsDashboard, setBusinessOsDashboard] = useState<BusinessOsOwnerDashboard | null>(null);
   const [targets, setTargets] = useState<Target[]>([]);
   const [contextPreview, setContextPreview] = useState<string>("");
   const [showPreview, setShowPreview] = useState(false);
@@ -74,6 +196,14 @@ export default function HiveDetailPage() {
 
   // Load hive + targets. Called on mount and after any mutation.
   const reload = useCallback(async () => {
+    if (target.isResolvingTarget) return;
+    if (target.isUnresolvedTarget || !target.effectiveHiveId) {
+      setHive(null);
+      setBusinessOsDashboard(null);
+      setTargets([]);
+      setLoadError("Hive target not found");
+      return;
+    }
     setLoadError(null);
     const readJson = async (res: Response) => {
       const text = await res.text();
@@ -85,24 +215,31 @@ export default function HiveDetailPage() {
     };
 
     try {
-      const [hiveRes, targetsRes] = await Promise.all([
+      const readOptionalBusinessOsDashboard = async () => {
+        const res = await fetch(`/api/hives/${id}/business-os-dashboard`);
+        if (res.status === 404) return null;
+        return readJson(res);
+      };
+      const [hiveRes, targetsRes, businessOsRes] = await Promise.all([
         fetch(`/api/hives/${id}`).then(readJson),
         fetch(`/api/hives/${id}/targets`).then(readJson),
+        readOptionalBusinessOsDashboard(),
       ]);
       setHive(hiveRes.data ?? null);
       setTargets(targetsRes.data || []);
+      setBusinessOsDashboard(businessOsRes?.data ?? null);
     } catch (error) {
+      setBusinessOsDashboard(null);
       setLoadError(error instanceof Error ? error.message : "Failed to load hive");
     }
-  }, [id]);
+  }, [id, target.effectiveHiveId, target.isResolvingTarget, target.isUnresolvedTarget]);
 
   useEffect(() => {
     reload();
-  // reload is stable for a given id — re-run only when id changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [reload]);
 
   const patchHive = async (patch: Partial<Pick<Hive, "name" | "description" | "mission">>) => {
+    if (!target.confirmCrossHiveWrite("Saving hive profile changes")) return;
     const res = await fetch(`/api/hives/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -118,6 +255,7 @@ export default function HiveDetailPage() {
 
   const saveOperatingProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!target.confirmCrossHiveWrite("Saving operating profile changes")) return;
     setProfileSaveState("saving");
     const form = new FormData(event.currentTarget);
     const res = await fetch(`/api/hives/${id}`, {
@@ -150,6 +288,7 @@ export default function HiveDetailPage() {
   const saveBudget = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!hive) return;
+    if (!target.confirmCrossHiveWrite("Saving budget changes")) return;
     const form = new FormData(event.currentTarget);
     const dollars = Number(form.get("aiBudgetDollars"));
     const window = String(form.get("aiBudgetWindow") ?? hive.aiBudget.window);
@@ -183,6 +322,7 @@ export default function HiveDetailPage() {
   };
 
   const addTarget = async () => {
+    if (!target.confirmCrossHiveWrite("Adding a target")) return;
     await fetch(`/api/hives/${id}/targets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -192,6 +332,7 @@ export default function HiveDetailPage() {
   };
 
   const updateTarget = async (targetId: string, patch: Record<string, unknown>) => {
+    if (!target.confirmCrossHiveWrite("Updating a target")) return;
     await fetch(`/api/hives/${id}/targets/${targetId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -201,6 +342,7 @@ export default function HiveDetailPage() {
   };
 
   const deleteTarget = async (targetId: string) => {
+    if (!target.confirmCrossHiveWrite("Deleting a target")) return;
     if (!confirm("Delete this target? Use 'Achieved' or 'Abandoned' status for lifecycle changes.")) return;
     await fetch(`/api/hives/${id}/targets/${targetId}`, { method: "DELETE" });
     reload();
@@ -259,6 +401,7 @@ export default function HiveDetailPage() {
   };
   const uploadReferenceDocument = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!target.confirmCrossHiveWrite("Uploading a reference document")) return;
     if (!selectedReferenceFile) {
       setUploadSaveState("error");
       setTimeout(() => setUploadSaveState("idle"), 3000);
@@ -286,7 +429,11 @@ export default function HiveDetailPage() {
   };
 
 
-  if (!hive) {
+  if (target.isUnresolvedTarget) {
+    return <UnresolvedHiveTargetMessage hiveId={id} />;
+  }
+
+  if (target.isResolvingTarget || !hive) {
     return (
       <p className={loadError ? "text-red-600 dark:text-red-400" : "text-amber-600/70 dark:text-amber-400/60"}>
         {loadError ?? "Loading…"}
@@ -296,6 +443,31 @@ export default function HiveDetailPage() {
 
   const openTargets = targets.filter(t => t.status === "open");
   const historyTargets = targets.filter(t => t.status !== "open");
+  const operatingModelMap = businessOsDashboard?.operatingModelMap ?? {
+    overallScore: null,
+    nextReviewAt: null,
+    modules: [],
+  };
+
+  const actionTargetAffordance = (action: {
+    targetHref?: string | null;
+    targetStateLabel?: string | null;
+    targetDescription?: string | null;
+  }) => {
+    if (action.targetHref) {
+      return (
+        <a href={action.targetHref} className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline dark:text-blue-300">
+          Open action target
+        </a>
+      );
+    }
+    return (
+      <div className="mt-2 rounded-md border border-dashed border-zinc-200 p-2 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+        <span className="font-medium text-zinc-700 dark:text-zinc-200">{action.targetStateLabel ?? "Informational"}</span>
+        {action.targetDescription ? <span> — {action.targetDescription}</span> : null}
+      </div>
+    );
+  };
 
   const renderTarget = (t: Target, i: number, isOpen: boolean) => {
     const muted = t.status !== "open";
@@ -369,7 +541,8 @@ export default function HiveDetailPage() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
+      <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref={target.exitTargetHref} />
       <div className="hive-honey-glow space-y-2">
         <input
           value={hive.name}
@@ -410,6 +583,170 @@ export default function HiveDetailPage() {
       </section>
 
       <HiveScoreboard hiveId={id} hiveKind={hive.kind ?? "business"} />
+
+      {businessOsDashboard && (
+        <section className="space-y-5 rounded-lg border border-blue-200 bg-blue-50/40 p-6 dark:border-blue-900/40 dark:bg-blue-950/10">
+          {businessOsDashboard.setupRequired ? (
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Business OS setup</p>
+                <h2 className="text-xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.headline}</h2>
+                {businessOsDashboard.summary && <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">{businessOsDashboard.summary}</p>}
+                {businessOsDashboard.setupRequired.description && <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">{businessOsDashboard.setupRequired.description}</p>}
+              </div>
+              <a
+                href={businessOsDashboard.setupRequired.href}
+                className="rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white hover:bg-blue-800"
+              >
+                {businessOsDashboard.setupRequired.label}
+              </a>
+            </div>
+          ) : (<>
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">Business OS command view</p>
+                <h2 className="text-xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.headline}</h2>
+              </div>
+              <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-800 shadow-sm dark:bg-blue-950 dark:text-blue-100">
+                {businessOsDashboard.governance.aiSpendBudgetLabel}
+              </div>
+            </div>
+            {businessOsDashboard.summary && (
+              <p className="text-sm leading-6 text-zinc-700 dark:text-zinc-300">{businessOsDashboard.summary}</p>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Setup progress</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.setupProgress.percent}%</p>
+              <p className="text-xs text-zinc-500">{businessOsDashboard.setupProgress.completedSteps}/{businessOsDashboard.setupProgress.totalSteps} sections complete</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">{businessOsDashboard.setupProgress.nextStep}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">Audit scorecard</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.auditScorecard.score ?? "—"}</p>
+              <p className="text-xs text-zinc-500">{businessOsDashboard.auditScorecard.status.replaceAll("_", " ")} · {businessOsDashboard.auditScorecard.confidence ?? "unknown"} confidence</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">Scope: {businessOsDashboard.auditScorecard.scope.length ? businessOsDashboard.auditScorecard.scope.join(", ") : "not recorded"}</p>
+            </div>
+            <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">System maturity</p>
+              <p className="mt-2 text-2xl font-semibold text-blue-950 dark:text-blue-50">{businessOsDashboard.systemMaturity.averageReadinessScore ?? "—"}</p>
+              <p className="text-xs text-zinc-500">average readiness</p>
+              <p className="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
+                {businessOsDashboard.systemMaturity.readinessEvidenceMessage}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-medium text-blue-950 dark:text-blue-50">Business Operating Model map</h3>
+                  <p className="text-xs text-zinc-500">Ideal Business OS modules, evidence, gaps, actions, systems, and next review.</p>
+                </div>
+                <div className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/40 dark:text-blue-100">
+                  Score {operatingModelMap.overallScore ?? "—"}
+                </div>
+              </div>
+              {operatingModelMap.nextReviewAt && (
+                <p className="text-xs text-zinc-500">Next review: {new Date(operatingModelMap.nextReviewAt).toLocaleString()}</p>
+              )}
+              <div className="grid gap-3 md:grid-cols-2">
+                {operatingModelMap.modules.map((module) => (
+                  <div key={module.key} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-zinc-900 dark:text-zinc-100">{module.label}</p>
+                        <p className="text-xs text-zinc-500">{module.domain}</p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-xs ${module.evidenceState === "measured" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-200" : module.evidenceState === "partial" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-200" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"}`}>
+                        {module.evidenceState}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Score {module.score ?? "—"} · {module.maturity ?? "unmeasured"}{module.confidence ? ` · ${module.confidence} confidence` : ""}
+                    </p>
+                    {module.summary && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{module.summary}</p>}
+                    {module.connectedSystems.length > 0 && <p className="mt-1 text-xs text-zinc-500">Systems: {module.connectedSystems.join(", ")}</p>}
+                    {module.gaps.length > 0 && <p className="mt-1 text-xs text-red-600 dark:text-red-300">Gaps: {module.gaps.slice(0, 2).join("; ")}</p>}
+                    {module.actions.length > 0 && <p className="mt-1 text-xs text-blue-700 dark:text-blue-300">Actions: {module.actions.slice(0, 2).join("; ")}</p>}
+                    {module.href && <a href={module.href} className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline dark:text-blue-300">Open module</a>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Approvals required</h3>
+              {businessOsDashboard.approvalsRequired.length === 0 && <p className="text-sm text-zinc-500">No approval-required Business OS actions are waiting.</p>}
+              {businessOsDashboard.approvalsRequired.map((action) => (
+                <div key={action.title} className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/20">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium text-amber-950 dark:text-amber-100">{action.title}</p>
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{action.status.replaceAll("_", " ")}</span>
+                  </div>
+                  <p className="mt-1 text-zinc-700 dark:text-zinc-300">{action.brief}</p>
+                  {action.expectedOutcome && <p className="mt-1 text-xs text-zinc-500">Outcome: {action.expectedOutcome}</p>}
+                  {actionTargetAffordance(action)}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Priority actions</h3>
+              {businessOsDashboard.priorityActions.length === 0 && <p className="text-sm text-zinc-500">No active Business OS actions yet.</p>}
+              {businessOsDashboard.priorityActions.map((action) => (
+                <div key={action.title} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-medium">{action.title}</p>
+                    <span className="text-xs text-zinc-500">P{action.priority}</span>
+                  </div>
+                  <p className="mt-1 text-zinc-600 dark:text-zinc-400">{action.brief}</p>
+                  <p className="mt-1 text-xs text-zinc-500">{action.status.replaceAll("_", " ")} · {action.riskLevel ?? "unknown"} risk{action.approvalRequired ? " · owner approval" : ""}</p>
+                  {actionTargetAffordance(action)}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Agent activity and evidence</h3>
+              {businessOsDashboard.agentActivity.length === 0 && <p className="text-sm text-zinc-500">No recent agent activity is linked to this Business OS yet.</p>}
+              {businessOsDashboard.agentActivity.map((activity) => (
+                <div key={`${activity.title}-${activity.updatedAt ?? ""}`} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <p className="font-medium">{activity.title}</p>
+                  <p className="text-xs text-zinc-500">{activity.role ?? "agent"} · {activity.status.replaceAll("_", " ")}</p>
+                  {activity.summary && <p className="mt-1 text-zinc-600 dark:text-zinc-400">{activity.summary}</p>}
+                  {activity.evidenceUrl && <a href={activity.evidenceUrl} className="mt-1 inline-block text-xs text-blue-700 hover:underline dark:text-blue-300">Open evidence</a>}
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-3 rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+              <h3 className="font-medium text-blue-950 dark:text-blue-50">Changed since last review</h3>
+              {businessOsDashboard.changedSinceLastReview.length === 0 && <p className="text-sm text-zinc-500">No recent Business OS changes found.</p>}
+              {businessOsDashboard.changedSinceLastReview.map((change) => (
+                <div key={`${change.type}-${change.label}-${change.changedAt ?? ""}`} className="rounded-md border p-3 text-sm dark:border-zinc-800">
+                  <p className="font-medium">{change.label}</p>
+                  <p className="text-zinc-600 dark:text-zinc-400">{change.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+            <h3 className="font-medium text-blue-950 dark:text-blue-50">Owner next review checklist</h3>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+              {businessOsDashboard.ownerNextReviewChecklist.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+          </>)}
+        </section>
+      )}
 
       <section className="space-y-4 rounded-lg border p-6">
         <div>
@@ -601,6 +938,7 @@ export default function HiveDetailPage() {
       <div className="flex items-center gap-3">
         <button
           onClick={async () => {
+            if (!target.confirmCrossHiveWrite("Saving hive profile changes")) return;
             setChangesSaveState("saving");
             const res = await fetch(`/api/hives/${id}`, {
               method: "PATCH",

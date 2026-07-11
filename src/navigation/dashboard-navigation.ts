@@ -80,10 +80,31 @@ export function buildDashboardNavigation({
       links: [],
     },
     {
+      id: "business-os",
+      label: "Business OS",
+      href: "/business-os",
+      isActive: (pathname) => pathname === "/business-os" || pathname.startsWith("/business-os/"),
+      links: [],
+    },
+    {
       id: "supervision",
       label: "Supervision",
       href: "/supervision",
       isActive: (pathname) => pathname === "/supervision",
+      links: [],
+    },
+    {
+      id: "marketing",
+      label: "Marketing",
+      href: "/marketing",
+      isActive: (pathname) => pathname === "/marketing" || pathname.startsWith("/marketing/"),
+      links: [],
+    },
+    {
+      id: "sales",
+      label: "Sales",
+      href: "/sales",
+      isActive: (pathname) => pathname === "/sales" || pathname.startsWith("/sales/"),
       links: [],
     },
     {

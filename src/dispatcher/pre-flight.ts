@@ -2,6 +2,8 @@ import fs from "fs";
 import type { SessionContext } from "../adapters/types";
 import { getProviderEndpoint } from "../adapters/provider-config";
 import { getOpenAIImagesApiAuthStatus } from "../adapters/openai-auth";
+import { resolveClaudeCodeWorkspace } from "../adapters/claude-code";
+import { ensureCodexWorkspace, resolveCodexEffectiveWorkspace } from "../adapters/codex";
 
 export interface PreFlightResult {
   passed: boolean;
@@ -38,9 +40,19 @@ async function checkOllamaHealth(model: string): Promise<string | null> {
 export async function runPreFlightChecks(ctx: SessionContext): Promise<PreFlightResult> {
   const failures: string[] = [];
   const isOpenAIImage = ctx.primaryAdapterType === "openai-image" || ctx.roleTemplate.slug === "image-designer";
+  const runtimeWorkspace = resolveRuntimeWorkspace(ctx);
 
-  if (ctx.projectWorkspace && !fs.existsSync(ctx.projectWorkspace)) {
-    failures.push(`Project workspace does not exist: ${ctx.projectWorkspace}`);
+  if (runtimeWorkspace && !fs.existsSync(runtimeWorkspace)) {
+    if (ctx.primaryAdapterType === "codex" && ctx.gitBackedProject !== true) {
+      try {
+        ensureCodexWorkspace(runtimeWorkspace);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        failures.push(`Runtime workspace could not be prepared: ${runtimeWorkspace} (${detail})`);
+      }
+    } else {
+      failures.push(`Runtime workspace does not exist: ${runtimeWorkspace}`);
+    }
   }
 
   if (!ctx.model) {
@@ -79,4 +91,14 @@ export async function runPreFlightChecks(ctx: SessionContext): Promise<PreFlight
     passed: failures.length === 0,
     failures,
   };
+}
+
+function resolveRuntimeWorkspace(ctx: SessionContext): string | null {
+  if (ctx.primaryAdapterType === "codex") {
+    return resolveCodexEffectiveWorkspace(ctx);
+  }
+  if (ctx.primaryAdapterType === "claude-code") {
+    return resolveClaudeCodeWorkspace(ctx);
+  }
+  return ctx.projectWorkspace;
 }

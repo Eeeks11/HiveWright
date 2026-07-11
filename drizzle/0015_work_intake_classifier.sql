@@ -51,7 +51,7 @@ VALUES (
     "primaryProvider": "ollama",
     "primaryModel": "qwen3:32b",
     "fallbackProvider": "openrouter",
-    "fallbackModel": "google/gemini-2.0-flash-exp:free",
+    "fallbackModel": "google/gemini-2.5-flash",
     "confidenceThreshold": 0.60,
     "timeoutMs": 15000,
     "temperature": 0.1,

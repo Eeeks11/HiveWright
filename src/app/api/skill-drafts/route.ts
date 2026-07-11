@@ -14,7 +14,8 @@ import {
   rejectSkill,
   reviewSkill,
 } from "@/skills/self-creation";
-import { maybeRecordEaHiveSwitch } from "@/ea/native/hive-switch-audit";
+import { maybeRecordEaHiveSwitch, requireEaDestinationHiveConfirmation } from "@/ea/native/hive-switch-audit";
+import { requireStrictHiveTarget } from "../_lib/hive-target";
 import {
   AGENT_AUDIT_EVENTS,
   recordAgentAuditEventBestEffort,
@@ -111,28 +112,17 @@ export async function GET(request: Request) {
 
   try {
     const params = parseSearchParams(request.url);
-    const hiveId = params.get("hiveId");
+    const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
+    if (!target.ok) return target.response;
+    const hiveId = target.hiveId;
     const status = params.get("status");
-    if (hiveId && !user.isSystemOwner) {
-      const hasAccess = await canAccessHive(sql, user.id, hiveId);
-      if (!hasAccess) {
-        return jsonError("Forbidden: caller cannot access this hive", 403);
-      }
-    }
 
     const conditions: string[] = [];
     const values: unknown[] = [];
     let paramIdx = 1;
 
-    if (hiveId) {
-      conditions.push(`hive_id = $${paramIdx++}`);
-      values.push(hiveId);
-    } else if (!user.isSystemOwner) {
-      conditions.push(
-        `hive_id IN (SELECT hive_id FROM hive_memberships WHERE user_id = $${paramIdx++})`,
-      );
-      values.push(user.id);
-    }
+    conditions.push(`hive_id = $${paramIdx++}`);
+    values.push(hiveId);
     if (status) {
       conditions.push(`status = $${paramIdx++}`);
       values.push(status);
@@ -238,6 +228,9 @@ export async function POST(request: Request) {
     if (sourceType && sourceType !== "internal" && sourceType !== "external") {
       return jsonError('sourceType must be "internal" or "external"', 400);
     }
+
+    const destinationConfirmation = await requireEaDestinationHiveConfirmation(sql, request, hiveId, body);
+    if (!destinationConfirmation.ok) return destinationConfirmation.response;
 
     const taskScope = await enforceInternalTaskHiveScope(hiveId);
     if (!taskScope.ok) return taskScope.response;

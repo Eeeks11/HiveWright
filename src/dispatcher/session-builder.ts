@@ -256,10 +256,10 @@ export async function buildSessionContext(
   const model = route.model;
   const primaryAdapterType = route.adapterType;
   const fallbackModel = route.source === "auto_policy"
-    ? null
+    ? route.fallbackModel ?? null
     : (role.fallback_model as string | null) ?? null;
   const fallbackAdapterType = route.source === "auto_policy"
-    ? null
+    ? route.fallbackAdapterType ?? null
     : (role.fallback_adapter_type as string | null) ?? null;
 
   let toolsConfig = (role.tools_config as ToolsConfig | null) ?? null;

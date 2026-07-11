@@ -160,4 +160,42 @@ describe("renderSessionPrompt", () => {
     expect(repoPrompt).toContain("project marked `git_repo=true`");
     expect(repoPrompt).toContain("Include the commit SHA");
   });
+
+  it("gives performance analysts the authenticated analyst telemetry path before raw auth probes", () => {
+    const prompt = renderSessionPrompt(makeCtx({
+      task: {
+        ...baseTask,
+        id: "task-performance-audit",
+        hiveId: "11111111-1111-1111-1111-111111111111",
+        assignedTo: "performance-analyst",
+        title: "HiveWright improvement scan",
+        brief: "Audit performance and runtime model-routing posture.",
+      },
+      roleTemplate: {
+        slug: "performance-analyst",
+        department: "operations",
+        roleMd: "# Performance Analyst\nAudit runtime performance.",
+        soulMd: null,
+        toolsMd: null,
+      },
+    }));
+
+    expect(prompt).toContain("## Analyst Telemetry API");
+    expect(prompt).toContain("/api/analyst-telemetry?hiveId=$HIVEWRIGHT_HIVE_ID");
+    const tokenLookup = "$(" + "printenv " + ["INTERNAL", "SERVICE", "TOKEN"].join("_") + ")";
+    expect(prompt).toContain(`Authorization: Bearer ${tokenLookup}`);
+    expect(prompt).not.toContain("Authorization: Bearer *** ");
+    expect(prompt).toContain("X-HiveWright-Task-Id: $HIVEWRIGHT_TASK_ID");
+    expect(prompt).toContain("primary runtime/model-routing evidence source");
+    expect(prompt).toContain("every promoted finding that will publish, reopen/close an issue, or route follow-up work must carry build-matched evidence");
+    expect(prompt).toContain("runtime buildHash");
+    expect(prompt).toContain("authenticated endpoint checkedAt timestamp");
+    expect(prompt).toContain("If the runtime buildHash changes before publication/routing, re-probe the affected endpoint family first");
+    expect(prompt).toContain("improvementScanEvidence.runtimeBuildHash");
+    expect(prompt).toContain("runtimeDrift.dispatcherHeartbeat.currentRuntimeBuildHash");
+    expect(prompt).toContain("Do not cite `runtimeDrift.dispatcherHeartbeat.buildHash` as the current runtime unless `buildHashStatus` is `matches_current_runtime`");
+    expect(prompt).toContain("/api/readiness` is controller-global diagnostic context only");
+    expect(prompt).toContain("secondary security signal only");
+    expect(prompt).toContain("unexpected analyst telemetry auth failure");
+  });
 });
