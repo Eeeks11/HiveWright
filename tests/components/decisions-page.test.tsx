@@ -224,7 +224,7 @@ describe("<DecisionsPage>", () => {
         if (url.startsWith("/api/decisions?")) {
           return okJson({ data: [decision()] });
         }
-        if (url === "/api/decisions/decision-1/activity") {
+        if (url === `/api/decisions/decision-1/activity?hiveId=${encodeURIComponent(HIVE_ID)}`) {
           return okJson({
             data: [
               {
@@ -268,10 +268,14 @@ describe("<DecisionsPage>", () => {
         return new Response("not found", { status: 404 });
       }),
     );
+    const fetchMock = vi.mocked(fetch);
 
     render(<DecisionsPage />);
 
     expect(await screen.findByText("Make it more honeycomb.")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/decisions/decision-1/activity?hiveId=${encodeURIComponent(HIVE_ID)}`,
+    );
     expect(screen.getByText(/woke the supervisor/i)).toBeTruthy();
     expect(screen.getByText(/Sprint 9 plan revision 21/i)).toBeTruthy();
     expect(screen.getByText(/EA recorded outcome/i)).toBeTruthy();
