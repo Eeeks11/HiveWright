@@ -107,19 +107,33 @@ function unwrapParentheses(expression: ts.Expression): ts.Expression {
 
 type Handler = { method: string; node: ts.FunctionLikeDeclaration; body: ts.ConciseBody };
 type TrustedCallKind = "allow-boolean" | "success-object" | "denial-value" | "throwing";
+type SuccessGuardShape = "ok" | "response-property" | "response-instance";
+type TrustedGate = { kind: TrustedCallKind; successShape?: SuccessGuardShape };
+const BOOLEAN_EQUALITY_OPERATORS = new Set([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+]);
 type Binding = { exported: string; namespace: boolean; moduleName: string };
 type AnalysisContext = {
   sourceFile: ts.SourceFile;
   imports: Map<string, Binding>;
   invalidBindings: Set<string>;
-  localWrappers: Map<string, { kind: TrustedCallKind; requiresMutationMode: boolean }>;
+  localWrappers: Map<string, TrustedGate & { requiresMutationMode: boolean }>;
+};
+type PendingGuard = {
+  id: number;
+  kind: TrustedCallKind;
+  successShape?: SuccessGuardShape;
+  projection: "result" | "ok" | "response";
 };
 type FlowState = {
   authorized: boolean;
   terminated: boolean;
   sawGate: boolean;
   violation: boolean;
-  pending: Map<string, TrustedCallKind>;
+  pending: Map<string, PendingGuard>;
 };
 
 function hasExportModifier(node: ts.Node): boolean {
@@ -240,14 +254,14 @@ function declarationShadows(node: ts.Node, name: string): boolean {
   return false;
 }
 
-function trustedImportedCall(call: ts.CallExpression, context: AnalysisContext): { exported: string; kind: TrustedCallKind } | null {
+function trustedImportedCall(call: ts.CallExpression, context: AnalysisContext): { exported: string } & TrustedGate | null {
   const expression = unwrapParentheses(call.expression);
   if (ts.isIdentifier(expression)) {
     const binding = context.imports.get(expression.text);
     if (!binding || binding.namespace || context.invalidBindings.has(expression.text) || declarationShadows(call, expression.text)) return null;
     if (binding.exported === "canMutateHive") return { exported: binding.exported, kind: "allow-boolean" };
-    if (binding.exported === "requireStrictHiveTarget" && hasMutationModeOption(call)) return { exported: binding.exported, kind: "success-object" };
-    if (binding.exported === "requireSystemOwner") return { exported: binding.exported, kind: "success-object" };
+    if (binding.exported === "requireStrictHiveTarget" && hasMutationModeOption(call)) return { exported: binding.exported, kind: "success-object", successShape: "ok" };
+    if (binding.exported === "requireSystemOwner") return { exported: binding.exported, kind: "success-object", successShape: "response-property" };
     if (binding.exported === "ensureCanMutateHive" && binding.moduleName === "./_shared") return { exported: binding.exported, kind: "denial-value" };
   }
   if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
@@ -257,8 +271,8 @@ function trustedImportedCall(call: ts.CallExpression, context: AnalysisContext):
     const exported = expression.name.text;
     if (!approvedImport(binding.exported, exported)) return null;
     if (exported === "canMutateHive") return { exported, kind: "allow-boolean" };
-    if (exported === "requireStrictHiveTarget" && hasMutationModeOption(call)) return { exported, kind: "success-object" };
-    if (exported === "requireSystemOwner") return { exported, kind: "success-object" };
+    if (exported === "requireStrictHiveTarget" && hasMutationModeOption(call)) return { exported, kind: "success-object", successShape: "ok" };
+    if (exported === "requireSystemOwner") return { exported, kind: "success-object", successShape: "response-property" };
   }
   return null;
 }
@@ -301,26 +315,26 @@ function usesHiveAccessAuthorization(node: ts.Node, context: AnalysisContext): b
   return found;
 }
 
-function trustedCall(call: ts.CallExpression, context: AnalysisContext): TrustedCallKind | null {
+function trustedCall(call: ts.CallExpression, context: AnalysisContext): TrustedGate | null {
   const imported = trustedImportedCall(call, context);
-  if (imported) return imported.kind;
+  if (imported) return { kind: imported.kind, successShape: imported.successShape };
   const expression = unwrapParentheses(call.expression);
   if (!ts.isIdentifier(expression)) return null;
   const wrapper = context.localWrappers.get(expression.text);
   if (!wrapper || declarationShadows(call, expression.text)) return null;
   if (wrapper.requiresMutationMode && stringLiteralValue(call.arguments.at(-1)) !== "mutate") return null;
-  return wrapper.kind;
+  return { kind: wrapper.kind, successShape: wrapper.successShape };
 }
 
-function callWithin(expression: ts.Node, context: AnalysisContext): { call: ts.CallExpression; kind: TrustedCallKind } | null {
-  let result: { call: ts.CallExpression; kind: TrustedCallKind } | null = null;
+function callWithin(expression: ts.Node, context: AnalysisContext): ({ call: ts.CallExpression } & TrustedGate) | null {
+  let result: ({ call: ts.CallExpression } & TrustedGate) | null = null;
   function visit(node: ts.Node): void {
     if (result) return;
     if (node !== expression && ts.isFunctionLike(node)) return;
     if (ts.isCallExpression(node)) {
-      const kind = trustedCall(node, context);
-      if (kind) {
-        result = { call: node, kind };
+      const gate = trustedCall(node, context);
+      if (gate) {
+        result = { call: node, ...gate };
         return;
       }
     }
@@ -547,7 +561,7 @@ function verifyLocalWrapperStatements(
 function verifiedLocalWrapper(
   statement: ts.FunctionDeclaration,
   baseContext: AnalysisContext,
-): { kind: TrustedCallKind; requiresMutationMode: boolean } | null {
+): (TrustedGate & { requiresMutationMode: boolean }) | null {
   if (!statement.name || !statement.body) return null;
   const name = statement.name.text;
   const verification = verifyLocalWrapperStatements(statement.body.statements, baseContext);
@@ -569,9 +583,46 @@ function verifiedLocalWrapper(
 
   const hasAccess = hasImportedHelper(statement.body, baseContext, ACCESS_HELPER_EXPORTS);
   if (hasAccess && !verification.hasModeScopedMutationGate) return null;
-  return verification.returnsSuccessAfterDenial
-    ? { kind: "success-object", requiresMutationMode: hasAccess }
-    : null;
+  if (!verification.returnsSuccessAfterDenial) return null;
+  const successShape = localSuccessGuardShape(statement.body);
+  return successShape ? { kind: "success-object", successShape, requiresMutationMode: hasAccess } : null;
+}
+
+function localSuccessGuardShape(body: ts.Block): SuccessGuardShape | null {
+  let hasOkProperty = false;
+  let hasResponseProperty = false;
+  let hasResponseInstance = false;
+  function inspectReturnExpression(expression: ts.Expression): void {
+    function inspect(node: ts.Node): void {
+      if (node !== expression && ts.isFunctionLike(node)) return;
+      if (ts.isObjectLiteralExpression(node)) {
+        for (const property of node.properties) {
+          if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue;
+          const name = property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : null;
+          if (name === "ok") hasOkProperty = true;
+          if (name === "response") hasResponseProperty = true;
+        }
+      }
+      ts.forEachChild(node, inspect);
+    }
+    inspect(expression);
+  }
+  function visit(node: ts.Node): void {
+    if (node !== body && ts.isFunctionLike(node)) return;
+    if (ts.isReturnStatement(node) && node.expression) {
+      inspectReturnExpression(node.expression);
+      const expression = unwrapParentheses(node.expression);
+      if (ts.isCallExpression(expression) && callName(expression.expression) === "jsonError") hasResponseInstance = true;
+      if (ts.isNewExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === "Response") {
+        hasResponseInstance = true;
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(body);
+  if (hasOkProperty) return "ok";
+  if (hasResponseProperty) return "response-property";
+  return hasResponseInstance ? "response-instance" : null;
 }
 
 function localAuthWrappers(sourceFile: ts.SourceFile, baseContext: AnalysisContext): AnalysisContext["localWrappers"] {
@@ -626,14 +677,156 @@ function isSystemOwnerDenial(statement: ts.IfStatement): boolean {
   return Boolean(message) && hasForbiddenStatus;
 }
 
-function referencedPending(expression: ts.Expression, pending: Map<string, TrustedCallKind>): { name: string; kind: TrustedCallKind } | null {
-  let result: { name: string; kind: TrustedCallKind } | null = null;
+function referencedPending(expression: ts.Expression, pending: Map<string, PendingGuard>): { name: string; guard: PendingGuard } | null {
+  let result: { name: string; guard: PendingGuard } | null = null;
   function visit(node: ts.Node): void {
-    if (!result && ts.isIdentifier(node) && pending.has(node.text)) result = { name: node.text, kind: pending.get(node.text)! };
+    if (!result && ts.isIdentifier(node) && pending.has(node.text)) result = { name: node.text, guard: pending.get(node.text)! };
     if (!result) ts.forEachChild(node, visit);
   }
   visit(expression);
   return result;
+}
+
+function booleanLiteralValue(expression: ts.Expression): boolean | null {
+  const value = unwrapParentheses(expression);
+  if (value.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (value.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return null;
+}
+
+function successOkGuard(expression: ts.Expression, pending: Map<string, PendingGuard>): PendingGuard | null {
+  const value = unwrapParentheses(expression);
+  if (ts.isIdentifier(value)) {
+    const guard = pending.get(value.text);
+    return guard?.kind === "success-object" && guard.successShape === "ok" && guard.projection === "ok" ? guard : null;
+  }
+  if (!ts.isPropertyAccessExpression(value) || !ts.isIdentifier(value.expression) || value.name.text !== "ok") return null;
+  const guard = pending.get(value.expression.text);
+  return guard?.kind === "success-object" && guard.successShape === "ok" && guard.projection === "result" ? guard : null;
+}
+
+type SuccessGuardPolarity = { guard: PendingGuard; deniesWhenTrue: boolean };
+
+function successGuardPolarity(expression: ts.Expression, pending: Map<string, PendingGuard>): SuccessGuardPolarity | null {
+  const value = unwrapParentheses(expression);
+  if (ts.isPrefixUnaryExpression(value) && value.operator === ts.SyntaxKind.ExclamationToken) {
+    const inner = successGuardPolarity(value.operand, pending);
+    return inner ? { guard: inner.guard, deniesWhenTrue: !inner.deniesWhenTrue } : null;
+  }
+
+  const okGuard = successOkGuard(value, pending);
+  if (okGuard) return { guard: okGuard, deniesWhenTrue: false };
+  if (!ts.isBinaryExpression(value)) return null;
+
+  if (value.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword) {
+    const left = unwrapParentheses(value.left);
+    const right = unwrapParentheses(value.right);
+    if (!ts.isIdentifier(left) || !ts.isIdentifier(right) || right.text !== "Response" || declarationShadows(right, "Response")) return null;
+    const guard = pending.get(left.text);
+    return guard?.kind === "success-object" && guard.successShape === "response-instance" && guard.projection === "result"
+      ? { guard, deniesWhenTrue: true }
+      : null;
+  }
+
+  if (value.operatorToken.kind === ts.SyntaxKind.InKeyword && stringLiteralValue(value.left) === "response") {
+    const right = unwrapParentheses(value.right);
+    if (!ts.isIdentifier(right)) return null;
+    const guard = pending.get(right.text);
+    return guard?.kind === "success-object" && guard.successShape === "response-property" && guard.projection === "result"
+      ? { guard, deniesWhenTrue: true }
+      : null;
+  }
+
+  if (!BOOLEAN_EQUALITY_OPERATORS.has(value.operatorToken.kind)) return null;
+  const leftBoolean = booleanLiteralValue(value.left);
+  const rightBoolean = booleanLiteralValue(value.right);
+  const guard = leftBoolean === null ? successOkGuard(value.left, pending) : successOkGuard(value.right, pending);
+  const compared = leftBoolean ?? rightBoolean;
+  if (!guard || compared === null || (leftBoolean !== null && rightBoolean !== null)) return null;
+  const unequal = value.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken ||
+    value.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken;
+  const conditionMeansAuthorized = unequal ? !compared : compared;
+  return { guard, deniesWhenTrue: !conditionMeansAuthorized };
+}
+
+function samePendingResponse(expression: ts.Expression, guard: PendingGuard, pending: Map<string, PendingGuard>): boolean {
+  const value = unwrapParentheses(expression);
+  if (ts.isIdentifier(value)) {
+    const response = pending.get(value.text);
+    return response?.id === guard.id && (response.projection === "response" ||
+      (guard.successShape === "response-instance" && response.projection === "result"));
+  }
+  if (!ts.isPropertyAccessExpression(value) || value.name.text !== "response" || !ts.isIdentifier(value.expression)) return false;
+  const result = pending.get(value.expression.text);
+  return result?.id === guard.id && result.projection === "result";
+}
+
+function successDenialBranchTerminates(
+  statement: ts.Statement,
+  guard: PendingGuard,
+  pending: Map<string, PendingGuard>,
+  context: AnalysisContext,
+): boolean {
+  if (potentiallySideEffecting(statement, context)) return false;
+  const terminal = ts.isBlock(statement) ? statement.statements.at(-1) : statement;
+  if (!terminal) return false;
+  if (ts.isBlock(terminal)) return successDenialBranchTerminates(terminal, guard, pending, context);
+  if (ts.isThrowStatement(terminal)) return true;
+  if (!ts.isReturnStatement(terminal)) return false;
+  if (!terminal.expression || samePendingResponse(terminal.expression, guard, pending)) return true;
+  const value = unwrapParentheses(terminal.expression);
+  return ts.isCallExpression(value) && callName(value.expression) === "jsonError";
+}
+
+function deletePendingGuard(pending: Map<string, PendingGuard>, guard: PendingGuard): void {
+  for (const [name, candidate] of pending) {
+    if (candidate.id === guard.id) pending.delete(name);
+  }
+}
+
+function invalidatePendingName(pending: Map<string, PendingGuard>, name: string): void {
+  const guard = pending.get(name);
+  if (guard) deletePendingGuard(pending, guard);
+}
+
+function invalidateAssignedPending(node: ts.Node, pending: Map<string, PendingGuard>): void {
+  function visit(child: ts.Node): void {
+    if (ts.isBinaryExpression(child) && isAssignmentOperator(child.operatorToken.kind)) {
+      const target = unwrapParentheses(child.left);
+      if (ts.isIdentifier(target)) invalidatePendingName(pending, target.text);
+      if (ts.isPropertyAccessExpression(target) && ts.isIdentifier(target.expression)) invalidatePendingName(pending, target.expression.text);
+    } else if ((ts.isPrefixUnaryExpression(child) || ts.isPostfixUnaryExpression(child)) && ts.isIdentifier(child.operand)) {
+      invalidatePendingName(pending, child.operand.text);
+    }
+    ts.forEachChild(child, visit);
+  }
+  visit(node);
+}
+
+function invalidateDeclaredBinding(name: ts.BindingName, pending: Map<string, PendingGuard>): void {
+  if (ts.isIdentifier(name)) {
+    invalidatePendingName(pending, name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (!ts.isOmittedExpression(element)) invalidateDeclaredBinding(element.name, pending);
+  }
+}
+
+function registerBindingPattern(
+  name: ts.BindingName,
+  source: PendingGuard,
+  pending: Map<string, PendingGuard>,
+): void {
+  if (!ts.isObjectBindingPattern(name)) return;
+  for (const element of name.elements) {
+    if (element.dotDotDotToken || !ts.isIdentifier(element.name)) continue;
+    const propertyName = element.propertyName && (ts.isIdentifier(element.propertyName) || ts.isStringLiteral(element.propertyName))
+      ? element.propertyName.text
+      : element.name.text;
+    if (propertyName !== "ok" && propertyName !== "response") continue;
+    pending.set(element.name.text, { ...source, projection: propertyName });
+  }
 }
 
 function conditionDeniesUnauthorized(expression: ts.Expression, kind: TrustedCallKind): boolean {
@@ -642,10 +835,7 @@ function conditionDeniesUnauthorized(expression: ts.Expression, kind: TrustedCal
     return ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken;
   }
   if (kind === "denial-value") return !ts.isPrefixUnaryExpression(condition) || condition.operator !== ts.SyntaxKind.ExclamationToken;
-  if (kind === "success-object") {
-    return (ts.isPrefixUnaryExpression(condition) && condition.operator === ts.SyntaxKind.ExclamationToken) ||
-      ts.isBinaryExpression(condition) || ts.isPropertyAccessExpression(condition);
-  }
+  if (kind === "success-object") return false;
   return false;
 }
 
@@ -735,7 +925,7 @@ const PRE_GATE_NON_RESOURCE_MUTATION_CALL_NAMES = new Set([
 ]);
 const PRE_GATE_SAFE_LITERAL_METHOD_NAMES = new Set(["filter", "includes", "map", "trim", "toLowerCase", "toUpperCase"]);
 const PRE_GATE_SAFE_DERIVED_COLLECTION_METHOD_NAMES = new Set(["filter", "map"]);
-const PRE_GATE_SAFE_CONSTRUCTOR_NAMES = new Set(["Date", "Response", "URL"]);
+const PRE_GATE_SAFE_CONSTRUCTOR_NAMES = new Set(["Date", "Error", "Response", "URL"]);
 
 function callName(expression: ts.LeftHandSideExpression): string | null {
   const target = unwrapParentheses(expression as ts.Expression);
@@ -839,11 +1029,21 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
     }
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
-        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+        if (!declaration.initializer) {
+          invalidateDeclaredBinding(declaration.name, state.pending);
+          continue;
+        }
         const gate = callWithin(declaration.initializer, context);
+        const initializer = unwrapParentheses(declaration.initializer);
+        const source = ts.isIdentifier(initializer) ? state.pending.get(initializer.text) : undefined;
+        invalidateDeclaredBinding(declaration.name, state.pending);
         if (gate) {
           state.sawGate = true;
-          state.pending.set(declaration.name.text, gate.kind);
+          const pendingGuard: PendingGuard = { id: gate.call.pos, kind: gate.kind, successShape: gate.successShape, projection: "result" };
+          if (ts.isIdentifier(declaration.name)) state.pending.set(declaration.name.text, pendingGuard);
+          else registerBindingPattern(declaration.name, pendingGuard, state.pending);
+        } else if (source?.kind === "success-object") {
+          registerBindingPattern(declaration.name, source, state.pending);
         }
       }
       if (!state.authorized && potentiallySideEffecting(statement, context)) state.violation = true;
@@ -862,11 +1062,19 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
         state.authorized = true;
         continue;
       }
-      const pending = referencedPending(statement.expression, state.pending);
-      if (pending && statementTerminates(statement.thenStatement) && conditionDeniesUnauthorized(statement.expression, pending.kind)) {
+      const successGuard = successGuardPolarity(statement.expression, state.pending);
+      const denialBranch = successGuard?.deniesWhenTrue ? statement.thenStatement : statement.elseStatement;
+      if (successGuard && denialBranch && successDenialBranchTerminates(denialBranch, successGuard.guard, state.pending, context)) {
         state.sawGate = true;
         state.authorized = true;
-        state.pending.delete(pending.name);
+        deletePendingGuard(state.pending, successGuard.guard);
+        continue;
+      }
+      const pending = referencedPending(statement.expression, state.pending);
+      if (pending && statementTerminates(statement.thenStatement) && conditionDeniesUnauthorized(statement.expression, pending.guard.kind)) {
+        state.sawGate = true;
+        state.authorized = true;
+        deletePendingGuard(state.pending, pending.guard);
         continue;
       }
       const thenState = analyzeStatements(ts.isBlock(statement.thenStatement) ? statement.thenStatement.statements : [statement.thenStatement], context, state);
@@ -905,6 +1113,7 @@ function analyzeStatements(statements: readonly ts.Statement[], context: Analysi
       state.sawGate = true;
     }
     if (!state.authorized && potentiallySideEffecting(statement, context)) state.violation = true;
+    if (ts.isExpressionStatement(statement)) invalidateAssignedPending(statement.expression, state.pending);
     if (gate?.kind === "throwing") state.authorized = true;
   }
   return state;
@@ -1255,6 +1464,71 @@ async function runSelfTest(): Promise<void> {
       "valid-scoped-mutation-mode-helpers",
       'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function authorizeHive(user: any, hiveId: string, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); return ok ? { ok: true } : { ok: false }; }\nasync function authorizeHiveRequest(request: Request, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); return ok ? { ok: true } : { ok: false }; }\nasync function resolveHiveAccess(params: unknown, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); return ok ? { ok: true } : { ok: false }; }\nexport async function POST() { const auth = await authorizeHive(user, hiveId, "mutate"); if (!auth.ok) return jsonError("denied", 403); return canAccessHive; }\nexport async function PATCH() { const auth = await authorizeHiveRequest(request, "mutate"); if (!auth.ok) return jsonError("denied", 403); return canAccessHive; }\nexport async function DELETE() { const auth = await resolveHiveAccess(params, "mutate"); if (!auth.ok) return jsonError("denied", 403); return canAccessHive; }\n',
     );
+    const successObjectWrapper = 'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function authorizeHive(user: any, hiveId: string, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); return ok ? { ok: true, response: undefined } : { ok: false, response: jsonError("denied", 403) }; }\n';
+    const successObjectCases: Array<[string, string]> = [
+      ["unsafe-success-positive-property", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-arbitrary-property", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.response) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-unrelated-binary", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === flag) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-wrong-response", 'const auth = await authorizeHive(user, hiveId, "mutate"); const other = { response: jsonError("wrong", 403) }; if (!auth.ok) return other.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-authorized-termination", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === true) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-negated-response-in", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (!("response" in auth)) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-true-equality", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok == true) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-swapped-true-equality", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (true === auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-false-inequality", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok !== false) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-swapped-false-inequality", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (false != auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-true-strict", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === true) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-swapped-true-loose", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (true == auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-compound-and", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (!auth.ok && flag) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-compound-or", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (!auth.ok || flag) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-reassigned", 'let auth = await authorizeHive(user, hiveId, "mutate"); auth = { ok: false, response: jsonError("fake", 403) }; if (!auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-shadowed", 'const auth = await authorizeHive(user, hiveId, "mutate"); { const auth = { ok: false, response: jsonError("fake", 403) }; if (!auth.ok) return auth.response; } await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-destructured-reassigned", 'const auth = await authorizeHive(user, hiveId, "mutate"); let { ok } = auth; ok = false; if (!ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-nested-nondominating", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (flag) { if (!auth.ok) return auth.response; } await mutateDatabase(); return canAccessHive;'],
+      ["unsafe-success-side-effecting-denial", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (!auth.ok) { await mutateDatabase(); return auth.response; } return canAccessHive;'],
+      ["valid-success-false-strict", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === false) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-false-loose", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok == false) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-swapped-false-strict", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (false === auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-swapped-false-loose", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (false == auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-not-true", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok !== true) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-swapped-not-true", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (true != auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-not-true-loose", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok != true) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-swapped-not-true-strict", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (true !== auth.ok) return auth.response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-positive-else", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === true) { void auth; } else { return auth.response; } await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-false-else", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (auth.ok === false) return auth.response; else { void auth; } await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-destructured", 'const auth = await authorizeHive(user, hiveId, "mutate"); const { ok, response } = auth; if (!ok) return response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-destructured-direct", 'const { ok, response } = await authorizeHive(user, hiveId, "mutate"); if (ok === false) return response; await mutateDatabase(); return canAccessHive;'],
+      ["valid-success-nested", 'const auth = await authorizeHive(user, hiveId, "mutate"); if (flag) { if (!auth.ok) return auth.response; } else { return jsonError("disabled", 403); } await mutateDatabase(); return canAccessHive;'],
+    ];
+    for (const [name, body] of successObjectCases) {
+      await writeRoute(rootDir, name, `${successObjectWrapper}export async function POST(flag: boolean) { ${body} }\n`);
+    }
+    const responsePropertyWrapper = 'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function resolveHiveAccess(params: unknown, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); if (!ok) return { response: jsonError("denied", 403) }; return { hive: { id: hiveId } }; }\n';
+    await writeRoute(
+      rootDir,
+      "valid-success-response-in",
+      `${responsePropertyWrapper}export async function POST() { const access = await resolveHiveAccess(params, "mutate"); if ("response" in access) return access.response; await mutateDatabase(); return canAccessHive; }\n`,
+    );
+    const responseInstanceWrapper = 'import { canAccessHive, canMutateHive } from "@/auth/users";\nasync function authorizeHiveRequest(request: Request, mode: "access" | "mutate") { const ok = mode === "mutate" ? await canMutateHive(sql, user.id, hiveId) : await canAccessHive(sql, user.id, hiveId); if (!ok) return jsonError("denied", 403); return { hiveId }; }\n';
+    await writeRoute(
+      rootDir,
+      "valid-success-response-instance",
+      `${responseInstanceWrapper}export async function POST() { const authorized = await authorizeHiveRequest(request, "mutate"); if (authorized instanceof Response) return authorized; await mutateDatabase(); return canAccessHive; }\n`,
+    );
+    await writeRoute(
+      rootDir,
+      "unsafe-success-inverted-response-instance",
+      `${responseInstanceWrapper}export async function POST() { const authorized = await authorizeHiveRequest(request, "mutate"); if (!(authorized instanceof Response)) return authorized; await mutateDatabase(); return canAccessHive; }\n`,
+    );
+    await writeRoute(
+      rootDir,
+      "unsafe-success-wrong-instance-constructor",
+      `${responseInstanceWrapper}export async function POST() { const authorized = await authorizeHiveRequest(request, "mutate"); if (authorized instanceof Error) return authorized; await mutateDatabase(); return canAccessHive; }\n`,
+    );
+    await writeRoute(
+      rootDir,
+      "unsafe-success-shadowed-response-constructor",
+      `${responseInstanceWrapper}export async function POST(Response: any) { const authorized = await authorizeHiveRequest(request, "mutate"); if (authorized instanceof Response) return authorized; await mutateDatabase(); return canAccessHive; }\n`,
+    );
     await writeRoute(
       rootDir,
       "unsafe-dead-code-local-wrapper",
@@ -1351,6 +1625,28 @@ async function runSelfTest(): Promise<void> {
       "src/app/api/unsafe-dead-code-local-wrapper/route.ts",
       "src/app/api/unsafe-access-only-local-wrapper/route.ts",
       "src/app/api/unsafe-nondominating-local-wrapper/route.ts",
+      "src/app/api/unsafe-success-positive-property/route.ts",
+      "src/app/api/unsafe-success-arbitrary-property/route.ts",
+      "src/app/api/unsafe-success-unrelated-binary/route.ts",
+      "src/app/api/unsafe-success-wrong-response/route.ts",
+      "src/app/api/unsafe-success-authorized-termination/route.ts",
+      "src/app/api/unsafe-success-negated-response-in/route.ts",
+      "src/app/api/unsafe-success-true-equality/route.ts",
+      "src/app/api/unsafe-success-swapped-true-equality/route.ts",
+      "src/app/api/unsafe-success-false-inequality/route.ts",
+      "src/app/api/unsafe-success-swapped-false-inequality/route.ts",
+      "src/app/api/unsafe-success-true-strict/route.ts",
+      "src/app/api/unsafe-success-swapped-true-loose/route.ts",
+      "src/app/api/unsafe-success-compound-and/route.ts",
+      "src/app/api/unsafe-success-compound-or/route.ts",
+      "src/app/api/unsafe-success-reassigned/route.ts",
+      "src/app/api/unsafe-success-shadowed/route.ts",
+      "src/app/api/unsafe-success-destructured-reassigned/route.ts",
+      "src/app/api/unsafe-success-nested-nondominating/route.ts",
+      "src/app/api/unsafe-success-side-effecting-denial/route.ts",
+      "src/app/api/unsafe-success-inverted-response-instance/route.ts",
+      "src/app/api/unsafe-success-wrong-instance-constructor/route.ts",
+      "src/app/api/unsafe-success-shadowed-response-constructor/route.ts",
     ];
 
     for (const file of expected) {
@@ -1382,6 +1678,7 @@ async function runSelfTest(): Promise<void> {
       files.has("src/app/api/valid-safe-parser-validation-helpers/route.ts") ||
       files.has("src/app/api/valid-read-only-sql-before-gate/route.ts") ||
       files.has("src/app/api/valid-export-alias/route.ts")
+      || Array.from(files).some((file) => file.includes("/valid-success-"))
     ) {
       throw new Error(`self-test produced a false positive for a valid route: ${Array.from(files).filter((file) => file.includes("/valid-") && file !== "src/app/api/valid-handler-route-auth-exception/route.ts").join(", ")}`);
     }
