@@ -1,6 +1,7 @@
 import { mkdtemp, rm, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import ts from "typescript";
 
 type Finding = {
   file: string;
@@ -11,8 +12,16 @@ const HIVE_ID_QUERY_READ = /\bsearchParams\s*\.\s*get\s*\(\s*(['"`])hiveId\1\s*\
 const STRICT_HIVE_TARGET_HELPER = "requireStrictHiveTarget";
 const ROUTE_HANDLER = /export\s+(?:async\s+)?function\s+(GET|HEAD|OPTIONS|POST|PUT|PATCH|DELETE)\b/g;
 const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-const ACCESS_ONLY_HIVE_GATE = /\bcanAccessHive\b|\brequireStrictHiveTarget\s*\(|\brequireHiveAccess\s*\(|\bauthorizeHive(?:Request)?\s*\(/;
-const EXPLICIT_MUTATION_GATE = /\bcanMutateHive\b|mode\s*:\s*["']mutate["']|["']mutate["']|\brequireSystemOwner\b|if\s*\(\s*![^)]*\.isSystemOwner\s*\)\s*return\b|\bensureCanMutateHive\b|\brequireHiveMutationAccess\b/;
+const ACCESS_ONLY_HIVE_GATE = /\bcanAccessHive\b|\brequireStrictHiveTarget\s*\(|\brequireHiveAccess\s*\(|\bauthorizeHive(?:Request)?\s*\(|\bresolveHiveAccess\s*\(/;
+const DIRECT_MUTATION_GATE_HELPERS = new Set([
+  "canMutateHive",
+  "requireSystemOwner",
+  "ensureCanMutateHive",
+  "requireHiveMutationAccess",
+]);
+// These route-local wrappers are approved only when the final call argument
+// explicitly selects their mutation branch.
+const SCOPED_MUTATION_MODE_HELPERS = new Set(["authorizeHive", "authorizeHiveRequest", "resolveHiveAccess"]);
 const MANUAL_HIVE_TARGET_ALLOWLIST = new Map<string, string>([
   ["src/app/api/action-policies/route.ts", "existing manual access check; migrate in route-hardening slices"],
   ["src/app/api/active-supervisors/route.ts", "existing manual access check; migrate in route-hardening slices"],
@@ -86,6 +95,82 @@ function escapeHatchState(source: string, pattern = ESCAPE_HATCH): { hasValid: b
   return { hasValid, hasInvalid };
 }
 
+function stringLiteralValue(node: ts.Node | undefined): string | null {
+  return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : null;
+}
+
+function calledIdentifier(node: ts.CallExpression): string | null {
+  return ts.isIdentifier(node.expression) ? node.expression.text : null;
+}
+
+function hasMutationModeOption(call: ts.CallExpression): boolean {
+  return call.arguments.some((argument) => {
+    if (!ts.isObjectLiteralExpression(argument)) return false;
+    return argument.properties.some((property) => {
+      if (!ts.isPropertyAssignment(property)) return false;
+      const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : null;
+      return name === "mode" && stringLiteralValue(property.initializer) === "mutate";
+    });
+  });
+}
+
+function unwrapParentheses(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (ts.isParenthesizedExpression(current)) current = current.expression;
+  return current;
+}
+
+function isSystemOwnerDenial(statement: ts.IfStatement): boolean {
+  const condition = unwrapParentheses(statement.expression);
+  if (!ts.isPrefixUnaryExpression(condition) || condition.operator !== ts.SyntaxKind.ExclamationToken) return false;
+  const ownerCheck = unwrapParentheses(condition.operand);
+  if (!ts.isPropertyAccessExpression(ownerCheck) || ownerCheck.name.text !== "isSystemOwner") return false;
+
+  const denied = ts.isBlock(statement.thenStatement)
+    ? statement.thenStatement.statements.length === 1 ? statement.thenStatement.statements[0] : undefined
+    : statement.thenStatement;
+  if (!denied || !ts.isReturnStatement(denied) || !denied.expression || !ts.isCallExpression(denied.expression)) return false;
+  const call = denied.expression;
+  if (calledIdentifier(call) !== "jsonError") return false;
+  const message = stringLiteralValue(call.arguments[0])?.toLowerCase() ?? "";
+  return message.includes("system owner") && message.includes("required") && call.arguments[1]?.getText() === "403";
+}
+
+function hasExplicitMutationGate(source: string): boolean {
+  const sourceFile = ts.createSourceFile("route-handler.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let found = false;
+
+  function visit(node: ts.Node): void {
+    if (found) return;
+    if (ts.isIfStatement(node) && isSystemOwnerDenial(node)) {
+      found = true;
+      return;
+    }
+    if (ts.isCallExpression(node)) {
+      const helper = calledIdentifier(node);
+      if (helper && DIRECT_MUTATION_GATE_HELPERS.has(helper)) {
+        found = true;
+        return;
+      }
+      if (helper === "requireStrictHiveTarget" && hasMutationModeOption(node)) {
+        found = true;
+        return;
+      }
+      if (helper && SCOPED_MUTATION_MODE_HELPERS.has(helper)) {
+        const finalArgument = node.arguments.at(-1);
+        if (stringLiteralValue(finalArgument) === "mutate") {
+          found = true;
+          return;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return found;
+}
+
 export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]> {
   const apiDir = path.join(rootDir, "src", "app", "api");
   const routeFiles = await findRouteFiles(apiDir);
@@ -125,7 +210,7 @@ export async function checkRouteAuth(rootDir = process.cwd()): Promise<Finding[]
       if (
         MUTATION_METHODS.has(handler.method) &&
         ACCESS_ONLY_HIVE_GATE.test(handler.source) &&
-        !EXPLICIT_MUTATION_GATE.test(handler.source) &&
+        !hasExplicitMutationGate(handler.source) &&
         !handlerMutationEscape.hasValid
       ) {
         findings.push({
@@ -200,13 +285,98 @@ async function runSelfTest(): Promise<void> {
     );
     await writeRoute(
       rootDir,
+      "unrelated-mutate-literal",
+      'import { canAccessHive } from "@/auth/users";\nexport function PUT() { const auditLabel = "mutate"; return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "unrelated-mutate-template-literal",
+      'import { canAccessHive } from "@/auth/users";\nexport function PATCH() { const auditLabel = `mutate`; return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "unrelated-owner-check",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST(user: { isSystemOwner: boolean }) { const owner = user.isSystemOwner; return owner ? canAccessHive : canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "mutation-helper-reference-only",
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport function DELETE() { void canMutateHive; return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "system-owner-helper-reference-only",
+      'import { canAccessHive } from "@/auth/users";\nimport { requireSystemOwner } from "../_lib/auth";\nexport function PUT() { void requireSystemOwner; return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "mutation-helper-call-literal-only",
+      'import { canAccessHive } from "@/auth/users";\nexport function PATCH() { const note = "canMutateHive()"; return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "system-owner-helper-call-comment-only",
+      'import { canAccessHive } from "@/auth/users";\nexport function DELETE() { /* requireSystemOwner() */ return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "system-owner-denial-comment-only",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST() { /* if (!user.isSystemOwner) return jsonError("system owner required", 403) */ return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "read-target-with-unrelated-mutate-literal",
+      'import { requireStrictHiveTarget } from "../_lib/hive-target";\nexport function POST() { const label = "mutate"; return requireStrictHiveTarget(sql, user, { kind: "query", request }); }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "access-helper-with-unrelated-mutate-literal",
+      'export function PATCH() { const label = "mutate"; return authorizeHiveRequest(request); }\n',
+    );
+    await writeRoute(
+      rootDir,
       "valid-mutation",
-      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport function GET() { return canAccessHive; }\nexport function PATCH() { return canMutateHive; }\n',
+      'import { canAccessHive, canMutateHive } from "@/auth/users";\nexport function GET() { return canAccessHive; }\nexport function PATCH() { return canMutateHive(sql, user.id, hiveId); }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-strict-target-mutation",
+      'import { requireStrictHiveTarget } from "../_lib/hive-target";\nexport function POST() { return requireStrictHiveTarget(\n  sql,\n  user,\n  { kind: "query", request },\n  { label: "hiveId", mode: "mutate" },\n); }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-system-owner-helper",
+      'import { canAccessHive } from "@/auth/users";\nimport { requireSystemOwner } from "../_lib/auth";\nexport function DELETE() { const authz = requireSystemOwner(); return authz ?? canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-system-owner-denial",
+      'import { canAccessHive } from "@/auth/users";\nexport function DELETE(user: { isSystemOwner: boolean }) { if (!user.isSystemOwner) return jsonError("Forbidden: system owner role required", 403); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-approved-mutation-helpers",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST() { ensureCanMutateHive(user, hiveId); return canAccessHive; }\nexport function PUT() { requireHiveMutationAccess(user, hiveId); return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "valid-scoped-mutation-mode-helpers",
+      'export function POST() { return authorizeHive(user, hiveId, "mutate"); }\nexport function PATCH() { return authorizeHiveRequest(request, "mutate"); }\nexport function DELETE() { return resolveHiveAccess(params, "mutate"); }\n',
     );
     await writeRoute(
       rootDir,
       "read-only-post",
       'import { canAccessHive } from "@/auth/users";\nexport function POST() { // hive-mutation-not-required: POST returns a read-only export\nreturn canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "get-exception-does-not-cover-patch",
+      'import { canAccessHive } from "@/auth/users";\nexport function GET() { // hive-mutation-not-required: read-only handler\nreturn canAccessHive; }\nexport function PATCH() { return canAccessHive; }\n',
+    );
+    await writeRoute(
+      rootDir,
+      "post-exception-does-not-cover-delete",
+      'import { canAccessHive } from "@/auth/users";\nexport function POST() { // hive-mutation-not-required: read-only export alias\nreturn canAccessHive; }\nexport function DELETE() { return canAccessHive; }\n',
     );
     await writeRoute(
       rootDir,
@@ -238,6 +408,19 @@ async function runSelfTest(): Promise<void> {
       "src/app/api/empty-escape/route.ts",
       "src/app/api/access-only-mutation/route.ts",
       "src/app/api/owner-bypass-access-mutation/route.ts",
+      "src/app/api/owner-only-mutation/route.ts",
+      "src/app/api/unrelated-mutate-literal/route.ts",
+      "src/app/api/unrelated-mutate-template-literal/route.ts",
+      "src/app/api/unrelated-owner-check/route.ts",
+      "src/app/api/mutation-helper-reference-only/route.ts",
+      "src/app/api/system-owner-helper-reference-only/route.ts",
+      "src/app/api/mutation-helper-call-literal-only/route.ts",
+      "src/app/api/system-owner-helper-call-comment-only/route.ts",
+      "src/app/api/system-owner-denial-comment-only/route.ts",
+      "src/app/api/read-target-with-unrelated-mutate-literal/route.ts",
+      "src/app/api/access-helper-with-unrelated-mutate-literal/route.ts",
+      "src/app/api/get-exception-does-not-cover-patch/route.ts",
+      "src/app/api/post-exception-does-not-cover-delete/route.ts",
     ];
 
     for (const file of expected) {
@@ -251,8 +434,12 @@ async function runSelfTest(): Promise<void> {
       files.has("src/app/api/valid-escape/route.ts") ||
       files.has("src/app/api/read-only-access/route.ts") ||
       files.has("src/app/api/read-only-post/route.ts") ||
-      files.has("src/app/api/owner-only-mutation/route.ts") ||
-      files.has("src/app/api/valid-mutation/route.ts")
+      files.has("src/app/api/valid-mutation/route.ts") ||
+      files.has("src/app/api/valid-strict-target-mutation/route.ts") ||
+      files.has("src/app/api/valid-system-owner-helper/route.ts") ||
+      files.has("src/app/api/valid-system-owner-denial/route.ts") ||
+      files.has("src/app/api/valid-approved-mutation-helpers/route.ts") ||
+      files.has("src/app/api/valid-scoped-mutation-mode-helpers/route.ts")
     ) {
       throw new Error("self-test produced a false positive for a valid route");
     }
