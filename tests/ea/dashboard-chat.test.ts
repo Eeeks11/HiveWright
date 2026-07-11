@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   state: { streamReturned: false },
   buildEaPrompt: vi.fn(async () => "FULL EA PROMPT"),
   runEaStream: vi.fn(),
-  loadGovernedEaModel: vi.fn(),
+  resolveEaModelRoute: vi.fn(),
+  recordEaModelRouteTelemetry: vi.fn(),
   scheduleImplicitQualityExtraction: vi.fn(),
 }));
 
@@ -29,7 +30,8 @@ vi.mock("@/ea/native/prompt", () => ({
 }));
 
 vi.mock("@/ea/native/model-selection", () => ({
-  loadGovernedEaModel: mocks.loadGovernedEaModel,
+  resolveEaModelRoute: mocks.resolveEaModelRoute,
+  recordEaModelRouteTelemetry: mocks.recordEaModelRouteTelemetry,
 }));
 
 vi.mock("@/ea/native/runner", () => ({
@@ -54,12 +56,24 @@ beforeEach(async () => {
   `;
   vi.clearAllMocks();
   mocks.state.streamReturned = false;
-  mocks.loadGovernedEaModel.mockResolvedValue(undefined);
+  mocks.resolveEaModelRoute.mockResolvedValue({
+    model: undefined,
+    selected: "runtime_default",
+    reason: "configuration_missing",
+    primaryModel: null,
+    fallbackModel: null,
+  });
 });
 
 describe("dashboardEaClient.submit", () => {
   it("builds the full EA prompt, uses the dashboard hive thread, and persists both turns", async () => {
-    mocks.loadGovernedEaModel.mockResolvedValue("openai-codex/gpt-5.6");
+    mocks.resolveEaModelRoute.mockResolvedValue({
+      model: "openai-codex/gpt-5.6-sol",
+      selected: "primary",
+      reason: "fresh_healthy_probe",
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
 
     const stream = await dashboardEaClient.submit("What active goals do I have?", {
       hiveId: HIVE_ID,
@@ -100,7 +114,12 @@ describe("dashboardEaClient.submit", () => {
     expect(mocks.runEaStream).toHaveBeenCalledWith("FULL EA PROMPT", {
       signal: firstRunOptions?.signal,
       attachmentPaths: [],
-      model: "openai-codex/gpt-5.6",
+      model: "openai-codex/gpt-5.6-sol",
+    });
+    expect(mocks.recordEaModelRouteTelemetry).toHaveBeenCalledWith(sql, {
+      hiveId: HIVE_ID,
+      transport: "dashboard",
+      route: expect.objectContaining({ selected: "primary" }),
     });
     expect(firstRunOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(firstRunOptions?.signal?.aborted).toBe(false);

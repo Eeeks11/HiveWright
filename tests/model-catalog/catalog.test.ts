@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { upsertModelCapabilityScores } from "@/model-catalog/capability-scores";
-import { refreshModelCatalogMetadata } from "@/model-catalog/catalog";
+import { CURATED_MODEL_CATALOG, refreshModelCatalogMetadata } from "@/model-catalog/catalog";
 import {
   buildLiveModelCapabilityScores,
   buildLiveModelCatalogEntries,
@@ -21,6 +21,23 @@ async function createHive(slug: string): Promise<string> {
 }
 
 describe("model catalog capability scores", () => {
+  it("ships canonical GPT-5.6 Sol with official token pricing in curated and static metadata", async () => {
+    expect(CURATED_MODEL_CATALOG).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      costPerInputToken: "0.000005",
+      costPerOutputToken: "0.000030",
+      metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    }));
+
+    const entries = await buildLiveModelCatalogEntries(async () => new Response(""));
+    expect(entries).toContainEqual(expect.objectContaining({
+      modelId: "openai-codex/gpt-5.6-sol",
+      costPerInputToken: "0.000005",
+      costPerOutputToken: "0.00003",
+      metadataSourceUrl: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    }));
+  });
   it("extracts BenchLM benchmark quality and categories for dynamic catalog targets", async () => {
     const targets = [
       {
@@ -996,7 +1013,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
     expect(catalogRow.count).toBe("0");
   });
 
-  it("retains GPT-5.6 when live refresh can attach official metadata but the model is still unbenchmarked", async () => {
+  it("retains GPT-5.6 Sol when live refresh can attach official metadata but the model is still unbenchmarked", async () => {
     const hiveId = await createHive("catalog-retain-official-gpt-5-6");
     await sql`
       INSERT INTO hive_models (
@@ -1011,7 +1028,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
         ${hiveId},
         'openai',
         'codex',
-        'openai-codex/gpt-5.6',
+        'openai-codex/gpt-5.6-sol',
         true,
         true
       )
@@ -1032,8 +1049,8 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
       VALUES (
         'openai',
         'codex',
-        'openai-codex/gpt-5.6',
-        'GPT-5.6',
+        'openai-codex/gpt-5.6-sol',
+        'GPT-5.6 Sol',
         'gpt-5',
         ${sql.json(["text", "code", "reasoning"])},
         false,
@@ -1050,7 +1067,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
         const href = String(url);
         if (href === "https://openai.com/api/pricing/") {
           return new Response(`
-            GPT-5.6
+            GPT-5.6 Sol
             Input price $5.00 / 1M tokens
             Output price $30.00 / 1M tokens
           `);
@@ -1063,7 +1080,7 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
       SELECT COUNT(*)::text AS count
       FROM hive_models
       WHERE hive_id = ${hiveId}
-        AND model_id = 'openai-codex/gpt-5.6'
+        AND model_id = 'openai-codex/gpt-5.6-sol'
     `;
     const [catalogRow] = await sql<{
       count: string;
@@ -1077,12 +1094,12 @@ GPT-5.5 Closed 1.1M $5.00 $30.00 124 c/s 1,267 62.9 48.5 53.1 35.6 30.8 46.9 40.
         MAX(cost_per_input_token) AS cost_per_input_token,
         MAX(cost_per_output_token) AS cost_per_output_token
       FROM model_catalog
-      WHERE model_id = 'openai-codex/gpt-5.6'
+      WHERE model_id = 'openai-codex/gpt-5.6-sol'
     `;
 
     expect(hiveRow.count).toBe("1");
     expect(catalogRow.count).toBe("1");
-    expect(catalogRow.metadata_source_name).toBe("OpenAI API pricing");
+    expect(catalogRow.metadata_source_name).toBe("OpenAI GPT-5.6 Sol pricing");
     expect(catalogRow.cost_per_input_token).toBe("0.000005000000");
     expect(catalogRow.cost_per_output_token).toBe("0.000030000000");
   });

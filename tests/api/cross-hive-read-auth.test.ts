@@ -105,6 +105,7 @@ describe("cross-hive read route auth", () => {
         description: hiveRow.description,
         mission: hiveRow.mission,
       }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
     const res = await getHive(

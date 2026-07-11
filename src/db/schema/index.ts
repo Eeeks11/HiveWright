@@ -45,6 +45,7 @@ export * from "./task-logs";
 export * from "./task-attachments";
 export * from "./connectors";
 export * from "./ea-threads";
+export * from "./ea-model-configurations";
 export * from "./ea-hive-switch-audit";
 export * from "./supervisor-reports";
 export * from "./initiative-runs";

@@ -719,7 +719,7 @@ const voiceEa: ConnectorDefinitionDraft = {
       label: "Model — optional",
       type: "text",
       placeholder: "openai-codex/<model-id>",
-      helpText: "Optional runtime model override. Leave blank to use the configured runtime default.",
+      helpText: "Seeds the shared per-hive EA primary model used by Voice, Dashboard, and Discord. Manage both routes in Connector settings.",
     },
     {
       key: "maxMonthlyLlmCents",
@@ -727,7 +727,7 @@ const voiceEa: ConnectorDefinitionDraft = {
       type: "text",
       placeholder: "0",
       helpText:
-        "Optional safety cap for voice-call LLM spend. 0 or blank = no cap. When set, the EA verbally warns at 80%, downgrades to Sonnet at 100%, and hangs up at 120%.",
+        "Optional safety cap for voice-call LLM spend. 0 or blank = no cap. When set, the EA verbally warns at 80%, selects the configured healthy fallback at 100%, and hangs up at 120%.",
     },
   ],
   secretFields: [],
@@ -1384,7 +1384,7 @@ const eaDiscord: ConnectorDefinitionDraft = {
       label: "Model — optional",
       type: "text",
       placeholder: "openai-codex/<model-id>",
-      helpText: "Optional runtime model override. Leave blank to use the configured runtime default.",
+      helpText: "Seeds the shared per-hive EA primary model used by Discord, Dashboard, and Voice. Manage both routes in Connector settings.",
     },
   ],
   secretFields: ["botToken"],

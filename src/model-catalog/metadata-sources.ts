@@ -17,6 +17,7 @@ type KnownLiveModel = Omit<
 export type LiveMetadataTarget = KnownLiveModel;
 
 const OPENAI_PRICING_URL = "https://openai.com/api/pricing/";
+const OPENAI_GPT_56_SOL_URL = "https://developers.openai.com/api/docs/models/gpt-5.6-sol";
 const ANTHROPIC_OPUS_URL = "https://www.anthropic.com/claude/opus";
 const ANTHROPIC_SONNET_URL = "https://www.anthropic.com/claude/sonnet";
 const GEMINI_PRICING_URL = "https://ai.google.dev/gemini-api/docs/pricing";
@@ -58,6 +59,7 @@ const OFFICIAL_COST_FALLBACKS = new Map<string, {
   sourceName: string;
   sourceUrl: string;
 }>([
+  ["openai-codex/gpt-5.6-sol", { input: 5, output: 30, sourceName: "OpenAI GPT-5.6 Sol pricing", sourceUrl: OPENAI_GPT_56_SOL_URL }],
   ["openai-codex/gpt-5.5", { input: 5, output: 30, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
   ["openai-codex/gpt-5.4", { input: 2.5, output: 15, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
   ["openai-codex/gpt-5.4-mini", { input: 0.5, output: 2, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL }],
@@ -72,8 +74,8 @@ const KNOWN_LIVE_MODELS: KnownLiveModel[] = [
   {
     provider: "openai",
     adapterType: "codex",
-    modelId: "openai-codex/gpt-5.6",
-    displayName: "GPT-5.6",
+    modelId: "openai-codex/gpt-5.6-sol",
+    displayName: "GPT-5.6 Sol",
     family: "gpt-5",
     capabilities: ["text", "code", "reasoning"],
     local: false,
@@ -190,7 +192,7 @@ export async function buildLiveModelCatalogEntries(
   ]);
 
   const costs = new Map(OFFICIAL_COST_FALLBACKS);
-  setCost(costs, "openai-codex/gpt-5.6", parseSectionTokenPrices(openAiPricing, "GPT-5.6", ["GPT-5.5", "GPT-5.4"]), "OpenAI API pricing", OPENAI_PRICING_URL);
+  setCost(costs, "openai-codex/gpt-5.6-sol", parseSectionTokenPrices(openAiPricing, "GPT-5.6 Sol", ["GPT-5.5", "GPT-5.4"]), "OpenAI GPT-5.6 Sol pricing", OPENAI_GPT_56_SOL_URL);
   setCost(costs, "openai-codex/gpt-5.5", parseSectionTokenPrices(openAiPricing, "GPT-5.5", ["GPT-5.4"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.4", parseSectionTokenPrices(openAiPricing, "GPT-5.4", ["GPT-5.3", "Containers"]), "OpenAI API pricing", OPENAI_PRICING_URL);
   setCost(costs, "openai-codex/gpt-5.4-mini", parseSectionTokenPrices(openAiPricing, "GPT-5.4 Mini", ["GPT-5.4", "GPT-5.3"]), "OpenAI API pricing", OPENAI_PRICING_URL);
@@ -914,7 +916,10 @@ function parseOfficialCostForTarget(
 
   if (provider === "openai" || adapterType === "codex") {
     const price = parseTokenPricesNearAliases(sources.openAiPricing, candidates);
-    return price ? { ...price, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL } : null;
+    if (!price) return null;
+    return target.modelId === "openai-codex/gpt-5.6-sol"
+      ? { ...price, sourceName: "OpenAI GPT-5.6 Sol pricing", sourceUrl: OPENAI_GPT_56_SOL_URL }
+      : { ...price, sourceName: "OpenAI API pricing", sourceUrl: OPENAI_PRICING_URL };
   }
 
   if (provider === "google" || adapterType === "gemini") {

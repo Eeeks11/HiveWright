@@ -86,6 +86,10 @@ function ConnectorsPageContent() {
   const [flash, setFlash] = useState<{ slug: string; text: string; kind: "ok" | "err" } | null>(null);
   const [oauthBanner, setOauthBanner] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [actionsByInstall, setActionsByInstall] = useState<Record<string, ConnectorAction[]>>({});
+  const [eaModels, setEaModels] = useState({
+    primaryModel: "openai-codex/gpt-5.6-sol",
+    fallbackModel: "openai-codex/gpt-5.5",
+  });
 
   useEffect(() => {
     // Pick up oauth round-trip query params so the dashboard shows a banner
@@ -106,6 +110,21 @@ function ConnectorsPageContent() {
     fetch("/api/connectors")
       .then((r) => r.json())
       .then((b) => setCatalog(b.data ?? []))
+      .catch(() => {});
+  }, [effectiveHiveId]);
+
+  useEffect(() => {
+    if (!effectiveHiveId) return;
+    fetch(`/api/hives/${effectiveHiveId}`)
+      .then((response) => response.json())
+      .then((body) => {
+        const config = body.data?.eaModelConfiguration;
+        if (!config) return;
+        setEaModels({
+          primaryModel: config.primaryModel ?? "",
+          fallbackModel: config.fallbackModel ?? "",
+        });
+      })
       .catch(() => {});
   }, [effectiveHiveId]);
 
@@ -335,6 +354,37 @@ function ConnectorsPageContent() {
     }
   }
 
+  async function saveEaModels() {
+    if (!effectiveHiveId) return;
+    if (!target.confirmCrossHiveWrite("Updating EA model routing")) return;
+    setBusy("ea-model-routing");
+    setFlash(null);
+    try {
+      const res = await fetch(`/api/hives/${effectiveHiveId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eaModelConfiguration: {
+            primaryModel: eaModels.primaryModel.trim() || null,
+            fallbackModel: eaModels.fallbackModel.trim() || null,
+          },
+        }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? "model routing update failed");
+      const config = body.data.eaModelConfiguration;
+      setEaModels({
+        primaryModel: config.primaryModel ?? "",
+        fallbackModel: config.fallbackModel ?? "",
+      });
+      setFlash({ slug: "ea-model-routing", text: "EA model routing saved.", kind: "ok" });
+    } catch (error) {
+      setFlash({ slug: "ea-model-routing", text: (error as Error).message, kind: "err" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function connectorSettingsHref(path: string): string {
     if (!targetHiveId) return path;
     const [base, query = ""] = path.split("?");
@@ -397,6 +447,47 @@ function ConnectorsPageContent() {
       </div>
 
       <TargetHiveBanner activeHive={target.activeHive} targetHive={target.targetHive} exitHref="/setup/connectors" />
+
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-lg font-medium text-amber-100">EA model routing</h2>
+        <p className="mt-1 text-xs text-amber-500/70">
+          Shared by Dashboard, Voice, and Discord. A route is used only while it is enabled and has fresh healthy probe evidence.
+        </p>
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <label className="text-xs text-amber-400/80">
+            Primary model
+            <input
+              aria-label="EA primary model"
+              value={eaModels.primaryModel}
+              onChange={(event) => setEaModels((current) => ({ ...current, primaryModel: event.target.value }))}
+              placeholder="openai-codex/gpt-5.6-sol"
+              className="mt-1 w-full rounded border border-border bg-card px-2 py-1 text-sm text-amber-50"
+            />
+          </label>
+          <label className="text-xs text-amber-400/80">
+            Fallback model
+            <input
+              aria-label="EA fallback model"
+              value={eaModels.fallbackModel}
+              onChange={(event) => setEaModels((current) => ({ ...current, fallbackModel: event.target.value }))}
+              placeholder="openai-codex/gpt-5.5"
+              className="mt-1 w-full rounded border border-border bg-card px-2 py-1 text-sm text-amber-50"
+            />
+          </label>
+        </div>
+        <button
+          onClick={saveEaModels}
+          disabled={busy === "ea-model-routing"}
+          className="mt-3 rounded bg-amber-600 px-3 py-1 text-sm text-amber-950 hover:bg-amber-500 disabled:opacity-50"
+        >
+          {busy === "ea-model-routing" ? "Saving…" : "Save EA routing"}
+        </button>
+        {flash?.slug === "ea-model-routing" && (
+          <p className={`mt-2 text-xs ${flash.kind === "ok" ? "text-emerald-300" : "text-rose-300"}`}>
+            {flash.text}
+          </p>
+        )}
+      </section>
 
       <section>
         <h2 className="mb-3 text-lg font-medium text-amber-100">Installed</h2>

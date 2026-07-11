@@ -5,8 +5,9 @@ import { canAccessHive } from "@/auth/users";
 import { normalizeAiBudgetSettings } from "@/budget/ai-budget";
 import { normalizeHiveKind, normalizeHiveOperatingMode } from "@/hives/kind";
 import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
+import { getEaModelConfiguration, updateEaModelConfiguration } from "@/ea/native/model-selection";
 
-const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget", "operatingProfile"]);
+const ALLOWED_FIELDS = new Set(["name", "description", "mission", "softwareStack", "software_stack", "aiBudget", "operatingProfile", "eaModelConfiguration"]);
 const REJECTED_FIELDS = new Set([
   "slug", "type", "id", "createdAt", "created_at",
   "eaSessionId", "ea_session_id", "workspacePath", "workspace_path",
@@ -32,6 +33,7 @@ export async function GET(
     }
   }
   const operatingProfile = await getOperatingProfile(sql, id);
+  const eaModelConfiguration = await getEaModelConfiguration(sql, id);
   return jsonOk({
     id: row.id,
     slug: row.slug,
@@ -49,6 +51,7 @@ export async function GET(
       window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
     },
     operatingProfile,
+    eaModelConfiguration,
     createdAt: row.created_at,
   });
 }
@@ -83,6 +86,7 @@ export async function PATCH(
   }
 
   let aiBudget: ReturnType<typeof normalizeAiBudgetSettings> | null = null;
+  let eaModelConfiguration: { primaryModel: string | null; fallbackModel: string | null } | null = null;
   if ("operatingProfile" in body && (!body.operatingProfile || typeof body.operatingProfile !== "object" || Array.isArray(body.operatingProfile))) {
     return jsonError("operatingProfile must be an object", 400);
   }
@@ -103,6 +107,26 @@ export async function PATCH(
       capCents: record.capCents,
       window: record.window,
     });
+  }
+  if ("eaModelConfiguration" in body) {
+    const raw = body.eaModelConfiguration;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return jsonError("eaModelConfiguration must be an object", 400);
+    }
+    const record = raw as Record<string, unknown>;
+    for (const key of ["primaryModel", "fallbackModel"] as const) {
+      const value = record[key];
+      if (value !== null && typeof value !== "string") {
+        return jsonError(`eaModelConfiguration.${key} must be a string or null`, 400);
+      }
+      if (typeof value === "string" && value.length > 255) {
+        return jsonError(`eaModelConfiguration.${key} is too long`, 400);
+      }
+    }
+    eaModelConfiguration = {
+      primaryModel: (record.primaryModel as string | null | undefined) ?? null,
+      fallbackModel: (record.fallbackModel as string | null | undefined) ?? null,
+    };
   }
 
   const [existing] = await sql`SELECT id FROM hives WHERE id = ${id}`;
@@ -142,6 +166,9 @@ export async function PATCH(
   if ("operatingProfile" in body) {
     await upsertOperatingProfile(sql, id, body.operatingProfile as Record<string, unknown>);
   }
+  if (eaModelConfiguration) {
+    await updateEaModelConfiguration(sql, id, eaModelConfiguration);
+  }
 
   const [row] = await sql`
     SELECT id, slug, name, type, kind, operating_mode, description, mission, software_stack, workspace_path, is_system_fixture, ai_budget_cap_cents, ai_budget_window, created_at
@@ -149,6 +176,7 @@ export async function PATCH(
   `;
 
   const operatingProfile = await getOperatingProfile(sql, id);
+  const persistedEaModelConfiguration = await getEaModelConfiguration(sql, id);
   return jsonOk({
     id: row.id,
     slug: row.slug,
@@ -166,6 +194,7 @@ export async function PATCH(
       window: normalizeAiBudgetSettings({ capCents: row.ai_budget_cap_cents, window: row.ai_budget_window }).window,
     },
     operatingProfile,
+    eaModelConfiguration: persistedEaModelConfiguration,
     createdAt: row.created_at,
   });
 }

@@ -17,17 +17,25 @@ vi.mock("@/hives/operating-profile", () => ({
   upsertOperatingProfile: vi.fn(),
 }));
 
+vi.mock("@/ea/native/model-selection", () => ({
+  getEaModelConfiguration: vi.fn(),
+  updateEaModelConfiguration: vi.fn(),
+}));
+
 import { GET, PATCH } from "./route";
 import { sql } from "../../_lib/db";
 import { requireApiUser } from "../../_lib/auth";
 import { canAccessHive } from "@/auth/users";
 import { getOperatingProfile, upsertOperatingProfile } from "@/hives/operating-profile";
+import { getEaModelConfiguration, updateEaModelConfiguration } from "@/ea/native/model-selection";
 
 const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
 const mockGetOperatingProfile = getOperatingProfile as unknown as ReturnType<typeof vi.fn>;
 const mockUpsertOperatingProfile = upsertOperatingProfile as unknown as ReturnType<typeof vi.fn>;
+const mockGetEaModelConfiguration = getEaModelConfiguration as unknown as ReturnType<typeof vi.fn>;
+const mockUpdateEaModelConfiguration = updateEaModelConfiguration as unknown as ReturnType<typeof vi.fn>;
 
 function patchRequest(body: Record<string, unknown>) {
   return new Request("http://localhost/api/hives/hive-1", {
@@ -58,6 +66,7 @@ describe("GET /api/hives/[id]", () => {
       kindProfile: {},
       isDerived: true,
     });
+    mockGetEaModelConfiguration.mockResolvedValue({ primaryModel: null, fallbackModel: null });
   });
 
   it("returns hive kind and operating mode on detail responses", async () => {
@@ -131,6 +140,8 @@ describe("PATCH /api/hives/[id]", () => {
     });
     mockGetOperatingProfile.mockResolvedValue(null);
     mockUpsertOperatingProfile.mockResolvedValue(null);
+    mockGetEaModelConfiguration.mockResolvedValue({ primaryModel: null, fallbackModel: null });
+    mockUpdateEaModelConfiguration.mockResolvedValue({ primaryModel: null, fallbackModel: null });
   });
 
   it("rejects unauthenticated callers before DB use", async () => {
@@ -193,5 +204,48 @@ describe("PATCH /api/hives/[id]", () => {
     expect(body.data).toMatchObject({ id: "hive-1", name: "Renamed" });
     expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "hive-1");
     expect(mockSql).toHaveBeenCalledTimes(3);
+  });
+
+  it("persists and returns the shared per-hive EA primary and fallback models", async () => {
+    mockSql
+      .mockResolvedValueOnce([{ id: "hive-1" }])
+      .mockResolvedValueOnce([{
+        id: "hive-1",
+        slug: "valid-hive",
+        name: "Valid Hive",
+        type: "business",
+        kind: "business",
+        operating_mode: "exploring",
+        description: null,
+        mission: null,
+        software_stack: null,
+        workspace_path: "$HOME/hives/valid-hive/projects",
+        is_system_fixture: false,
+        ai_budget_cap_cents: null,
+        ai_budget_window: "all_time",
+        created_at: "2026-04-27T00:00:00.000Z",
+      }]);
+    mockGetEaModelConfiguration.mockResolvedValue({
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
+
+    const res = await PATCH(patchRequest({
+      eaModelConfiguration: {
+        primaryModel: "openai-codex/gpt-5.6-sol",
+        fallbackModel: "openai-codex/gpt-5.5",
+      },
+    }), params);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockUpdateEaModelConfiguration).toHaveBeenCalledWith(mockSql, "hive-1", {
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
+    expect(body.data.eaModelConfiguration).toEqual({
+      primaryModel: "openai-codex/gpt-5.6-sol",
+      fallbackModel: "openai-codex/gpt-5.5",
+    });
   });
 });
