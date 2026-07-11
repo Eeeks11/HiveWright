@@ -23,6 +23,7 @@ import {
   claimSprintWakeUp,
   revertSprintWakeUp,
   findOrphanedWakeUps,
+  recoverStaleZeroProgressGoals,
   withGoalSupervisorWakeLock,
 } from "./goal-lifecycle";
 import {
@@ -2029,6 +2030,13 @@ export class Dispatcher {
   private async runGoalLifecycleCheck() {
     try {
       await this.processPendingDecisionOwnerComments();
+
+      const recoveredZeroProgressGoals = await recoverStaleZeroProgressGoals(this.sql);
+      for (const recovered of recoveredZeroProgressGoals) {
+        console.warn(
+          `[dispatcher] Released stale zero-progress supervisor session for goal ${recovered.goalId}; normal lifecycle discovery will retry it.`,
+        );
+      }
 
       // 1. Check for new goals that need supervisors
       const newGoals = await findNewGoals(this.sql);

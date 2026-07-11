@@ -8,6 +8,8 @@ import {
   findOrphanedWakeUps,
   findSupervisorWakeReconciliationCandidates,
   acquireGoalSupervisorWakeLock,
+  findStaleZeroProgressGoals,
+  recoverStaleZeroProgressGoals,
 } from "@/dispatcher/goal-lifecycle";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -59,6 +61,111 @@ describe("findNewGoals", () => {
 
     const newGoals = await findNewGoals(sql);
     expect(newGoals.some((g) => g.title === "glc-test-achieved")).toBe(false);
+  });
+});
+
+describe("stale zero-progress goal reconciliation", () => {
+  it("detects stale active session-backed goals with no durable progress", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+      VALUES (${bizId}, 'glc-stale-zero-progress', 'active', 'stale-session', NOW() - INTERVAL '15 minutes')
+      RETURNING id
+    `;
+
+    const candidates = await findStaleZeroProgressGoals(sql, 10);
+    expect(candidates.map((candidate) => candidate.goalId)).toContain(goal.id);
+  });
+
+  it("excludes fresh and terminal session-backed goals from detection and recovery", async () => {
+    const [fresh] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+      VALUES (${bizId}, 'glc-fresh-zero-progress', 'active', 'fresh-session', NOW()) RETURNING id
+    `;
+    const [terminal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+      VALUES (${bizId}, 'glc-terminal-zero-progress', 'achieved', 'terminal-session', NOW() - INTERVAL '15 minutes') RETURNING id
+    `;
+    const candidates = await findStaleZeroProgressGoals(sql, 10);
+    const ids = candidates.map((candidate) => candidate.goalId);
+    expect(ids).not.toContain(fresh.id);
+    expect(ids).not.toContain(terminal.id);
+    const recovered = await recoverStaleZeroProgressGoals(sql, 10);
+    const recoveredIds = recovered.map((candidate) => candidate.goalId);
+    expect(recoveredIds).not.toContain(fresh.id);
+    expect(recoveredIds).not.toContain(terminal.id);
+    const rows = await sql`SELECT id, session_id FROM goals WHERE id IN (${fresh.id}, ${terminal.id})`;
+    expect(rows.every((row) => row.session_id !== null)).toBe(true);
+  });
+
+  it.each(["task", "document", "comment", "decision"] as const)(
+    "excludes a stale session-backed goal with durable %s progress",
+    async (kind) => {
+      const [goal] = await sql`
+        INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+        VALUES (${bizId}, ${`glc-progressed-${kind}`}, 'active', 'progress-session', NOW() - INTERVAL '15 minutes')
+        RETURNING id
+      `;
+      if (kind === "task") {
+        await sql`INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, goal_id)
+          VALUES (${bizId}, 'glc-test-role', 'goal-supervisor', 'progress', 'progress', ${goal.id})`;
+      } else if (kind === "document") {
+        await sql`INSERT INTO goal_documents (goal_id, document_type, title, body, created_by)
+          VALUES (${goal.id}, 'plan', 'plan', 'body', 'goal-supervisor')`;
+      } else if (kind === "comment") {
+        await sql`INSERT INTO goal_comments (goal_id, body, created_by)
+          VALUES (${goal.id}, 'progress', 'goal-supervisor')`;
+      } else {
+        await sql`INSERT INTO decisions (hive_id, goal_id, title, context)
+          VALUES (${bizId}, ${goal.id}, 'choice', 'context')`;
+      }
+
+      const candidates = await findStaleZeroProgressGoals(sql, 10);
+      expect(candidates.map((candidate) => candidate.goalId)).not.toContain(goal.id);
+      const recovered = await recoverStaleZeroProgressGoals(sql, 10);
+      expect(recovered.map((candidate) => candidate.goalId)).not.toContain(goal.id);
+      const [row] = await sql`SELECT session_id FROM goals WHERE id = ${goal.id}`;
+      expect(row.session_id).toBe("progress-session");
+    },
+  );
+
+  it("excludes a stale goal while its supervisor start lock is held", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+      VALUES (${bizId}, 'glc-inflight-zero-progress', 'active', 'inflight-session', NOW() - INTERVAL '15 minutes')
+      RETURNING id
+    `;
+    const release = await acquireGoalSupervisorWakeLock(sql, goal.id);
+    expect(release).not.toBeNull();
+
+    try {
+      const candidates = await findStaleZeroProgressGoals(sql, 10);
+      expect(candidates.map((candidate) => candidate.goalId)).not.toContain(goal.id);
+      const recovered = await recoverStaleZeroProgressGoals(sql, 10);
+      expect(recovered.map((candidate) => candidate.goalId)).not.toContain(goal.id);
+      const [row] = await sql`SELECT session_id FROM goals WHERE id = ${goal.id}`;
+      expect(row.session_id).toBe("inflight-session");
+    } finally {
+      await release!();
+    }
+  });
+
+  it("recovers a stale zero-progress goal once under concurrent reconciliation", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id, updated_at)
+      VALUES (${bizId}, 'glc-recover-zero-progress', 'active', 'stale-session', NOW() - INTERVAL '15 minutes')
+      RETURNING id
+    `;
+
+    const [first, second] = await Promise.all([
+      recoverStaleZeroProgressGoals(sql, 10),
+      recoverStaleZeroProgressGoals(sql, 10),
+    ]);
+
+    expect([...first, ...second].filter((candidate) => candidate.goalId === goal.id)).toHaveLength(1);
+    const [row] = await sql`SELECT session_id FROM goals WHERE id = ${goal.id}`;
+    expect(row.session_id).toBeNull();
+    const newGoals = await findNewGoals(sql);
+    expect(newGoals.map((candidate) => candidate.id)).toContain(goal.id);
   });
 });
 

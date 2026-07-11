@@ -7,6 +7,12 @@ import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { resolveGoalSupervisorRuntime } from "./supervisor-routing";
 import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
+import {
+  captureGoalProgress,
+  claimGoalSupervisorStart,
+  finalizeGoalSupervisorStart,
+  releaseGoalSupervisorStart,
+} from "./supervisor-start-guard";
 
 const OPENCLAW_BIN = ["/home/hivewright/.npm-global/bin/openclaw", "/usr/local/bin/openclaw", "openclaw"]
   .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
@@ -163,13 +169,15 @@ ${initialPrompt}
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), agentsMd, "utf-8");
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
+  const claimed = await claimGoalSupervisorStart(sql, goalId, supervisorSession);
+  if (!claimed) return { agentId };
+  const progressBaseline = await captureGoalProgress(sql, goalId);
+
   const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel, supervisorSession);
   if (!ensured.ok) {
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: ensured.error || "Failed to provision supervisor agent" };
   }
-
-  // Mark as started immediately — prevents re-triggering on the next lifecycle check
-  await sql`UPDATE goals SET session_id = ${supervisorSession} WHERE id = ${goalId}`;
 
   // Run the supervisor synchronously — blocks until complete or timeout
   const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt, supervisorSession);
@@ -178,8 +186,19 @@ ${initialPrompt}
     console.warn(`[supervisor] openclaw agent run failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr}`);
     // Clear session_id so the next lifecycle check can retry — leaving it set
     // would permanently block the goal since findNewGoals filters on session_id IS NULL.
-    await sql`UPDATE goals SET session_id = NULL WHERE id = ${goalId}`;
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: `Supervisor run failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 300)}` };
+  }
+
+  const progress = await finalizeGoalSupervisorStart(
+    sql,
+    goalId,
+    supervisorSession,
+    progressBaseline,
+  );
+  if (!progress.progressed) {
+    console.warn(`[supervisor] openclaw agent exited successfully without durable progress for goal ${goalId}`);
+    return { agentId, error: "Supervisor exited successfully without durable goal progress; start released for retry" };
   }
 
   console.log(`[supervisor] Supervisor run complete for goal ${goalId}. Output: ${runResult.stdout.slice(0, 300)}`);
