@@ -53,6 +53,8 @@ import {
 import type { EaMessage } from "@/ea/native/thread-store";
 
 const HIVE_ID = "99999999-9999-4999-8999-999999999999";
+const COLLIDING_HIVE_ID_ONE = "9fec36b0-c867-4804-815e-81970934980c";
+const COLLIDING_HIVE_ID_TWO = "38a4cfb7-d7c2-4d79-947b-01137897c369";
 
 type QuerySql = Sql | TransactionSql;
 
@@ -379,6 +381,64 @@ describe("dashboardEaClient.submit", () => {
     } finally {
       releaseFirstActiveTurnCheck.resolve();
       if (firstRequest) await Promise.allSettled([firstRequest]);
+    }
+  });
+
+  it("does not falsely conflict across hives whose legacy 32-bit hashes collide", async () => {
+    await sql`
+      INSERT INTO hives (id, slug, name, type)
+      VALUES
+        (${COLLIDING_HIVE_ID_ONE}, 'dashboard-hash-collision-one', 'Collision Hive One', 'digital'),
+        (${COLLIDING_HIVE_ID_TWO}, 'dashboard-hash-collision-two', 'Collision Hive Two', 'digital')
+    `;
+    const firstLockKey = `dashboard-ea-turn:${COLLIDING_HIVE_ID_ONE}:dashboard:${COLLIDING_HIVE_ID_ONE}`;
+    const secondLockKey = `dashboard-ea-turn:${COLLIDING_HIVE_ID_TWO}:dashboard:${COLLIDING_HIVE_ID_TWO}`;
+    const [hashes] = await sql<{
+      legacyFirst: number;
+      legacySecond: number;
+      extendedKeysDiffer: boolean;
+    }[]>`
+      SELECT
+        hashtext(${firstLockKey}) AS "legacyFirst",
+        hashtext(${secondLockKey}) AS "legacySecond",
+        hashtextextended(${firstLockKey}, 0) <> hashtextextended(${secondLockKey}, 0)
+          AS "extendedKeysDiffer"
+    `;
+    expect(hashes).toEqual({
+      legacyFirst: 1789377752,
+      legacySecond: 1789377752,
+      extendedKeysDiffer: true,
+    });
+
+    const firstLocksAcquired = deferred();
+    const releaseFirstLocks = deferred();
+    const heldLocks = sql.begin(async (tx) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${firstLockKey}))`;
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${firstLockKey}, 0))`;
+      firstLocksAcquired.resolve();
+      await releaseFirstLocks.promise;
+    });
+
+    try {
+      await firstLocksAcquired.promise;
+
+      await sendDashboardMessage(sql, {
+        hiveId: COLLIDING_HIVE_ID_TWO,
+        userId: "owner-two",
+        content: "second colliding-hash hive request",
+      });
+
+      const messages = await sql<{ roles: string[] }[]>`
+        SELECT array_agg(message.role ORDER BY message.role) AS roles
+        FROM ea_messages AS message
+        JOIN ea_threads AS thread ON thread.id = message.thread_id
+        WHERE thread.hive_id = ${COLLIDING_HIVE_ID_TWO}
+      `;
+      expect(messages).toEqual([{ roles: ["assistant", "owner"] }]);
+      expect(mocks.runEaStream).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseFirstLocks.resolve();
+      await heldLocks;
     }
   });
 

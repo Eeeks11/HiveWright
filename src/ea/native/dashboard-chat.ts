@@ -267,7 +267,7 @@ async function claimDashboardTurn(
 
   return sql.begin(async (tx) => {
     const [lock] = await tx<{ acquired: boolean }[]>`
-      SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired
+      SELECT pg_try_advisory_xact_lock(hashtextextended(${lockKey}, 0)) AS acquired
     `;
     if (!lock?.acquired) {
       const [running] = await tx<{ threadId: string; assistantMessageId: string }[]>`
