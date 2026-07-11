@@ -607,6 +607,7 @@ function DecisionsPageContent() {
 
           <DecisionActivity
             decisionId={decision.id}
+            selectedHiveId={effectiveHiveId}
             defaultOpen={decision.status === "pending"}
             refreshToken={activityRefresh}
           />
@@ -799,10 +800,12 @@ export default function DecisionsPage() {
 
 function DecisionActivity({
   decisionId,
+  selectedHiveId,
   defaultOpen,
   refreshToken,
 }: {
   decisionId: string;
+  selectedHiveId: string;
   defaultOpen: boolean;
   refreshToken: number;
 }) {
@@ -811,7 +814,7 @@ function DecisionActivity({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/decisions/${decisionId}/activity`)
+    fetch(`/api/decisions/${decisionId}/activity?hiveId=${encodeURIComponent(selectedHiveId)}`)
       .then((res) => (res.ok ? res.json() : { data: [] }))
       .then((body) => {
         if (!cancelled) setEntries(Array.isArray(body.data) ? body.data : []);
@@ -825,7 +828,7 @@ function DecisionActivity({
     return () => {
       cancelled = true;
     };
-  }, [decisionId, refreshToken]);
+  }, [decisionId, selectedHiveId, refreshToken]);
 
   return (
     <details
