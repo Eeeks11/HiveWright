@@ -1,5 +1,9 @@
 import type { Sql } from "postgres";
 import { createOrUpdateSkillCandidateFromSignal } from "@/skills/self-creation";
+import {
+  evaluateDeploymentSensitiveCompletionEvidence,
+  formatDeploymentProofFailure,
+} from "@/software-pipeline/deployment-sensitive-proof";
 import { inheritTaskWorkspaceFromParent } from "./worktree-manager";
 import { markCapsuleCompleted, markCapsuleQaFailed } from "./execution-capsules";
 import { findExistingQaReplanTask } from "./recovery-loop-guard";
@@ -285,6 +289,7 @@ export async function routeToQa(
     "",
     "### Your Job",
     "Review the deliverable against the acceptance criteria.",
+    "If the task claims deployment/live/operational completion, distinguish task-worktree proof from same-build live proof and fail unless the evidence names the expected work commit plus the live operational build hash containing that commit.",
     "Your first non-empty line must be exactly `pass` or `fail`.",
     "After that line, include only concise, evidence-based issues or confirmation.",
   ].join("\n");
@@ -391,6 +396,57 @@ export async function processQaResult(
   result: QaResult,
 ): Promise<void> {
   if (result.passed) {
+    const [task] = await sql<{
+      id: string;
+      hive_id: string;
+      goal_id: string | null;
+      title: string;
+      result_summary: string | null;
+      brief: string | null;
+      acceptance_criteria: string | null;
+      project_git_repo: boolean | null;
+    }[]>`
+      SELECT t.id,
+             t.hive_id,
+             t.goal_id,
+             t.title,
+             t.result_summary,
+             t.brief,
+             t.acceptance_criteria,
+             COALESCE(p.git_repo, false) AS project_git_repo
+      FROM tasks t
+      LEFT JOIN projects p ON p.id = t.project_id
+      WHERE t.id = ${taskId}
+    `;
+    const [workProduct] = await sql<{ summary: string | null; content: string | null }[]>`
+      SELECT summary, content
+      FROM work_products
+      WHERE task_id = ${taskId}
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const resultSummary = task?.result_summary ?? workProduct?.summary ?? workProduct?.content ?? task?.brief ?? "QA passed.";
+    const deploymentProof = evaluateDeploymentSensitiveCompletionEvidence({
+      projectGitRepo: task?.project_git_repo === true,
+      taskTitle: task?.title,
+      taskBrief: task?.brief,
+      acceptanceCriteria: task?.acceptance_criteria,
+      resultSummary,
+      qaFeedback: result.feedback,
+      workProductSummary: workProduct?.summary,
+      workProductContent: workProduct?.content,
+    });
+    if (!deploymentProof.ok) {
+      await sql`
+        UPDATE tasks
+        SET status = 'blocked',
+            failure_reason = ${formatDeploymentProofFailure(deploymentProof.failures)},
+            updated_at = NOW()
+        WHERE id = ${taskId}
+      `;
+      return;
+    }
+
     await sql`
       UPDATE tasks
       SET status = 'completed',
@@ -401,24 +457,6 @@ export async function processQaResult(
     `;
     await markCapsuleCompleted(sql, taskId);
 
-    const [task] = await sql<{
-      id: string;
-      hive_id: string;
-      goal_id: string | null;
-      title: string;
-      result_summary: string | null;
-      brief: string | null;
-    }[]>`
-      SELECT id, hive_id, goal_id, title, result_summary, brief FROM tasks WHERE id = ${taskId}
-    `;
-    const [workProduct] = await sql<{ summary: string | null; content: string | null }[]>`
-      SELECT summary, content
-      FROM work_products
-      WHERE task_id = ${taskId}
-      ORDER BY created_at DESC
-      LIMIT 1
-    `;
-    const resultSummary = task?.result_summary ?? workProduct?.summary ?? workProduct?.content ?? task?.brief ?? "QA passed.";
     if (task) {
       await ensureOwnerHandoffDecision(sql, {
         hiveId: task.hive_id,

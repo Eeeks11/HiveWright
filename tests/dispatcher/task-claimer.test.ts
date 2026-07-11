@@ -366,6 +366,46 @@ describe("completeTask", () => {
       expect(updated.terminal_disposition).toBeNull();
     }
   });
+
+  it("blocks deployment-sensitive direct completion when live runtime hash lacks the expected commit", async () => {
+    const previousHash = process.env.HIVEWRIGHT_BUILD_HASH;
+    process.env.HIVEWRIGHT_BUILD_HASH = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    try {
+      const [project] = await sql<{ id: string }[]>`
+        INSERT INTO projects (hive_id, slug, name, git_repo)
+        VALUES (${bizId}, 'claimer-deploy-sensitive', 'Claimer Deploy Sensitive', true)
+        RETURNING id
+      `;
+      const [inserted] = await sql`
+        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, project_id)
+        VALUES (
+          ${bizId},
+          'claimer-test-role',
+          'owner',
+          'Deploy dashboard fix',
+          'Deploy the fix to the live operational checkout and prove the same build is running.',
+          'active',
+          ${project.id}
+        )
+        RETURNING *
+      `;
+
+      await completeTask(sql, inserted.id, "Expected commit 36cb96c passed focused tests in task worktree.");
+
+      const [updated] = await sql`
+        SELECT status, result_summary, failure_reason, completed_at
+        FROM tasks WHERE id = ${inserted.id}
+      `;
+      expect(updated.status).toBe("blocked");
+      expect(updated.result_summary).toBeNull();
+      expect(updated.completed_at).toBeNull();
+      expect(updated.failure_reason).toContain("Deployment-sensitive completion blocked");
+      expect(updated.failure_reason).toContain("Current runtime build hash");
+    } finally {
+      if (previousHash === undefined) delete process.env.HIVEWRIGHT_BUILD_HASH;
+      else process.env.HIVEWRIGHT_BUILD_HASH = previousHash;
+    }
+  });
 });
 
 async function seedTwoStepPipelineForClaimedTask() {
