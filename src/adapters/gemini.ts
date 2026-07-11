@@ -1,12 +1,12 @@
 import { spawn } from "child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "fs/promises";
-import os from "os";
 import path from "path";
 import type { Adapter, AdapterProbeCredential, AdapterResult, ChunkCallback, ProbeResult, SessionContext } from "./types";
 import { resolveMcps, buildGeminiMcpSettings } from "../tools/mcp-catalog";
 import { healthyProbeResult, probeResultFromBoundaryError } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
 import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
+import { buildAgentEnvironment } from "../security/agent-environment";
 
 interface GeminiStreamResult {
   isError: boolean;
@@ -85,11 +85,12 @@ export class GeminiAdapter implements Adapter {
   async probe(modelId: string, credential: AdapterProbeCredential): Promise<ProbeResult> {
     const startedAt = Date.now();
     const modelName = normalizeGeminiModelId(modelId);
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      ...credential.secrets,
-      GEMINI_CLI_TRUST_WORKSPACE: "true",
-    };
+    const env = buildAgentEnvironment({
+      scope: { kind: "probe", adapter: "gemini", model: modelName },
+      credentials: credential.secrets,
+      adapterEnv: { GEMINI_CLI_TRUST_WORKSPACE: "true" },
+      nativeProviderState: [".gemini"],
+    });
 
     return new Promise((resolve) => {
       const proc = spawn("gemini", [
@@ -100,7 +101,7 @@ export class GeminiAdapter implements Adapter {
         "--skip-trust",
       ], {
         cwd: process.cwd(),
-        env: env as NodeJS.ProcessEnv,
+        env,
         stdio: ["pipe", "pipe", "pipe"],
       });
 
@@ -178,25 +179,24 @@ export class GeminiAdapter implements Adapter {
   async execute(ctx: SessionContext, onChunk?: ChunkCallback): Promise<AdapterResult> {
     const prompt = this.translate(ctx);
     const args = this.buildCommand(ctx);
-    const mcpHome = await prepareGeminiHome(ctx);
-
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    const env: Record<string, string | undefined> = {
-      ...baseEnv,
-      ...ctx.credentials,
-      GEMINI_CLI_TRUST_WORKSPACE: "true",
-    };
+    const workspace = ctx.projectWorkspace;
+    const env = buildAgentEnvironment({
+      scope: { kind: "task", adapter: "gemini", taskId: ctx.task.id, hiveId: ctx.task.hiveId },
+      credentials: ctx.credentials,
+      adapterEnv: { GEMINI_CLI_TRUST_WORKSPACE: "true" },
+      nativeProviderState: [".gemini"],
+    });
+    const mcpHome = await prepareGeminiHome(ctx, env);
     if (mcpHome.geminiCliHome) {
       env.GEMINI_CLI_HOME = mcpHome.geminiCliHome;
     }
 
-    const workspace = ctx.projectWorkspace;
     if (workspace) assertNotForbiddenHiveWrightWorkspace(workspace);
 
     return new Promise((resolve) => {
       const proc = spawn("gemini", args, {
         cwd: workspace || process.cwd(),
-        env: env as NodeJS.ProcessEnv,
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 14_400_000,
       });
@@ -311,14 +311,17 @@ function chooseGeminiStatsModel(models: Record<string, { input_tokens?: number; 
   return name ? `google/${normalizeGeminiModelId(name)}` : undefined;
 }
 
-async function prepareGeminiHome(ctx: SessionContext): Promise<{ geminiCliHome?: string; cleanup: () => Promise<void> }> {
+async function prepareGeminiHome(
+  ctx: SessionContext,
+  runtimeEnv: NodeJS.ProcessEnv,
+): Promise<{ geminiCliHome?: string; cleanup: () => Promise<void> }> {
   const entries = resolveMcps(ctx.toolsConfig?.mcps);
   if (!ctx.toolsConfig || (ctx.toolsConfig.mcps === undefined && entries.length === 0)) {
     return { cleanup: async () => {} };
   }
 
   const settings = buildGeminiMcpSettings(entries);
-  const stableHome = ctx.credentials.GEMINI_CLI_HOME || process.env.GEMINI_CLI_HOME;
+  const stableHome = ctx.credentials.GEMINI_CLI_HOME;
   if (stableHome) {
     const settingsPath = path.join(stableHome, ".gemini", "settings.json");
     let previous: string | null = null;
@@ -341,7 +344,7 @@ async function prepareGeminiHome(ctx: SessionContext): Promise<{ geminiCliHome?:
     };
   }
 
-  const tmpHome = await mkdtemp(path.join(os.tmpdir(), "hivewright-gemini-"));
+  const tmpHome = await mkdtemp(path.join(runtimeEnv.TMPDIR!, "gemini-home-"));
   const settingsPath = path.join(tmpHome, ".gemini", "settings.json");
   await mkdir(path.dirname(settingsPath), { recursive: true });
   await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf-8");

@@ -6,30 +6,18 @@ import type { Adapter, AdapterProbeCredential, AdapterResult, ChunkCallback, Pro
 import { extractCleanResult } from "./openclaw-result-parser";
 import { unhealthyProbeResult } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
+import { buildAgentEnvironment } from "../security/agent-environment";
 
 const OPENCLAW_BIN = ["/home/hivewright/.npm-global/bin/openclaw", "/usr/local/bin/openclaw", "openclaw"]
   .find(p => { try { fs.accessSync(p); return true; } catch { return false; } }) || "openclaw";
 
-// Strip LLM-provider env keys before forwarding env to openclaw subprocesses.
-// openclaw spawns claude/codex/etc CLIs that prefer env-var auth over their
-// native OAuth. The owner's secrets file historically held an invalid
-// ANTHROPIC_API_KEY that was 401-ing every dev-agent before the claude-code
-// adapter started stripping it, and the same shape of bug applies to codex
-// (OPENAI_API_KEY would override the now-active ChatGPT OAuth in ~/.codex/auth.json).
-// Keep GITHUB_TOKEN — the github MCP server in openclaw.json explicitly requires it.
-function buildOpenclawEnv(): NodeJS.ProcessEnv {
-  const env: Record<string, string | undefined> = { ...process.env };
-  delete env.ANTHROPIC_API_KEY;
-  delete env.ANTHROPIC_AUTH_TOKEN;
-  delete env.CLAUDE_CODE_OAUTH_TOKEN;
-  delete env.ANTHROPIC_BASE_URL;
-  delete env.OPENAI_API_KEY;
-  delete env.OPENAI_BASE_URL;
-  env.PATH = `/home/hivewright/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ""}`;
-  return env as NodeJS.ProcessEnv;
+function buildOpenclawEnvironment(ctx: SessionContext): NodeJS.ProcessEnv {
+  return buildAgentEnvironment({
+    scope: { kind: "task", adapter: "openclaw", taskId: ctx.task.id, hiveId: ctx.task.hiveId },
+    credentials: ctx.credentials,
+    nativeProviderState: [".openclaw", ".codex", ".claude", ".claude.json", ".gemini"],
+  });
 }
-
-const OPENCLAW_ENV = buildOpenclawEnv();
 
 export interface OpenClawFiles {
   agentsMd: string;
@@ -129,7 +117,7 @@ export class OpenClawAdapter implements Adapter {
       const result = await new Promise<AdapterResult>((resolve) => {
         const proc = spawn(OPENCLAW_BIN, args, {
           cwd: workspace,
-          env: { ...OPENCLAW_ENV, ...ctx.credentials },
+          env: buildOpenclawEnvironment(ctx),
           stdio: ["pipe", "pipe", "pipe"],
           timeout: 600_000,
         });
@@ -227,7 +215,7 @@ export class OpenClawAdapter implements Adapter {
     // Start a persistent session via openclaw
     const proc = spawn(OPENCLAW_BIN, ["session", "start", "--model", modelName], {
       cwd: workspace,
-      env: { ...OPENCLAW_ENV, ...ctx.credentials },
+      env: buildOpenclawEnvironment(ctx),
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -251,7 +239,7 @@ export class OpenClawAdapter implements Adapter {
     return new Promise((resolve) => {
       const proc = spawn(OPENCLAW_BIN, ["session", "send", "--id", sessionId], {
         cwd: workspace,
-        env: { ...OPENCLAW_ENV, ...ctx.credentials },
+        env: buildOpenclawEnvironment(ctx),
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 600_000,
       });
@@ -323,7 +311,10 @@ export class OpenClawAdapter implements Adapter {
   async terminateSession(sessionId: string): Promise<void> {
     return new Promise((resolve) => {
       const proc = spawn(OPENCLAW_BIN, ["session", "end", "--id", sessionId], {
-        env: OPENCLAW_ENV,
+        env: buildAgentEnvironment({
+          scope: { kind: "probe", adapter: "openclaw-session", model: sessionId },
+          nativeProviderState: [".openclaw"],
+        }),
         stdio: ["pipe", "pipe", "pipe"],
       });
       proc.on("close", () => resolve());

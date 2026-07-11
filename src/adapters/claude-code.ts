@@ -5,6 +5,7 @@ import { resolveMcps, buildClaudeMcpConfig } from "../tools/mcp-catalog";
 import { healthyProbeResult, probeResultFromBoundaryError } from "./probe-classifier";
 import { renderSessionPrompt } from "./context-renderer";
 import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
+import { buildAgentEnvironment } from "../security/agent-environment";
 
 export function resolveClaudeCodeWorkspace(ctx: SessionContext): string | null {
   if (ctx.worktreeContext?.isolationStatus === "active" && ctx.worktreeContext.effectiveWorkspace) {
@@ -26,16 +27,14 @@ export class ClaudeCodeAdapter implements Adapter {
     const modelName = modelId.includes("/") ? modelId.split("/").at(-1)! : modelId;
     const args = ["--print", "--model", modelName];
 
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    delete baseEnv.ANTHROPIC_API_KEY;
-    delete baseEnv.ANTHROPIC_AUTH_TOKEN;
-    delete baseEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    delete baseEnv.ANTHROPIC_BASE_URL;
-
     return new Promise((resolve) => {
       const proc = spawn("claude", args, {
         cwd: process.cwd(),
-        env: { ...baseEnv, ...credential.secrets } as NodeJS.ProcessEnv,
+        env: buildAgentEnvironment({
+          scope: { kind: "probe", adapter: "claude-code", model: modelName },
+          credentials: credential.secrets,
+          nativeProviderState: [".claude", ".claude.json"],
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         timeout: 60_000,
       });
@@ -131,21 +130,14 @@ export class ClaudeCodeAdapter implements Adapter {
     const workspace = resolveClaudeCodeWorkspace(ctx);
     if (workspace) assertNotForbiddenHiveWrightWorkspace(workspace);
 
-    // Strip claude-code's auth env vars so the spawned `claude` CLI falls back
-    // to its native OAuth (Pro/Max subscription) instead of trying to use a
-    // (likely expired or wrong-account) ANTHROPIC_API_KEY inherited from the
-    // dispatcher's secrets file. If a per-role credential explicitly provides
-    // ANTHROPIC_API_KEY, that override still wins via the spread below.
-    const baseEnv: Record<string, string | undefined> = { ...process.env };
-    delete baseEnv.ANTHROPIC_API_KEY;
-    delete baseEnv.ANTHROPIC_AUTH_TOKEN;
-    delete baseEnv.CLAUDE_CODE_OAUTH_TOKEN;
-    delete baseEnv.ANTHROPIC_BASE_URL;
-
     return new Promise((resolve) => {
       const proc = spawn("claude", args, {
         cwd: workspace || process.cwd(),
-        env: { ...baseEnv, ...ctx.credentials } as NodeJS.ProcessEnv,
+        env: buildAgentEnvironment({
+          scope: { kind: "task", adapter: "claude-code", taskId: ctx.task.id, hiveId: ctx.task.hiveId },
+          credentials: ctx.credentials,
+          nativeProviderState: [".claude", ".claude.json"],
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         // 4-hour wall-clock cap — enables real multi-hour autonomy
         // (Opus 4.7 + Claude Code is benchmarked at ~7-hour runs).

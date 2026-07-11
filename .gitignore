@@ -86,6 +86,7 @@
 /.claude/
 /.codex/
 /.openclaw/
+/.hivewright-agent-runtime/
 
 # debug
 npm-debug.log*
