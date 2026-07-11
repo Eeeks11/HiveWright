@@ -25,6 +25,7 @@ export interface ValidatedHttpRequestOptions {
   method: string;
   headers?: Record<string, string>;
   body?: string | Uint8Array;
+  maxResponseBytes?: number;
   signal?: AbortSignal;
 }
 
@@ -37,10 +38,21 @@ type ValidatedHttpDispatch = (
   destination: HttpWebhookDestination,
   address: string,
   options: ValidatedHttpRequestOptions,
+  label: string,
 ) => Promise<ValidatedHttpDispatchResult>;
+
+class HttpWebhookResponseTooLargeError extends Error {
+  constructor(label: string, maxResponseBytes: number) {
+    super(`${label} response exceeded ${maxResponseBytes} bytes`);
+    this.name = "HttpWebhookResponseTooLargeError";
+  }
+}
+
+type PublicAddressPredicate = (address: string) => boolean;
 
 let dnsLookup: DnsLookup = dns.lookup as DnsLookup;
 let httpDispatch: ValidatedHttpDispatch = dispatchValidatedHttpRequest;
+let publicAddressPredicate: PublicAddressPredicate = isPublicIpAddress;
 
 export function setHttpWebhookDnsLookupForTests(lookupForTests: DnsLookup | null): void {
   dnsLookup = lookupForTests ?? (dns.lookup as DnsLookup);
@@ -48,6 +60,12 @@ export function setHttpWebhookDnsLookupForTests(lookupForTests: DnsLookup | null
 
 export function setHttpWebhookDispatchForTests(dispatchForTests: ValidatedHttpDispatch | null): void {
   httpDispatch = dispatchForTests ?? dispatchValidatedHttpRequest;
+}
+
+export function setHttpWebhookPublicAddressPredicateForTests(
+  predicateForTests: PublicAddressPredicate | null,
+): void {
+  publicAddressPredicate = predicateForTests ?? isPublicIpAddress;
 }
 
 export function parseAllowedHostnames(value: unknown): string[] {
@@ -105,7 +123,7 @@ export async function validateHttpWebhookDestination(
   }
 
   const addresses = answers.map((answer) => normalizeIpAddress(answer.address));
-  const unsafeAddress = addresses.find((address) => !isPublicIpAddress(address));
+  const unsafeAddress = addresses.find((address) => !publicAddressPredicate(address));
   if (unsafeAddress) {
     throw new HttpWebhookBlockedError(
       `${label} destination resolved to unsafe address ${unsafeAddress}`,
@@ -124,9 +142,9 @@ export async function fetchValidatedHttpWebhookDestination(
 
   for (const address of destination.addresses) {
     try {
-      const result = await httpDispatch(destination, address, options);
+      const result = await httpDispatch(destination, address, options, label);
       const remoteAddress = result.remoteAddress ? normalizeIpAddress(result.remoteAddress) : null;
-      if (!remoteAddress || !destination.addresses.includes(remoteAddress) || !isPublicIpAddress(remoteAddress)) {
+      if (!remoteAddress || !destination.addresses.includes(remoteAddress) || !publicAddressPredicate(remoteAddress)) {
         throw new HttpWebhookBlockedError(
           `${label} connected to unvalidated address ${remoteAddress ?? "unknown"}`,
         );
@@ -135,6 +153,7 @@ export async function fetchValidatedHttpWebhookDestination(
     } catch (error) {
       lastError = error as Error;
       if (error instanceof HttpWebhookBlockedError) throw error;
+      if (error instanceof HttpWebhookResponseTooLargeError) throw error;
     }
   }
 
@@ -147,6 +166,7 @@ function dispatchValidatedHttpRequest(
   destination: HttpWebhookDestination,
   address: string,
   options: ValidatedHttpRequestOptions,
+  label: string,
 ): Promise<ValidatedHttpDispatchResult> {
   return new Promise((resolve, reject) => {
     const transport = destination.url.protocol === "https:" ? https : http;
@@ -171,7 +191,20 @@ function dispatchValidatedHttpRequest(
       },
     }, (res) => {
       const chunks: Buffer[] = [];
-      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      let bytesRead = 0;
+      res.on("data", (chunk: Buffer) => {
+        bytesRead += chunk.byteLength;
+        if (options.maxResponseBytes !== undefined && bytesRead > options.maxResponseBytes) {
+          if (settled) return;
+          settled = true;
+          const error = new HttpWebhookResponseTooLargeError(label, options.maxResponseBytes);
+          res.destroy(error);
+          request.destroy(error);
+          reject(error);
+          return;
+        }
+        chunks.push(chunk);
+      });
       res.on("end", () => {
         if (settled) return;
         settled = true;
@@ -192,12 +225,17 @@ function dispatchValidatedHttpRequest(
           remoteAddress,
         });
       });
+      res.on("error", (error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      });
     });
 
     request.on("socket", (socket) => {
       const recordRemoteAddress = () => {
         remoteAddress = normalizeIpAddress(socket.remoteAddress ?? "");
-        if (!destination.addresses.includes(remoteAddress) || !isPublicIpAddress(remoteAddress)) {
+        if (!destination.addresses.includes(remoteAddress) || !publicAddressPredicate(remoteAddress)) {
           request.destroy(new HttpWebhookBlockedError(
             `http-webhook connected to unvalidated address ${remoteAddress || "unknown"}`,
           ));

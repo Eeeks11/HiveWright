@@ -1,8 +1,11 @@
+import * as http from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getConnectorDefinition } from "@/connectors/registry";
 import {
   setHttpWebhookDispatchForTests,
   setHttpWebhookDnsLookupForTests,
+  setHttpWebhookPublicAddressPredicateForTests,
 } from "@/connectors/http-webhook-safety";
 
 function connectorOperation(connectorSlug: string, operationSlug: string) {
@@ -16,6 +19,7 @@ describe("HTTP connector SSRF safety", () => {
   afterEach(() => {
     setHttpWebhookDnsLookupForTests(null);
     setHttpWebhookDispatchForTests(null);
+    setHttpWebhookPublicAddressPredicateForTests(null);
     vi.restoreAllMocks();
   });
 
@@ -143,5 +147,48 @@ describe("HTTP connector SSRF safety", () => {
       },
       args: {},
     })).rejects.toThrow(/redirects are not allowed/);
+  });
+
+  it("aborts oversized website form responses while the validated transport is still reading chunks", async () => {
+    const chunk = Buffer.alloc(128_000, "x");
+    let chunksWritten = 0;
+    let responseClosed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const interval = setInterval(() => {
+        chunksWritten += 1;
+        res.write(chunk);
+      }, 1);
+      res.on("close", () => {
+        responseClosed = true;
+        clearInterval(interval);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      setHttpWebhookDnsLookupForTests(async () => [{ address: "127.0.0.1", family: 4 }]);
+      setHttpWebhookPublicAddressPredicateForTests((address) => address === "127.0.0.1");
+
+      const operation = connectorOperation("website-forms", "sync_submissions");
+      await expect(operation.handler({
+        config: {
+          submissionsUrl: `http://forms.example.com:${port}/submissions`,
+          allowedHostnames: "forms.example.com",
+        },
+        secrets: {
+          submissionsUrl: `http://forms.example.com:${port}/submissions`,
+          authHeader: "Bearer same-authority-only",
+        },
+        args: {},
+      })).rejects.toThrow(/website-forms response exceeded 1000000 bytes/);
+
+      await vi.waitFor(() => expect(responseClosed).toBe(true));
+      expect(chunksWritten).toBeLessThan(20);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });

@@ -340,6 +340,7 @@ const websiteForms: ConnectorDefinitionDraft = {
           res = await fetchValidatedHttpWebhookDestination(destination, {
             method: "GET",
             headers,
+            maxResponseBytes: WEBSITE_FORMS_MAX_RESPONSE_BYTES,
             signal: controller.signal,
           }, "website-forms");
         } finally {
