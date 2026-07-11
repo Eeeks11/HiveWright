@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Sql, TransactionSql } from "postgres";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 vi.mock("@/app/api/_lib/db", () => ({ sql }));
@@ -43,10 +44,49 @@ vi.mock("@/quality/ea-post-turn", () => ({
   scheduleImplicitQualityExtraction: mocks.scheduleImplicitQualityExtraction,
 }));
 
-import { dashboardEaClient } from "@/ea/native/dashboard-chat";
+import {
+  DashboardEaTurnInProgressError,
+  dashboardEaClient,
+  sendDashboardMessage,
+} from "@/ea/native/dashboard-chat";
 import type { EaMessage } from "@/ea/native/thread-store";
 
 const HIVE_ID = "99999999-9999-4999-8999-999999999999";
+
+type QuerySql = Sql | TransactionSql;
+
+function interceptQueries(
+  base: QuerySql,
+  beforeQuery: (query: string) => Promise<void>,
+  onTransaction?: (tx: TransactionSql) => Promise<void>,
+): Sql {
+  return new Proxy(base as Sql, {
+    apply(target, thisArg, args: [TemplateStringsArray, ...unknown[]]) {
+      const query = args[0].join("?");
+      return beforeQuery(query).then(() => Reflect.apply(target, thisArg, args));
+    },
+    get(target, property, receiver) {
+      if (property === "begin") {
+        return (callback: (tx: TransactionSql) => Promise<unknown>) =>
+          target.begin(async (tx) => {
+            await onTransaction?.(tx);
+            return callback(
+              interceptQueries(tx, beforeQuery) as unknown as TransactionSql,
+            );
+          });
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(async () => {
   await truncateAll(sql);
@@ -240,6 +280,114 @@ describe("dashboardEaClient.submit", () => {
     expect(assistant).toMatchObject({ content: "", status: "streaming", error: null });
 
     for await (const chunk of stream) void chunk;
+  });
+
+  it("allows exactly one of two coordinated connections to claim and start a turn", async () => {
+    const firstReachedActiveTurnCheck = deferred();
+    const releaseFirstActiveTurnCheck = deferred();
+    const backendPids: number[] = [];
+    let delayedFirstCheck = false;
+    const recordBackendPid = async (tx: TransactionSql) => {
+      const [row] = await tx<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+      backendPids.push(row.pid);
+    };
+
+    const firstSql = interceptQueries(sql, async (query) => {
+      if (!delayedFirstCheck && query.includes("FROM ea_messages") && query.includes("status = 'streaming'")) {
+        delayedFirstCheck = true;
+        firstReachedActiveTurnCheck.resolve();
+        await releaseFirstActiveTurnCheck.promise;
+      }
+    }, recordBackendPid);
+    const secondSql = interceptQueries(sql, async () => {}, recordBackendPid);
+    let firstRequest: Promise<unknown> | undefined;
+
+    try {
+      firstRequest = sendDashboardMessage(firstSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-one",
+        content: "first concurrent request",
+      });
+      await firstReachedActiveTurnCheck.promise;
+
+      const secondRequest = sendDashboardMessage(secondSql, {
+        hiveId: HIVE_ID,
+        userId: "owner-two",
+        content: "second concurrent request",
+      });
+      const secondOutcome = await secondRequest.then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      releaseFirstActiveTurnCheck.resolve();
+      await firstRequest;
+
+      expect(secondOutcome).toBeInstanceOf(DashboardEaTurnInProgressError);
+      expect(new Set(backendPids).size).toBe(2);
+      expect(mocks.runEaStream).toHaveBeenCalledTimes(1);
+      const messages = await sql<{ role: string; content: string }[]>`
+        SELECT role, content
+        FROM ea_messages
+        ORDER BY created_at ASC, id ASC
+      `;
+      expect(messages).toEqual([
+        { role: "owner", content: "first concurrent request" },
+        { role: "assistant", content: "Hello, dashboard." },
+      ]);
+    } finally {
+      releaseFirstActiveTurnCheck.resolve();
+      if (firstRequest) await Promise.allSettled([firstRequest]);
+    }
+  });
+
+  it("rolls back a partial claim and permits one clean retry", async () => {
+    await sql.unsafe(`
+      CREATE FUNCTION fail_dashboard_assistant_insert() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.role = 'assistant' AND NEW.source = 'dashboard' THEN
+          RAISE EXCEPTION 'forced assistant insert failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      CREATE TRIGGER fail_dashboard_assistant_insert
+      BEFORE INSERT ON ea_messages
+      FOR EACH ROW EXECUTE FUNCTION fail_dashboard_assistant_insert();
+    `);
+
+    let messageCountAfterFailure = -1;
+    try {
+      await expect(
+        dashboardEaClient.submit("claim that must roll back", { hiveId: HIVE_ID }),
+      ).rejects.toThrow("forced assistant insert failure");
+
+      const [row] = await sql<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM ea_messages
+      `;
+      messageCountAfterFailure = row.count;
+    } finally {
+      await sql.unsafe(`
+        DROP TRIGGER fail_dashboard_assistant_insert ON ea_messages;
+        DROP FUNCTION fail_dashboard_assistant_insert();
+      `);
+    }
+
+    expect(messageCountAfterFailure).toBe(0);
+
+    const retry = await dashboardEaClient.submit("clean retry", { hiveId: HIVE_ID });
+    for await (const chunk of retry) void chunk;
+
+    const rows = await sql<{ role: string; content: string; status: string }[]>`
+      SELECT role, content, status
+      FROM ea_messages
+      ORDER BY created_at ASC, id ASC
+    `;
+    expect(rows).toEqual([
+      { role: "owner", content: "clean retry", status: "sent" },
+      { role: "assistant", content: "Hello, dashboard.", status: "sent" },
+    ]);
   });
 
   it("marks an aborted run failed with a safe error and a fresh updated timestamp", async () => {

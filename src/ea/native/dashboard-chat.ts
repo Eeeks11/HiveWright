@@ -18,6 +18,7 @@ import { type EaAttachment, renderEaAttachmentSection } from "./attachments";
 export type DashboardChatMessage = EaMessage;
 
 const DEFAULT_API_BASE_URL = "http://localhost:3002";
+const DASHBOARD_TURN_LOCK_PREFIX = "dashboard-ea-turn";
 
 export interface DashboardChatState {
   thread: EaThread;
@@ -102,59 +103,14 @@ async function prepareDashboardTurn(
   assistantMessage: EaMessage;
   stream: DashboardEaStream;
 }> {
-  const thread = await getOrCreateActiveThread(
-    sql,
-    input.hiveId,
-    dashboardChannelId(input.hiveId),
-  );
-
-  const [running] = await sql<{ id: string }[]>`
-    SELECT id
-    FROM ea_messages
-    WHERE thread_id = ${thread.id}
-      AND role = 'assistant'
-      AND status = 'streaming'
-    LIMIT 1
-  `;
-  if (running) {
-    throw new DashboardEaTurnInProgressError(thread.id, running.id);
-  }
   const attachments = input.attachments ?? [];
   const attachmentSection = renderEaAttachmentSection(attachments);
   const persistedOwnerContent = attachmentSection
     ? `${input.content}\n${attachmentSection}`
     : input.content;
-
-  const ownerMessage = await appendMessage(
-    sql,
-    thread.id,
-    "owner",
-    persistedOwnerContent,
-    null,
-    "dashboard",
-  );
-  await emitEaChatEvent(sql, {
-    type: "ea_message_created",
+  const { thread, ownerMessage, assistantMessage } = await claimDashboardTurn(sql, {
     hiveId: input.hiveId,
-    threadId: thread.id,
-    messageId: ownerMessage.id,
-  });
-
-  const assistantMessage = await appendMessage(
-    sql,
-    thread.id,
-    "assistant",
-    "",
-    null,
-    "dashboard",
-    null,
-    "streaming",
-  );
-  await emitEaChatEvent(sql, {
-    type: "ea_message_created",
-    hiveId: input.hiveId,
-    threadId: thread.id,
-    messageId: assistantMessage.id,
+    content: persistedOwnerContent,
   });
 
   const streamController = new AbortController();
@@ -295,6 +251,89 @@ async function prepareDashboardTurn(
   });
 
   return { thread, ownerMessage, assistantMessage, stream };
+}
+
+async function claimDashboardTurn(
+  sql: Sql,
+  input: { hiveId: string; content: string },
+): Promise<{
+  thread: EaThread;
+  ownerMessage: EaMessage;
+  assistantMessage: EaMessage;
+}> {
+  const channelId = dashboardChannelId(input.hiveId);
+  const lockKey = `${DASHBOARD_TURN_LOCK_PREFIX}:${input.hiveId}:${channelId}`;
+
+  return sql.begin(async (tx) => {
+    const [lock] = await tx<{ acquired: boolean }[]>`
+      SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS acquired
+    `;
+    if (!lock?.acquired) {
+      const [running] = await tx<{ threadId: string; assistantMessageId: string }[]>`
+        SELECT thread.id AS "threadId", message.id AS "assistantMessageId"
+        FROM ea_threads AS thread
+        LEFT JOIN ea_messages AS message
+          ON message.thread_id = thread.id
+          AND message.role = 'assistant'
+          AND message.status = 'streaming'
+        WHERE thread.hive_id = ${input.hiveId}
+          AND thread.channel_id = ${channelId}
+          AND thread.status = 'active'
+        LIMIT 1
+      `;
+      throw new DashboardEaTurnInProgressError(
+        running?.threadId ?? "",
+        running?.assistantMessageId ?? "",
+      );
+    }
+
+    const thread = await getOrCreateActiveThread(tx, input.hiveId, channelId);
+    const [running] = await tx<{ id: string }[]>`
+      SELECT id
+      FROM ea_messages
+      WHERE thread_id = ${thread.id}
+        AND role = 'assistant'
+        AND status = 'streaming'
+      LIMIT 1
+    `;
+    if (running) {
+      throw new DashboardEaTurnInProgressError(thread.id, running.id);
+    }
+
+    const ownerMessage = await appendMessage(
+      tx,
+      thread.id,
+      "owner",
+      input.content,
+      null,
+      "dashboard",
+    );
+    await emitEaChatEvent(tx, {
+      type: "ea_message_created",
+      hiveId: input.hiveId,
+      threadId: thread.id,
+      messageId: ownerMessage.id,
+    });
+
+    const assistantMessage = await appendMessage(
+      tx,
+      thread.id,
+      "assistant",
+      "",
+      null,
+      "dashboard",
+      null,
+      "streaming",
+    );
+    await emitEaChatEvent(tx, {
+      type: "ea_message_created",
+      hiveId: input.hiveId,
+      threadId: thread.id,
+      messageId: assistantMessage.id,
+    });
+
+    return { thread, ownerMessage, assistantMessage };
+  });
 }
 
 function isAbortError(error: unknown): boolean {

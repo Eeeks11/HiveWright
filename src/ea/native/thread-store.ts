@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import {
   asEaReplayMessageLimit,
   DEFAULT_EA_REPLAY_MESSAGE_LIMIT,
@@ -35,8 +35,10 @@ export interface EaMessage {
   updatedAt: Date;
 }
 
+type QuerySql = Sql | TransactionSql;
+
 export async function getOrCreateActiveThread(
-  sql: Sql,
+  sql: QuerySql,
   hiveId: string,
   channelId: string,
 ): Promise<EaThread> {
@@ -68,7 +70,7 @@ export async function closeActiveThread(
 }
 
 export async function appendMessage(
-  sql: Sql,
+  sql: QuerySql,
   threadId: string,
   role: EaMessage["role"],
   content: string,
