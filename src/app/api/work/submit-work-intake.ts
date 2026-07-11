@@ -5,6 +5,10 @@ import { runClassifier } from "@/work-intake/runner";
 import { persistClassification } from "@/work-intake/persist";
 import { resolveDefaultProjectIdForHive } from "@/projects/default-project";
 import { assertHiveCreationAllowed } from "@/operations/creation-pause";
+import {
+  asOperationsReceiptTask,
+  isExplicitReceiptOnlyOutageFallback,
+} from "@/work-intake/outage-fallback";
 
 export interface SubmitWorkIntakeInput {
   // Allow runtimes/tests that already own a SQL connection to keep all writes
@@ -120,6 +124,25 @@ export async function submitWorkIntake(
   }
 
   const outcome = await runClassifier(db, input.input);
+
+  if (outcome.result === null && isExplicitReceiptOnlyOutageFallback(input.input)) {
+    return await insertTask(
+      db,
+      input.hiveId,
+      "operations-coordinator",
+      title,
+      input.input,
+      resolvedProjectId,
+      input.goalId ?? null,
+      input.sprintNumber ?? null,
+      input.qaRequired ?? false,
+      input.priority ?? 5,
+      input.acceptanceCriteria ?? null,
+      files,
+      asOperationsReceiptTask(outcome),
+      input.createdBy,
+    );
+  }
 
   if (outcome.result?.type === "task") {
     return await insertTask(

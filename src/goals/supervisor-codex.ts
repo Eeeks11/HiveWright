@@ -7,6 +7,12 @@ import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { codexCliModelName, resolveGoalSupervisorRuntime } from "./supervisor-routing";
 import { buildGoalSupervisorProcessEnv } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
+import {
+  captureGoalProgress,
+  claimGoalSupervisorStart,
+  finalizeGoalSupervisorStart,
+  releaseGoalSupervisorStart,
+} from "./supervisor-start-guard";
 
 /**
  * codex-based goal-supervisor lifecycle. Mirrors supervisor-openclaw.ts so the
@@ -115,8 +121,11 @@ ${initialPrompt}
   fs.writeFileSync(path.join(workspacePath, "AGENTS.md"), agentsMd, "utf-8");
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
-  // Mark started immediately so findNewGoals doesn't re-trigger this goal.
-  await sql`UPDATE goals SET session_id = ${supervisorSession} WHERE id = ${goalId}`;
+  // Atomically claim the start so concurrent lifecycle polls cannot launch
+  // duplicate supervisor work for the same goal.
+  const claimed = await claimGoalSupervisorStart(sql, goalId, supervisorSession);
+  if (!claimed) return { agentId };
+  const progressBaseline = await captureGoalProgress(sql, goalId);
 
   const args = [
     "exec",
@@ -131,8 +140,19 @@ ${initialPrompt}
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor-codex] codex exec failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}`);
-    await sql`UPDATE goals SET session_id = NULL WHERE id = ${goalId}`;
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
     return { agentId, error: `Supervisor run failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 300)}` };
+  }
+
+  const progress = await finalizeGoalSupervisorStart(
+    sql,
+    goalId,
+    supervisorSession,
+    progressBaseline,
+  );
+  if (!progress.progressed) {
+    console.warn(`[supervisor-codex] codex exec exited successfully without durable progress for goal ${goalId}`);
+    return { agentId, error: "Supervisor exited successfully without durable goal progress; start released for retry" };
   }
 
   const threadId = extractThreadId(runResult.stdout);
