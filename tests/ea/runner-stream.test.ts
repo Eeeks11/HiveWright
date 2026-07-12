@@ -54,12 +54,12 @@ afterEach(() => {
 describe("runEa", () => {
   it("builds the canonical GPT-5.6 Sol Codex command", () => {
     expect(buildEaCommandArgs({ model: "openai-codex/gpt-5.6-sol" }, "/tmp/ea")).toEqual([
+      "--ask-for-approval",
+      "on-request",
       "exec",
       "--json",
       "--sandbox",
       "workspace-write",
-      "--ask-for-approval",
-      "on-request",
       "--skip-git-repo-check",
       "-m",
       "gpt-5.6-sol",
