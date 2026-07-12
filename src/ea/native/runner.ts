@@ -51,13 +51,15 @@ export function buildEaCommandArgs(
   cwd: string,
 ): string[] {
   const model = normalizeEaModel(options.model);
+  // Approval policy is a top-level Codex option. Codex 0.144+ rejects it
+  // when placed after the `exec` subcommand.
   const args = [
+    "--ask-for-approval",
+    options.approvalPolicy ?? "on-request",
     "exec",
     "--json",
     "--sandbox",
     options.sandbox ?? "workspace-write",
-    "--ask-for-approval",
-    options.approvalPolicy ?? "on-request",
     "--skip-git-repo-check",
   ];
   if (model) {
