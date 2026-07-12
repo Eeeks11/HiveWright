@@ -163,6 +163,9 @@ const slackWebhook: ConnectorDefinitionDraft = {
 // Useful as a fallback when we don't have a dedicated connector for a
 // service yet. Also lets agents hit internal webhooks (Zapier-like).
 // ---------------------------------------------------------------------
+const HTTP_WEBHOOK_TIMEOUT_MS = 10_000;
+const HTTP_WEBHOOK_MAX_RESPONSE_BYTES = 1_000_000;
+
 const httpWebhook: ConnectorDefinitionDraft = {
   slug: "http-webhook",
   name: "Generic HTTP webhook",
@@ -229,11 +232,20 @@ const httpWebhook: ConnectorDefinitionDraft = {
         }
         const headers: Record<string, string> = { "Content-Type": "application/json" };
         if (secrets.authHeader) headers["Authorization"] = secrets.authHeader;
-        const res = await fetchValidatedHttpWebhookDestination(destination, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(parsed),
-        });
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), HTTP_WEBHOOK_TIMEOUT_MS);
+        let res: Response;
+        try {
+          res = await fetchValidatedHttpWebhookDestination(destination, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(parsed),
+            maxResponseBytes: HTTP_WEBHOOK_MAX_RESPONSE_BYTES,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
         if (res.status >= 300 && res.status < 400) {
           throw new Error("Webhook redirects are not allowed");
         }

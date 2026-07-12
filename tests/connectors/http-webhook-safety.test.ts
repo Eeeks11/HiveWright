@@ -89,6 +89,62 @@ describe("HTTP connector SSRF safety", () => {
     );
   });
 
+  it("caps generic HTTP webhook POST responses while streaming", async () => {
+    const chunk = Buffer.alloc(128_000, "x");
+    let responseClosed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const interval = setInterval(() => res.write(chunk), 1);
+      res.on("close", () => {
+        responseClosed = true;
+        clearInterval(interval);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const { port } = server.address() as AddressInfo;
+      setHttpWebhookDnsLookupForTests(async () => [{ address: "127.0.0.1", family: 4 }]);
+      setHttpWebhookPublicAddressPredicateForTests((address) => address === "127.0.0.1");
+
+      const operation = connectorOperation("http-webhook", "post_json");
+      await expect(operation.handler({
+        config: { allowedHostnames: "hooks.example.com" },
+        secrets: { url: `http://hooks.example.com:${port}/ingest` },
+        args: { body: "{}" },
+      })).rejects.toThrow(/http-webhook response exceeded 1000000 bytes/);
+
+      await vi.waitFor(() => expect(responseClosed).toBe(true));
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("aborts a generic HTTP webhook POST that never finishes responding", async () => {
+    vi.useFakeTimers();
+    try {
+      setHttpWebhookDnsLookupForTests(async () => [{ address: "93.184.216.34", family: 4 }]);
+      const dispatch = vi.fn(async (_destination, _address, options) => new Promise<never>((_resolve, reject) => {
+        options.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      }));
+      setHttpWebhookDispatchForTests(dispatch);
+
+      const operation = connectorOperation("http-webhook", "post_json");
+      const pending = operation.handler({
+        config: { allowedHostnames: "hooks.example.com" },
+        secrets: { url: "https://hooks.example.com/ingest" },
+        args: { body: "{}" },
+      });
+      const rejection = expect(pending).rejects.toThrow(/connection failed for validated address/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await rejection;
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("continues trying validated addresses for idempotent website form GET failures", async () => {
     setHttpWebhookDnsLookupForTests(async () => [
       { address: "93.184.216.34", family: 4 },
