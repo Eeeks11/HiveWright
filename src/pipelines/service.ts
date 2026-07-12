@@ -611,6 +611,19 @@ export async function advancePipelineRunFromTask(
   return sql.begin((tx) => advancePipelineRunFromTaskInTransaction(tx, input));
 }
 
+/** Establish the pipeline-before-task lock order shared with failure paths. */
+export async function lockPipelineStepRunForTask(
+  tx: TransactionSql,
+  taskId: string,
+): Promise<void> {
+  await tx`
+    SELECT id
+    FROM pipeline_step_runs
+    WHERE task_id = ${taskId}
+    FOR UPDATE
+  `;
+}
+
 export async function advancePipelineRunFromTaskInTransaction(
   tx: TransactionSql,
   input: AdvancePipelineRunInput,

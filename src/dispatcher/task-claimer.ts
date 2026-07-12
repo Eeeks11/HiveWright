@@ -1,6 +1,7 @@
 import type { Sql, TransactionSql } from "postgres";
 import {
   advancePipelineRunFromTaskInTransaction,
+  lockPipelineStepRunForTask,
   failPipelineRunFromTask,
   getPipelineTaskExecutionRules,
   markPipelineTaskRunning,
@@ -215,6 +216,7 @@ export async function completeTask(
   const warning = options.runtimeWarnings?.filter(Boolean).join("\n") || null;
   const terminalDisposition = routeDisposition.disposition;
   await sql.begin(async (tx) => {
+    await lockPipelineStepRunForTask(tx, taskId);
     const updated = await markTaskCompletedInTransaction(tx, {
       taskId,
       resultSummary,

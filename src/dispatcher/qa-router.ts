@@ -8,7 +8,7 @@ import { inheritTaskWorkspaceFromParent } from "./worktree-manager";
 import { markCapsuleCompleted, markCapsuleQaFailed } from "./execution-capsules";
 import { findExistingQaReplanTask } from "./recovery-loop-guard";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
-import { advancePipelineRunFromTaskInTransaction } from "@/pipelines/service";
+import { advancePipelineRunFromTaskInTransaction, lockPipelineStepRunForTask } from "@/pipelines/service";
 import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 
 const QA_DELIVERABLE_INLINE_LIMIT = 4000;
@@ -448,6 +448,7 @@ export async function processQaResult(
     }
 
     await sql.begin(async (tx) => {
+      await lockPipelineStepRunForTask(tx, taskId);
       await tx`
         UPDATE tasks
         SET status = 'completed',
