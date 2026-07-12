@@ -152,6 +152,69 @@ describe("POST /api/tasks", () => {
     expect(parked.failure_reason).toContain("replacement tasks");
   });
 
+  it("retries an idempotent replacement after a stale budget failure is cleared", async () => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, 'Retryable recovery budget goal', 'active')
+      RETURNING id
+    `;
+    const [sourceTask] = await db`
+      INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status)
+      VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', 'Retryable budget source', 'Original work', 'failed')
+      RETURNING id
+    `;
+    for (let i = 1; i <= 3; i += 1) {
+      await db`
+        INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status, parent_task_id)
+        VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', ${`Retryable existing replacement ${i}`}, 'Recovery work', 'failed', ${sourceTask.id})
+      `;
+    }
+
+    const body = {
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title: TEST_PREFIX + "Retryable replacement task",
+      brief: "This should be created after budget is cleared",
+      goalId: goal.id,
+      sourceTaskId: sourceTask.id,
+      createdBy: "goal-supervisor",
+    };
+    const headers = { "Idempotency-Key": "tasks-retry-after-budget-clear" };
+
+    const blocked = await createTask(taskCreateRequest(body, headers));
+    const blockedBody = await blocked.json();
+
+    expect(blocked.status).toBe(409);
+    expect(blockedBody.error).toContain("Recovery budget exhausted");
+
+    const storedAfterFailure = await db`
+      SELECT key FROM idempotency_keys WHERE key = ${headers["Idempotency-Key"]}
+    `;
+    expect(storedAfterFailure).toHaveLength(0);
+
+    await db`
+      DELETE FROM tasks
+      WHERE title = 'Retryable existing replacement 3'
+    `;
+    await db`
+      UPDATE tasks
+      SET status = 'failed', failure_reason = NULL
+      WHERE id = ${sourceTask.id}
+    `;
+
+    const retry = await createTask(taskCreateRequest(body, headers));
+    const retryBody = await retry.json();
+
+    expect(retry.status).toBe(201);
+    expect(retryBody.data.parentTaskId).toBe(sourceTask.id);
+    expect(retryBody.data.title).toBe(TEST_PREFIX + "Retryable replacement task");
+
+    const replacements = await db`
+      SELECT id FROM tasks WHERE parent_task_id = ${sourceTask.id}
+    `;
+    expect(replacements).toHaveLength(3);
+  });
+
   it("replays an idempotent replacement response without re-running budget mutation", async () => {
     const [goal] = await db`
       INSERT INTO goals (hive_id, title, status)
