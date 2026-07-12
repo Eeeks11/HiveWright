@@ -137,6 +137,7 @@
     },
     "onnxruntime-web": {
       "protobufjs": "7.6.5"
-    }
+    },
+    "@openai/codex": "0.144.1"
   }
 }
