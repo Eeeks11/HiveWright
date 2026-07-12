@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
 import { startPipelineRun } from "@/pipelines/service";
@@ -762,5 +763,52 @@ verification: checked.`);
     expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
     expect(nextTasks).toHaveLength(1);
     expect(stepRuns[1].task_id).toBe(nextTasks[0].id);
+  });
+
+  it("documents completion/failure lock ordering for pipeline task races", () => {
+    // PostgreSQL deadlock reproduction is timing-sensitive in unit tests. This
+    // regression proof pins the invariant that prevents the deadlock reviewed
+    // in PR #249: every completion-style transaction locks pipeline_step_runs
+    // and pipeline_runs before updating tasks, matching the failure path.
+    const taskClaimer = readFileSync("src/dispatcher/task-claimer.ts", "utf8");
+    const qaRouter = readFileSync("src/dispatcher/qa-router.ts", "utf8");
+    const pipelineService = readFileSync("src/pipelines/service.ts", "utf8");
+
+    const completeTaskBody = taskClaimer.slice(
+      taskClaimer.indexOf("export async function completeTask"),
+      taskClaimer.indexOf("async function markTaskCompletedInTransaction"),
+    );
+    expect(completeTaskBody.indexOf("lockPipelineStepRunForTask(tx, taskId)")).toBeLessThan(
+      completeTaskBody.indexOf("markTaskCompletedInTransaction(tx"),
+    );
+    expect(completeTaskBody.indexOf("markTaskCompletedInTransaction(tx")).toBeLessThan(
+      completeTaskBody.indexOf("advancePipelineRunFromTaskInTransaction(tx"),
+    );
+
+    const qaLockIndex = qaRouter.indexOf("lockPipelineStepRunForTask(tx, taskId)");
+    const qaTaskUpdateIndex = qaRouter.indexOf("UPDATE tasks", qaLockIndex);
+    const qaAdvanceIndex = qaRouter.indexOf("advancePipelineRunFromTaskInTransaction(tx", qaLockIndex);
+    expect(qaLockIndex).toBeGreaterThan(-1);
+    expect(qaLockIndex).toBeLessThan(qaTaskUpdateIndex);
+    expect(qaTaskUpdateIndex).toBeLessThan(qaAdvanceIndex);
+
+    const lockHelper = pipelineService.slice(
+      pipelineService.indexOf("export async function lockPipelineStepRunForTask"),
+      pipelineService.indexOf("export async function advancePipelineRunFromTaskInTransaction"),
+    );
+    expect(lockHelper).toContain("FROM pipeline_step_runs psr");
+    expect(lockHelper).toContain("JOIN pipeline_runs pr ON pr.id = psr.run_id");
+    expect(lockHelper).toContain("FOR UPDATE OF psr, pr");
+
+    const failureBody = pipelineService.slice(
+      pipelineService.indexOf("export async function failPipelineRunFromTask"),
+      pipelineService.indexOf("export type PipelineValidationIssue"),
+    );
+    expect(failureBody.indexOf("UPDATE pipeline_step_runs")).toBeLessThan(
+      failureBody.indexOf("UPDATE pipeline_runs"),
+    );
+    expect(failureBody.indexOf("UPDATE pipeline_runs")).toBeLessThan(
+      failureBody.indexOf("UPDATE tasks"),
+    );
   });
 });

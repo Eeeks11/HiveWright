@@ -611,16 +611,25 @@ export async function advancePipelineRunFromTask(
   return sql.begin((tx) => advancePipelineRunFromTaskInTransaction(tx, input));
 }
 
-/** Establish the pipeline-before-task lock order shared with failure paths. */
+/**
+ * Establish the pipeline-before-task lock order shared with failure paths.
+ *
+ * Completion and QA-pass transactions call this before updating the task row.
+ * Failure transactions update/lock these same pipeline rows before updating the
+ * task row, so completion-vs-failure races serialize on pipeline_step_runs and
+ * never take task -> pipeline locks in one path and pipeline -> task locks in
+ * the other.
+ */
 export async function lockPipelineStepRunForTask(
   tx: TransactionSql,
   taskId: string,
 ): Promise<void> {
   await tx`
-    SELECT id
-    FROM pipeline_step_runs
-    WHERE task_id = ${taskId}
-    FOR UPDATE
+    SELECT psr.id, pr.id AS run_id
+    FROM pipeline_step_runs psr
+    JOIN pipeline_runs pr ON pr.id = psr.run_id
+    WHERE psr.task_id = ${taskId}
+    FOR UPDATE OF psr, pr
   `;
 }
 
