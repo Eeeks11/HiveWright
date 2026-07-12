@@ -1946,6 +1946,7 @@ export class Dispatcher {
   }
 
   private async handleNewGoalComment(commentId: string) {
+    let claimWakeClaimedAt: Date | null = null;
     try {
       const [comment] = await this.sql<
         { id: string; goal_id: string; body: string; created_by: string }[]
@@ -1986,6 +1987,7 @@ export class Dispatcher {
       if (!claimed) {
         return;
       }
+      claimWakeClaimedAt = claimed.wakeClaimedAt;
 
       const lockedWake = await withGoalSupervisorWakeLock(this.sql, goal.id, async () => {
         const { wakeUpSupervisorOnComment } = await import("../goals/supervisor");
@@ -1995,7 +1997,7 @@ export class Dispatcher {
         console.log(
           `[dispatcher] Supervisor wake already in flight for goal ${goal.id}; leaving comment ${comment.id} pending for reconciliation.`,
         );
-        await releaseGoalCommentWakeClaim(this.sql, comment.id);
+        await releaseGoalCommentWakeClaim(this.sql, comment.id, claimed.wakeClaimedAt);
         return;
       }
       const result = lockedWake.result;
@@ -2003,16 +2005,16 @@ export class Dispatcher {
         console.error(
           `[dispatcher] comment wake-up failed for goal ${goal.id} comment ${comment.id}: ${result.error}`,
         );
-        await releaseGoalCommentWakeClaim(this.sql, comment.id);
+        await releaseGoalCommentWakeClaim(this.sql, comment.id, claimed.wakeClaimedAt);
       } else {
-        await markGoalCommentWakeProcessed(this.sql, comment.id);
+        await markGoalCommentWakeProcessed(this.sql, comment.id, claimed.wakeClaimedAt);
         console.log(
           `[dispatcher] Comment wake-up complete for goal ${goal.id} (comment ${comment.id}).`,
         );
       }
     } catch (err) {
       console.error(`[dispatcher] handleNewGoalComment error for ${commentId}:`, err);
-      await releaseGoalCommentWakeClaim(this.sql, commentId).catch((releaseErr) =>
+      await releaseGoalCommentWakeClaim(this.sql, commentId, claimWakeClaimedAt).catch((releaseErr) =>
         console.error(`[dispatcher] goal-comment claim release failed for ${commentId}:`, releaseErr),
       );
     }

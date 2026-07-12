@@ -234,6 +234,14 @@ export async function findPendingGoalCommentWakes(
         OR (
           c.supervisor_wake_status = 'claimed'
           AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM pg_locks l
+            WHERE l.locktype = 'advisory'
+              AND l.granted
+              AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+              AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+          )
         )
       )
     ORDER BY c.created_at ASC, c.id ASC
@@ -262,6 +270,14 @@ export async function claimGoalCommentWake(
           OR (
             c.supervisor_wake_status = 'claimed'
             AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_locks l
+              WHERE l.locktype = 'advisory'
+                AND l.granted
+                AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+                AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+            )
           )
         )
     ), claimed AS (
@@ -277,6 +293,14 @@ export async function claimGoalCommentWake(
           OR (
             c.supervisor_wake_status = 'claimed'
             AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_locks l
+              WHERE l.locktype = 'advisory'
+                AND l.granted
+                AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+                AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+            )
           )
         )
       RETURNING

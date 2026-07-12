@@ -496,6 +496,61 @@ describe("goal comment supervisor wake reconciliation", () => {
     expect(commentState.supervisor_woken_at).toBeInstanceOf(Date);
   });
 
+  it("does not reclaim a stale claimed owner comment while the goal wake lock is held", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-stale-locked-claim', 'active', 'gs-comment-stale-locked-claim')
+      RETURNING *
+    `;
+    const release = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(release).not.toBeNull();
+
+    const oldClaimedAt = new Date(Date.now() - 15 * 60 * 1000);
+    const [comment] = await sql`
+      INSERT INTO goal_comments (
+        goal_id,
+        body,
+        created_by,
+        supervisor_wake_status,
+        supervisor_wake_claimed_at,
+        supervisor_wake_attempts
+      )
+      VALUES (
+        ${goal.id},
+        'long running wake should keep ownership',
+        'owner',
+        'claimed',
+        ${oldClaimedAt},
+        1
+      )
+      RETURNING *
+    `;
+
+    try {
+      const pendingWhileLocked = await findPendingGoalCommentWakes(sql, 25, 10);
+      expect(pendingWhileLocked.map((candidate) => candidate.commentId)).not.toContain(comment.id);
+      await expect(claimGoalCommentWake(sql, comment.id as string, 10)).resolves.toBeNull();
+
+      await markGoalCommentWakeProcessed(
+        sql,
+        comment.id as string,
+        oldClaimedAt,
+      );
+    } finally {
+      await release!();
+    }
+
+    const [state] = await sql`
+      SELECT supervisor_wake_status, supervisor_wake_attempts, supervisor_woken_at
+      FROM goal_comments
+      WHERE id = ${comment.id}
+    `;
+    expect(state.supervisor_wake_status).toBe("woken");
+    expect(state.supervisor_wake_attempts).toBe(1);
+    expect(state.supervisor_woken_at).toBeInstanceOf(Date);
+    await expect(claimGoalCommentWake(sql, comment.id as string, 10)).resolves.toBeNull();
+  });
+
   it("reclaims a stale claimed owner comment but does not double-claim a fresh claim", async () => {
     const [goal] = await sql`
       INSERT INTO goals (hive_id, title, status, session_id)
