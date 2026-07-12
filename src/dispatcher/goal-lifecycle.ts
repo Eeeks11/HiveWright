@@ -186,6 +186,7 @@ export interface GoalCommentWakeCandidate {
   createdAt: Date;
   createdBy: string;
   wakeStatus: string;
+  wakeClaimedAt: Date | null;
   wakeAttempts: number;
 }
 
@@ -197,6 +198,7 @@ function mapGoalCommentWakeCandidate(row: Record<string, unknown>): GoalCommentW
     createdAt: row.created_at as Date,
     createdBy: row.created_by as string,
     wakeStatus: row.supervisor_wake_status as string,
+    wakeClaimedAt: (row.supervisor_wake_claimed_at as Date | null) ?? null,
     wakeAttempts: Number(row.supervisor_wake_attempts ?? 0),
   };
 }
@@ -219,6 +221,7 @@ export async function findPendingGoalCommentWakes(
       c.created_at,
       c.created_by,
       c.supervisor_wake_status,
+      c.supervisor_wake_claimed_at,
       c.supervisor_wake_attempts,
       g.session_id
     FROM goal_comments c
@@ -282,6 +285,7 @@ export async function claimGoalCommentWake(
         c.created_at,
         c.created_by,
         c.supervisor_wake_status,
+        c.supervisor_wake_claimed_at,
         c.supervisor_wake_attempts,
         candidate.session_id
     )
@@ -293,7 +297,21 @@ export async function claimGoalCommentWake(
 export async function releaseGoalCommentWakeClaim(
   sql: Sql,
   commentId: string,
+  claimedAt?: Date | null,
 ): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'pending',
+        supervisor_wake_claimed_at = NULL
+      WHERE id = ${commentId}
+        AND supervisor_wake_status = 'claimed'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
   await sql`
     UPDATE goal_comments
     SET
@@ -307,7 +325,22 @@ export async function releaseGoalCommentWakeClaim(
 export async function markGoalCommentWakeProcessed(
   sql: Sql,
   commentId: string,
+  claimedAt?: Date | null,
 ): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'woken',
+        supervisor_wake_claimed_at = NULL,
+        supervisor_woken_at = NOW()
+      WHERE id = ${commentId}
+        AND supervisor_wake_status = 'claimed'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
   await sql`
     UPDATE goal_comments
     SET
@@ -322,7 +355,21 @@ export async function markGoalCommentWakeProcessed(
 export async function markGoalCommentWakeSkipped(
   sql: Sql,
   commentId: string,
+  claimedAt?: Date | null,
 ): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'skipped',
+        supervisor_wake_claimed_at = NULL
+      WHERE id = ${commentId}
+        AND supervisor_wake_status <> 'woken'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
   await sql`
     UPDATE goal_comments
     SET

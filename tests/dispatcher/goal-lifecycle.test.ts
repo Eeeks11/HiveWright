@@ -14,6 +14,7 @@ import {
   claimGoalCommentWake,
   markGoalCommentWakeProcessed,
   releaseGoalCommentWakeClaim,
+  markGoalCommentWakeSkipped,
 } from "@/dispatcher/goal-lifecycle";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -353,6 +354,94 @@ describe("claimSprintWakeUp", () => {
 });
 
 describe("goal comment supervisor wake reconciliation", () => {
+  it("backfills pre-migration comments as skipped while leaving new comments pending", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-legacy-backfill', 'active', 'gs-comment-legacy-backfill')
+      RETURNING *
+    `;
+
+    await sql`
+      ALTER TABLE goal_comments
+        ALTER COLUMN supervisor_wake_status DROP NOT NULL,
+        ALTER COLUMN supervisor_wake_status DROP DEFAULT,
+        ALTER COLUMN supervisor_wake_attempts DROP NOT NULL,
+        ALTER COLUMN supervisor_wake_attempts DROP DEFAULT
+    `;
+
+    try {
+      const [legacyComment] = await sql`
+        INSERT INTO goal_comments (goal_id, body, created_by)
+        VALUES (${goal.id}, 'historical owner context', 'owner')
+        RETURNING *
+      `;
+
+      await sql`
+        ALTER TABLE goal_comments
+          ADD COLUMN IF NOT EXISTS supervisor_wake_status varchar(24),
+          ADD COLUMN IF NOT EXISTS supervisor_wake_claimed_at timestamp,
+          ADD COLUMN IF NOT EXISTS supervisor_woken_at timestamp,
+          ADD COLUMN IF NOT EXISTS supervisor_wake_attempts integer
+      `;
+      await sql`
+        UPDATE goal_comments
+        SET supervisor_wake_status = 'skipped'
+        WHERE supervisor_wake_status IS NULL
+      `;
+      await sql`
+        UPDATE goal_comments
+        SET supervisor_wake_attempts = 0
+        WHERE supervisor_wake_attempts IS NULL
+      `;
+      await sql`
+        ALTER TABLE goal_comments
+          ALTER COLUMN supervisor_wake_status SET DEFAULT 'pending',
+          ALTER COLUMN supervisor_wake_status SET NOT NULL,
+          ALTER COLUMN supervisor_wake_attempts SET DEFAULT 0,
+          ALTER COLUMN supervisor_wake_attempts SET NOT NULL
+      `;
+
+      let pending = await findPendingGoalCommentWakes(sql);
+      expect(pending.map((candidate) => candidate.commentId)).not.toContain(legacyComment.id);
+
+      const [newComment] = await sql`
+        INSERT INTO goal_comments (goal_id, body, created_by)
+        VALUES (${goal.id}, 'new owner details after deploy', 'owner')
+        RETURNING *
+      `;
+
+      pending = await findPendingGoalCommentWakes(sql);
+      expect(pending.map((candidate) => candidate.commentId)).toContain(newComment.id);
+
+      const rows = await sql`
+        SELECT id, supervisor_wake_status, supervisor_wake_attempts
+        FROM goal_comments
+        WHERE id IN (${legacyComment.id}, ${newComment.id})
+      `;
+      expect(rows.find((row) => row.id === legacyComment.id)?.supervisor_wake_status).toBe("skipped");
+      expect(rows.find((row) => row.id === newComment.id)?.supervisor_wake_status).toBe("pending");
+      expect(rows.every((row) => row.supervisor_wake_attempts === 0)).toBe(true);
+    } finally {
+      await sql`
+        UPDATE goal_comments
+        SET supervisor_wake_status = 'skipped'
+        WHERE supervisor_wake_status IS NULL
+      `;
+      await sql`
+        UPDATE goal_comments
+        SET supervisor_wake_attempts = 0
+        WHERE supervisor_wake_attempts IS NULL
+      `;
+      await sql`
+        ALTER TABLE goal_comments
+          ALTER COLUMN supervisor_wake_status SET DEFAULT 'pending',
+          ALTER COLUMN supervisor_wake_status SET NOT NULL,
+          ALTER COLUMN supervisor_wake_attempts SET DEFAULT 0,
+          ALTER COLUMN supervisor_wake_attempts SET NOT NULL
+      `;
+    }
+  });
+
   it("leaves a contended owner comment pending, then reconciles it exactly once after the wake lock releases", async () => {
     const [goal] = await sql`
       INSERT INTO goals (hive_id, title, status, session_id)
@@ -469,6 +558,41 @@ describe("goal comment supervisor wake reconciliation", () => {
     `;
     expect(commentState.supervisor_wake_status).toBe("claimed");
     expect(commentState.supervisor_wake_attempts).toBe(2);
+  });
+
+  it("does not release or terminally mark a newer owner-comment wake claim", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-claim-token', 'active', 'gs-comment-claim-token')
+      RETURNING *
+    `;
+    const [comment] = await sql`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES (${goal.id}, 'claim token safety', 'owner')
+      RETURNING *
+    `;
+
+    const claim = await claimGoalCommentWake(sql, comment.id as string, 10);
+    expect(claim?.wakeClaimedAt).toBeInstanceOf(Date);
+
+    await sql`
+      UPDATE goal_comments
+      SET supervisor_wake_claimed_at = NOW() + INTERVAL '1 second'
+      WHERE id = ${comment.id}
+    `;
+
+    await releaseGoalCommentWakeClaim(sql, comment.id as string, claim!.wakeClaimedAt);
+    await markGoalCommentWakeProcessed(sql, comment.id as string, claim!.wakeClaimedAt);
+    await markGoalCommentWakeSkipped(sql, comment.id as string, claim!.wakeClaimedAt);
+
+    const [state] = await sql`
+      SELECT supervisor_wake_status, supervisor_wake_claimed_at, supervisor_woken_at
+      FROM goal_comments
+      WHERE id = ${comment.id}
+    `;
+    expect(state.supervisor_wake_status).toBe("claimed");
+    expect(state.supervisor_wake_claimed_at.getTime()).toBeGreaterThan(claim!.wakeClaimedAt!.getTime());
+    expect(state.supervisor_woken_at).toBeNull();
   });
 
   it("does not queue supervisor-authored or inactive/no-session goal comments", async () => {

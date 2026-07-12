@@ -69,13 +69,12 @@ export async function wakeUpSupervisorOnComment(
     return mod.wakeUpSupervisorOnComment(sql, goalId, commentId);
   }
   // Comment wake-up is only implemented for the codex backend so far —
-  // the openclaw supervisor is being retired. Return a structured no-op
-  // rather than failing, so an openclaw-configured goal with a new comment
-  // doesn't crash the dispatcher's NOTIFY handler.
+  // the openclaw supervisor is being retired. Return a successful no-op so
+  // deterministic unsupported-backend comments are marked terminal instead of
+  // being released to `pending` and retried on every dispatcher poll.
   return {
-    success: false,
-    output: "",
-    error: "wakeUpSupervisorOnComment is only implemented for the codex backend",
+    success: true,
+    output: "wakeUpSupervisorOnComment is unsupported for the openclaw backend; skipped",
   };
 }
 
