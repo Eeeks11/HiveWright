@@ -1,4 +1,6 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
+
+type SqlExecutor = Sql | TransactionSql;
 
 export const RECOVERY_BUDGET_LIMITS = {
   doctorTasksPerFailureFamily: 2,
@@ -54,7 +56,7 @@ type RecoveryBudgetOverrideRecord = {
   route_metadata: unknown;
 };
 
-export async function loadRecoveryBudget(sql: Sql, taskId: string): Promise<RecoveryBudget> {
+export async function loadRecoveryBudget(sql: SqlExecutor, taskId: string): Promise<RecoveryBudget> {
   const [row] = await sql<{
     root_task_id: string;
     doctor_task_count: number;
@@ -138,7 +140,7 @@ export async function loadRecoveryBudget(sql: Sql, taskId: string): Promise<Reco
 }
 
 export async function checkRecoveryBudget(
-  sql: Sql,
+  sql: SqlExecutor,
   taskId: string,
   request: RecoveryBudgetRequest,
 ): Promise<RecoveryBudgetDecision> {
@@ -157,18 +159,19 @@ export async function checkRecoveryBudget(
 }
 
 export async function parkTaskIfRecoveryBudgetExceeded(
-  sql: Sql,
+  sql: SqlExecutor,
   taskId: string,
   request: RecoveryBudgetRequest,
 ): Promise<RecoveryBudgetDecision> {
   const decision = await checkRecoveryBudget(sql, taskId, request);
-  if (decision.ok) return decision;
-
-  await sql`
-    UPDATE tasks
-    SET status = 'unresolvable', failure_reason = ${decision.reason}, updated_at = NOW()
-    WHERE id = ${taskId}
-  `;
+  if ("reason" in decision) {
+    const reason = decision.reason;
+    await sql`
+      UPDATE tasks
+      SET status = 'unresolvable', failure_reason = ${reason}, updated_at = NOW()
+      WHERE id = ${taskId}
+    `;
+  }
   return decision;
 }
 
@@ -255,7 +258,7 @@ function formatRecoveryBudgetReason(
 }
 
 async function loadReplacementTaskOverride(
-  sql: Sql,
+  sql: SqlExecutor,
   rootTaskId: string,
 ): Promise<RecoveryBudgetReplacementOverride | null> {
   const rows = await sql<RecoveryBudgetOverrideRecord[]>`

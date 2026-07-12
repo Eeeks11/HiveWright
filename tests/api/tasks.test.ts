@@ -43,20 +43,24 @@ describe("GET /api/hives", () => {
   });
 });
 
+function taskCreateRequest(body: object, headers: Record<string, string> = {}) {
+  return new Request("http://localhost:3000/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("POST /api/tasks", () => {
   it("creates a task and returns 201", async () => {
-    const req = new Request("http://localhost:3000/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hiveId: testHiveId,
-        assignedTo: "dev-agent",
-        title: TEST_PREFIX + "New task via API",
-        brief: "Another task created via the API",
-        priority: 2,
-        qaRequired: false,
-        createdBy: "test-runner",
-      }),
+    const req = taskCreateRequest({
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title: TEST_PREFIX + "New task via API",
+      brief: "Another task created via the API",
+      priority: 2,
+      qaRequired: false,
+      createdBy: "test-runner",
     });
     const res = await createTask(req);
     expect(res.status).toBe(201);
@@ -120,18 +124,14 @@ describe("POST /api/tasks", () => {
       `;
     }
 
-    const req = new Request("http://localhost:3000/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hiveId: testHiveId,
-        assignedTo: "dev-agent",
-        title: TEST_PREFIX + "Blocked replacement task",
-        brief: "This should not be created",
-        goalId: goal.id,
-        sourceTaskId: sourceTask.id,
-        createdBy: "goal-supervisor",
-      }),
+    const req = taskCreateRequest({
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title: TEST_PREFIX + "Blocked replacement task",
+      brief: "This should not be created",
+      goalId: goal.id,
+      sourceTaskId: sourceTask.id,
+      createdBy: "goal-supervisor",
     });
 
     const res = await createTask(req);
@@ -150,6 +150,98 @@ describe("POST /api/tasks", () => {
     `;
     expect(parked.status).toBe("unresolvable");
     expect(parked.failure_reason).toContain("replacement tasks");
+  });
+
+  it("replays an idempotent replacement response without re-running budget mutation", async () => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, 'Idempotent recovery goal', 'active')
+      RETURNING id
+    `;
+    const [sourceTask] = await db`
+      INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status)
+      VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', 'Idempotent budget source', 'Original work', 'failed')
+      RETURNING id
+    `;
+    for (let i = 1; i <= 2; i += 1) {
+      await db`
+        INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status, parent_task_id)
+        VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', ${`Idempotent existing replacement ${i}`}, 'Recovery work', 'failed', ${sourceTask.id})
+      `;
+    }
+
+    const body = {
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title: TEST_PREFIX + "Idempotent replacement task",
+      brief: "This should be created once and replayed",
+      goalId: goal.id,
+      sourceTaskId: sourceTask.id,
+      createdBy: "goal-supervisor",
+    };
+
+    const first = await createTask(taskCreateRequest(body, { "Idempotency-Key": "tasks-retry-once" }));
+    const firstBody = await first.json();
+    const retry = await createTask(taskCreateRequest(body, { "Idempotency-Key": "tasks-retry-once" }));
+    const retryBody = await retry.json();
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(201);
+    expect(retryBody).toEqual(firstBody);
+
+    const replacements = await db`
+      SELECT id FROM tasks WHERE parent_task_id = ${sourceTask.id}
+    `;
+    expect(replacements).toHaveLength(3);
+
+    const [source] = await db`
+      SELECT status, failure_reason FROM tasks WHERE id = ${sourceTask.id}
+    `;
+    expect(source.status).toBe("failed");
+    expect(source.failure_reason).toBeNull();
+  });
+
+  it("serializes concurrent idempotent replacement creates at the family budget limit", async () => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, 'Concurrent recovery goal', 'active')
+      RETURNING id
+    `;
+    const [sourceTask] = await db`
+      INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status)
+      VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', 'Concurrent budget source', 'Original work', 'failed')
+      RETURNING id
+    `;
+    for (let i = 1; i <= 2; i += 1) {
+      await db`
+        INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status, parent_task_id)
+        VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', ${`Concurrent existing replacement ${i}`}, 'Recovery work', 'failed', ${sourceTask.id})
+      `;
+    }
+
+    const attempts = await Promise.all([1, 2, 3].map(async (attempt) => {
+      const res = await createTask(taskCreateRequest({
+        hiveId: testHiveId,
+        assignedTo: "dev-agent",
+        title: `${TEST_PREFIX}Concurrent replacement task ${attempt}`,
+        brief: "Only one concurrent replacement should fit the family budget",
+        goalId: goal.id,
+        sourceTaskId: sourceTask.id,
+        createdBy: "goal-supervisor",
+      }, { "Idempotency-Key": `tasks-concurrent-${attempt}` }));
+      return { status: res.status, body: await res.json() };
+    }));
+
+    expect(attempts.filter((attempt) => attempt.status === 201)).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 409)).toHaveLength(2);
+    for (const blocked of attempts.filter((attempt) => attempt.status === 409)) {
+      expect(blocked.body.error).toContain("Recovery budget exhausted");
+    }
+
+    const replacements = await db`
+      SELECT id FROM tasks WHERE parent_task_id = ${sourceTask.id}
+    `;
+    expect(replacements).toHaveLength(3);
   });
 
   it("leaves projectId null when projectId is omitted with one project", async () => {
