@@ -19,15 +19,43 @@ export function GoalCommentsPanel({ goalId, hiveId }: { goalId: string; hiveId: 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+
+    setLoading(true);
+    setError(null);
+    setComments([]);
+
     const params = new URLSearchParams({ hiveId });
-    fetch(`/api/goals/${goalId}/comments?${params.toString()}`)
-      .then((r) => r.json())
-      .then((json) => {
-        setComments(json.data?.comments ?? []);
-        setLoading(false);
+    fetch(`/api/goals/${goalId}/comments?${params.toString()}`, {
+      signal: controller.signal,
+    })
+      .then(async (r) => {
+        const json = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          throw new Error(json.error ?? "Failed to load comments");
+        }
+        return json;
       })
-      .catch(() => setLoading(false));
-  }, [goalId]);
+      .then((json) => {
+        if (!active) return;
+        setComments(json.data?.comments ?? []);
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Network error — please try again");
+        setComments([]);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [goalId, hiveId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
