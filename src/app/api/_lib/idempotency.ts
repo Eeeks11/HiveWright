@@ -48,8 +48,10 @@ export async function runIdempotentCreate<T extends ResponseBody>(
   },
 ): Promise<Response> {
   if (input.key === null) {
-    const created = await input.create(sql);
-    return NextResponse.json(created.body, { status: created.status });
+    return sql.begin(async (tx) => {
+      const created = await input.create(tx);
+      return NextResponse.json(created.body, { status: created.status });
+    });
   }
 
   const requestHash = hashRequestBody(input.requestBody);

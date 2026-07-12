@@ -244,6 +244,49 @@ describe("POST /api/tasks", () => {
     expect(replacements).toHaveLength(3);
   });
 
+  it("serializes concurrent non-idempotent replacement creates at the family budget limit", async () => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, 'Concurrent no-key recovery goal', 'active')
+      RETURNING id
+    `;
+    const [sourceTask] = await db`
+      INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status)
+      VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', 'Concurrent no-key budget source', 'Original work', 'failed')
+      RETURNING id
+    `;
+    for (let i = 1; i <= 2; i += 1) {
+      await db`
+        INSERT INTO tasks (hive_id, goal_id, assigned_to, created_by, title, brief, status, parent_task_id)
+        VALUES (${testHiveId}, ${goal.id}, 'dev-agent', 'goal-supervisor', ${`Concurrent no-key existing replacement ${i}`}, 'Recovery work', 'failed', ${sourceTask.id})
+      `;
+    }
+
+    const attempts = await Promise.all([1, 2, 3].map(async (attempt) => {
+      const res = await createTask(taskCreateRequest({
+        hiveId: testHiveId,
+        assignedTo: "dev-agent",
+        title: `${TEST_PREFIX}Concurrent no-key replacement task ${attempt}`,
+        brief: "Only one concurrent replacement should fit the family budget",
+        goalId: goal.id,
+        sourceTaskId: sourceTask.id,
+        createdBy: "goal-supervisor",
+      }));
+      return { status: res.status, body: await res.json() };
+    }));
+
+    expect(attempts.filter((attempt) => attempt.status === 201)).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 409)).toHaveLength(2);
+    for (const blocked of attempts.filter((attempt) => attempt.status === 409)) {
+      expect(blocked.body.error).toContain("Recovery budget exhausted");
+    }
+
+    const replacements = await db`
+      SELECT id FROM tasks WHERE parent_task_id = ${sourceTask.id}
+    `;
+    expect(replacements).toHaveLength(3);
+  });
+
   it("leaves projectId null when projectId is omitted with one project", async () => {
     await db`
       INSERT INTO projects (hive_id, slug, name, workspace_path)

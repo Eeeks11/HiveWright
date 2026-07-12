@@ -464,7 +464,7 @@ async function lockFailureFamilyRootForReplacementBudget(db: SqlExecutor, taskId
     SELECT id
     FROM tasks
     WHERE id = ${root.id}
-    FOR UPDATE
+    FOR NO KEY UPDATE
   `;
 }
 
