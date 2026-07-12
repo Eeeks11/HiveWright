@@ -10,6 +10,10 @@ import {
   acquireGoalSupervisorWakeLock,
   findStaleZeroProgressGoals,
   recoverStaleZeroProgressGoals,
+  findPendingGoalCommentWakes,
+  claimGoalCommentWake,
+  markGoalCommentWakeProcessed,
+  releaseGoalCommentWakeClaim,
 } from "@/dispatcher/goal-lifecycle";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
@@ -345,6 +349,155 @@ describe("claimSprintWakeUp", () => {
 
     const [row] = await sql`SELECT last_woken_sprint FROM goals WHERE id = ${goal.id}`;
     expect(row.last_woken_sprint).toBe(3);
+  });
+});
+
+describe("goal comment supervisor wake reconciliation", () => {
+  it("leaves a contended owner comment pending, then reconciles it exactly once after the wake lock releases", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-contended', 'active', 'gs-comment-contended')
+      RETURNING *
+    `;
+    const release = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(release).not.toBeNull();
+
+    const [comment] = await sql`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES (${goal.id}, 'please retry this with the new details', 'owner')
+      RETURNING *
+    `;
+
+    const contendedClaim = await claimGoalCommentWake(sql, comment.id as string, 5);
+    expect(contendedClaim).toBeDefined();
+    const contendedLock = await acquireGoalSupervisorWakeLock(sql, goal.id as string);
+    expect(contendedLock).toBeNull();
+    await releaseGoalCommentWakeClaim(sql, comment.id as string);
+
+    let [commentState] = await sql`
+      SELECT supervisor_wake_status, supervisor_wake_attempts, supervisor_woken_at
+      FROM goal_comments
+      WHERE id = ${comment.id}
+    `;
+    expect(commentState.supervisor_wake_status).toBe("pending");
+    expect(commentState.supervisor_woken_at).toBeNull();
+
+    await release!();
+
+    const pending = await findPendingGoalCommentWakes(sql);
+    expect(pending.map((candidate) => candidate.commentId)).toContain(comment.id);
+
+    const firstClaim = await claimGoalCommentWake(sql, comment.id as string, 5);
+    expect(firstClaim).toEqual(
+      expect.objectContaining({ commentId: comment.id, goalId: goal.id }),
+    );
+    await markGoalCommentWakeProcessed(sql, comment.id as string);
+
+    const secondClaim = await claimGoalCommentWake(sql, comment.id as string, 5);
+    expect(secondClaim).toBeNull();
+    expect(await findPendingGoalCommentWakes(sql)).toEqual([]);
+
+    [commentState] = await sql`
+      SELECT supervisor_wake_status, supervisor_wake_attempts, supervisor_woken_at
+      FROM goal_comments
+      WHERE id = ${comment.id}
+    `;
+    expect(commentState.supervisor_wake_status).toBe("woken");
+    expect(commentState.supervisor_wake_attempts).toBe(2);
+    expect(commentState.supervisor_woken_at).toBeInstanceOf(Date);
+  });
+
+  it("reclaims a stale claimed owner comment but does not double-claim a fresh claim", async () => {
+    const [goal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-stale-claim', 'active', 'gs-comment-stale-claim')
+      RETURNING *
+    `;
+    const [staleComment] = await sql`
+      INSERT INTO goal_comments (
+        goal_id,
+        body,
+        created_by,
+        supervisor_wake_status,
+        supervisor_wake_claimed_at,
+        supervisor_wake_attempts
+      )
+      VALUES (
+        ${goal.id},
+        'retry me after a crash',
+        'owner',
+        'claimed',
+        NOW() - INTERVAL '15 minutes',
+        1
+      )
+      RETURNING *
+    `;
+    const [freshComment] = await sql`
+      INSERT INTO goal_comments (
+        goal_id,
+        body,
+        created_by,
+        supervisor_wake_status,
+        supervisor_wake_claimed_at,
+        supervisor_wake_attempts
+      )
+      VALUES (
+        ${goal.id},
+        'do not retry yet',
+        'owner',
+        'claimed',
+        NOW(),
+        1
+      )
+      RETURNING *
+    `;
+
+    const pending = await findPendingGoalCommentWakes(sql, 25, 10);
+    expect(pending.map((candidate) => candidate.commentId)).toContain(staleComment.id);
+    expect(pending.map((candidate) => candidate.commentId)).not.toContain(freshComment.id);
+
+    const [first, second] = await Promise.all([
+      claimGoalCommentWake(sql, staleComment.id as string, 10),
+      claimGoalCommentWake(sql, staleComment.id as string, 10),
+    ]);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+
+    const [commentState] = await sql`
+      SELECT supervisor_wake_status, supervisor_wake_attempts
+      FROM goal_comments
+      WHERE id = ${staleComment.id}
+    `;
+    expect(commentState.supervisor_wake_status).toBe("claimed");
+    expect(commentState.supervisor_wake_attempts).toBe(2);
+  });
+
+  it("does not queue supervisor-authored or inactive/no-session goal comments", async () => {
+    const [activeGoal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-active', 'active', 'gs-comment-active')
+      RETURNING *
+    `;
+    const [noSessionGoal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-no-session', 'active', NULL)
+      RETURNING *
+    `;
+    const [inactiveGoal] = await sql`
+      INSERT INTO goals (hive_id, title, status, session_id)
+      VALUES (${bizId}, 'glc-comment-inactive', 'achieved', 'gs-comment-inactive')
+      RETURNING *
+    `;
+
+    await sql`
+      INSERT INTO goal_comments (goal_id, body, created_by)
+      VALUES
+        (${activeGoal.id}, 'supervisor reply', 'goal-supervisor'),
+        (${noSessionGoal.id}, 'owner before session', 'owner'),
+        (${inactiveGoal.id}, 'owner after done', 'owner')
+    `;
+
+    const pending = await findPendingGoalCommentWakes(sql);
+    expect(pending).toEqual([]);
   });
 });
 

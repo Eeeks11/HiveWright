@@ -25,6 +25,11 @@ import {
   findOrphanedWakeUps,
   recoverStaleZeroProgressGoals,
   withGoalSupervisorWakeLock,
+  findPendingGoalCommentWakes,
+  claimGoalCommentWake,
+  releaseGoalCommentWakeClaim,
+  markGoalCommentWakeProcessed,
+  markGoalCommentWakeSkipped,
 } from "./goal-lifecycle";
 import {
   createSupervisorWakeReconciliationState,
@@ -1956,6 +1961,7 @@ export class Dispatcher {
       // Skip comments the supervisor itself posted — otherwise its reply
       // would re-trigger the wake and loop forever.
       if (comment.created_by === "goal-supervisor") {
+        await markGoalCommentWakeSkipped(this.sql, comment.id);
         return;
       }
       const [goal] = await this.sql<
@@ -1966,6 +1972,7 @@ export class Dispatcher {
         console.log(
           `[dispatcher] goal ${goal.id} is not active (status=${goal.status}); skipping comment wake.`,
         );
+        await markGoalCommentWakeSkipped(this.sql, comment.id);
         return;
       }
       if (!goal.session_id) {
@@ -1974,14 +1981,21 @@ export class Dispatcher {
         );
         return;
       }
+
+      const claimed = await claimGoalCommentWake(this.sql, comment.id);
+      if (!claimed) {
+        return;
+      }
+
       const lockedWake = await withGoalSupervisorWakeLock(this.sql, goal.id, async () => {
         const { wakeUpSupervisorOnComment } = await import("../goals/supervisor");
         return await wakeUpSupervisorOnComment(this.sql, goal.id, comment.id);
       });
       if (!lockedWake.acquired) {
         console.log(
-          `[dispatcher] Supervisor wake already in flight for goal ${goal.id}; coalescing comment ${comment.id}.`,
+          `[dispatcher] Supervisor wake already in flight for goal ${goal.id}; leaving comment ${comment.id} pending for reconciliation.`,
         );
+        await releaseGoalCommentWakeClaim(this.sql, comment.id);
         return;
       }
       const result = lockedWake.result;
@@ -1989,13 +2003,18 @@ export class Dispatcher {
         console.error(
           `[dispatcher] comment wake-up failed for goal ${goal.id} comment ${comment.id}: ${result.error}`,
         );
+        await releaseGoalCommentWakeClaim(this.sql, comment.id);
       } else {
+        await markGoalCommentWakeProcessed(this.sql, comment.id);
         console.log(
           `[dispatcher] Comment wake-up complete for goal ${goal.id} (comment ${comment.id}).`,
         );
       }
     } catch (err) {
       console.error(`[dispatcher] handleNewGoalComment error for ${commentId}:`, err);
+      await releaseGoalCommentWakeClaim(this.sql, commentId).catch((releaseErr) =>
+        console.error(`[dispatcher] goal-comment claim release failed for ${commentId}:`, releaseErr),
+      );
     }
   }
 
@@ -2016,6 +2035,17 @@ export class Dispatcher {
     }
   }
 
+  private async processPendingGoalCommentWakes() {
+    const pending = await findPendingGoalCommentWakes(this.sql);
+    if (pending.length === 0) return;
+    console.log(
+      `[dispatcher] Fallback found ${pending.length} pending owner goal-comment wake(s).`,
+    );
+    for (const comment of pending) {
+      await this.handleNewGoalComment(comment.commentId);
+    }
+  }
+
   private async processPendingDecisionOwnerComments() {
     const pending = await findPendingOwnerDecisionComments(this.sql);
     if (pending.length === 0) return;
@@ -2030,6 +2060,7 @@ export class Dispatcher {
   private async runGoalLifecycleCheck() {
     try {
       await this.processPendingDecisionOwnerComments();
+      await this.processPendingGoalCommentWakes();
 
       const recoveredZeroProgressGoals = await recoverStaleZeroProgressGoals(this.sql);
       for (const recovered of recoveredZeroProgressGoals) {
