@@ -298,38 +298,78 @@ export async function markPipelineTaskRunning(sql: QuerySql, taskId: string): Pr
   `;
 }
 
+export type FailPipelineRunFromTaskResult =
+  | { status: "failed"; runId: string }
+  | { status: "not_fail_eligible"; runId: string }
+  | { status: "not_pipeline_task" };
+
 export async function failPipelineRunFromTask(
   sql: Sql,
   input: { taskId: string; reason: string },
-): Promise<{ status: "failed"; runId: string } | { status: "not_pipeline_task" }> {
-  const [stepRun] = await sql<{ id: string; run_id: string }[]>`
-    SELECT id, run_id
-    FROM pipeline_step_runs
-    WHERE task_id = ${input.taskId}
-    LIMIT 1
-  `;
-  if (!stepRun) return { status: "not_pipeline_task" };
+): Promise<FailPipelineRunFromTaskResult> {
+  return sql.begin(async (tx) => {
+    const [stepRun] = await tx<{
+      id: string;
+      run_id: string;
+      step_id: string;
+      status: string;
+      run_status: string;
+      current_step_id: string | null;
+    }[]>`
+      SELECT
+        psr.id,
+        psr.run_id,
+        psr.step_id,
+        psr.status,
+        pr.status AS run_status,
+        pr.current_step_id
+      FROM pipeline_step_runs psr
+      JOIN pipeline_runs pr ON pr.id = psr.run_id
+      WHERE psr.task_id = ${input.taskId}
+      LIMIT 1
+      FOR UPDATE OF psr, pr
+    `;
+    if (!stepRun) return { status: "not_pipeline_task" };
 
-  await sql.begin(async (tx) => {
+    const [task] = await tx<{ status: string }[]>`
+      SELECT status
+      FROM tasks
+      WHERE id = ${input.taskId}
+      FOR UPDATE
+    `;
+
+    const failureEligible =
+      stepRun.run_status === "active" &&
+      stepRun.current_step_id === stepRun.step_id &&
+      ["pending", "running"].includes(stepRun.status) &&
+      ["pending", "active"].includes(task?.status ?? "");
+
+    if (!failureEligible) {
+      return { status: "not_fail_eligible", runId: stepRun.run_id };
+    }
+
     await tx`
       UPDATE pipeline_step_runs
       SET status = 'failed', result_summary = ${input.reason}, completed_at = NOW(), updated_at = NOW()
       WHERE id = ${stepRun.id}
+        AND status IN ('pending', 'running')
     `;
     await tx`
       UPDATE pipeline_runs
       SET status = 'failed', supervisor_handoff = ${input.reason}, completed_at = NOW(), updated_at = NOW()
       WHERE id = ${stepRun.run_id}
         AND status = 'active'
+        AND current_step_id = ${stepRun.step_id}
     `;
     await tx`
       UPDATE tasks
       SET status = 'failed', failure_reason = ${input.reason}, updated_at = NOW()
       WHERE id = ${input.taskId}
+        AND status IN ('pending', 'active')
     `;
-  });
 
-  return { status: "failed", runId: stepRun.run_id };
+    return { status: "failed", runId: stepRun.run_id };
+  });
 }
 
 export type PipelineValidationIssue = {

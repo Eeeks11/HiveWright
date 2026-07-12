@@ -459,6 +459,54 @@ verification: unit checked.` });
     expect(nextTask).toEqual({ assigned_to: "claimer-test-role", parent_task_id: started.taskId, qa_required: true });
   });
 
+  it("does not let a late retry-cap failure overwrite a completed and advanced pipeline step", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    await sql`UPDATE pipeline_steps SET max_retries = 0 WHERE id = ${pipeline.firstStepId}`;
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, `summary: Build completed through dispatcher path.
+verification: unit checked.`);
+    await releaseTask(sql, started.taskId, 60, "Late retry-cap failure should not overwrite completion.");
+
+    const stepRuns = await sql<{ step_id: string; task_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const [run] = await sql<{ status: string; current_step_id: string; supervisor_handoff: string | null }[]>`
+      SELECT status, current_step_id, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [sourceTask] = await sql<{ status: string; result_summary: string | null; failure_reason: string | null }[]>`
+      SELECT status, result_summary, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+    const [nextTask] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${stepRuns[1].task_id}
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({
+      step_id: pipeline.firstStepId,
+      task_id: started.taskId,
+      status: "complete",
+      result_summary: `summary: Build completed through dispatcher path.
+verification: unit checked.`,
+    });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending", result_summary: null });
+    expect(run).toEqual({ status: "active", current_step_id: pipeline.secondStepId, supervisor_handoff: null });
+    expect(sourceTask).toEqual({
+      status: "completed",
+      result_summary: `summary: Build completed through dispatcher path.
+verification: unit checked.`,
+      failure_reason: null,
+    });
+    expect(nextTask).toEqual({ status: "pending", failure_reason: null });
+  });
+
   it("advances when required output fields are markdown bold labels", async () => {
     const pipeline = await seedTwoStepPipelineForClaimedTask();
     const started = await startPipelineRun(sql, {
