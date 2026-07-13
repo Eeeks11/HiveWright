@@ -179,6 +179,231 @@ export async function acquireGoalSupervisorWakeLock(
   }
 }
 
+export interface GoalCommentWakeCandidate {
+  commentId: string;
+  goalId: string;
+  sessionId: string;
+  createdAt: Date;
+  createdBy: string;
+  wakeStatus: string;
+  wakeClaimedAt: Date | null;
+  wakeAttempts: number;
+}
+
+function mapGoalCommentWakeCandidate(row: Record<string, unknown>): GoalCommentWakeCandidate {
+  return {
+    commentId: row.comment_id as string,
+    goalId: row.goal_id as string,
+    sessionId: row.session_id as string,
+    createdAt: row.created_at as Date,
+    createdBy: row.created_by as string,
+    wakeStatus: row.supervisor_wake_status as string,
+    wakeClaimedAt: (row.supervisor_wake_claimed_at as Date | null) ?? null,
+    wakeAttempts: Number(row.supervisor_wake_attempts ?? 0),
+  };
+}
+
+/**
+ * Find owner comments that still need a supervisor wake. Supervisor-authored
+ * comments are excluded to prevent self-wake loops. Active goals without a
+ * supervisor session are left pending until normal goal-start discovery creates
+ * the session; inactive goals are not candidates.
+ */
+export async function findPendingGoalCommentWakes(
+  sql: Sql,
+  limit = 25,
+  claimStaleAfterMinutes = 10,
+): Promise<GoalCommentWakeCandidate[]> {
+  const rows = await sql`
+    SELECT
+      c.id AS comment_id,
+      c.goal_id,
+      c.created_at,
+      c.created_by,
+      c.supervisor_wake_status,
+      c.supervisor_wake_claimed_at,
+      c.supervisor_wake_attempts,
+      g.session_id
+    FROM goal_comments c
+    JOIN goals g ON g.id = c.goal_id
+    WHERE c.created_by <> 'goal-supervisor'
+      AND g.status = 'active'
+      AND g.session_id IS NOT NULL
+      AND (
+        c.supervisor_wake_status = 'pending'
+        OR (
+          c.supervisor_wake_status = 'claimed'
+          AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM pg_locks l
+            WHERE l.locktype = 'advisory'
+              AND l.granted
+              AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+              AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+          )
+        )
+      )
+    ORDER BY c.created_at ASC, c.id ASC
+    LIMIT ${limit}
+  `;
+  return rows.map((row) => mapGoalCommentWakeCandidate(row));
+}
+
+/** Atomically claim a single pending/stale owner comment wake. */
+export async function claimGoalCommentWake(
+  sql: Sql,
+  commentId: string,
+  claimStaleAfterMinutes = 10,
+): Promise<GoalCommentWakeCandidate | null> {
+  const rows = await sql`
+    WITH candidate AS MATERIALIZED (
+      SELECT c.id, c.goal_id, c.created_at, c.created_by, g.session_id
+      FROM goal_comments c
+      JOIN goals g ON g.id = c.goal_id
+      WHERE c.id = ${commentId}
+        AND c.created_by <> 'goal-supervisor'
+        AND g.status = 'active'
+        AND g.session_id IS NOT NULL
+        AND (
+          c.supervisor_wake_status = 'pending'
+          OR (
+            c.supervisor_wake_status = 'claimed'
+            AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_locks l
+              WHERE l.locktype = 'advisory'
+                AND l.granted
+                AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+                AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+            )
+          )
+        )
+    ), claimed AS (
+      UPDATE goal_comments c
+      SET
+        supervisor_wake_status = 'claimed',
+        supervisor_wake_claimed_at = NOW(),
+        supervisor_wake_attempts = c.supervisor_wake_attempts + 1
+      FROM candidate
+      WHERE c.id = candidate.id
+        AND (
+          c.supervisor_wake_status = 'pending'
+          OR (
+            c.supervisor_wake_status = 'claimed'
+            AND c.supervisor_wake_claimed_at < NOW() - (${claimStaleAfterMinutes} * INTERVAL '1 minute')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_locks l
+              WHERE l.locktype = 'advisory'
+                AND l.granted
+                AND l.classid = ((hashtext('hivewright:goal-supervisor-wake')::bigint & 4294967295))::oid
+                AND l.objid = ((hashtext(c.goal_id::text)::bigint & 4294967295))::oid
+            )
+          )
+        )
+      RETURNING
+        c.id AS comment_id,
+        c.goal_id,
+        c.created_at,
+        c.created_by,
+        c.supervisor_wake_status,
+        c.supervisor_wake_claimed_at,
+        c.supervisor_wake_attempts,
+        candidate.session_id
+    )
+    SELECT * FROM claimed
+  `;
+  return rows[0] ? mapGoalCommentWakeCandidate(rows[0]) : null;
+}
+
+export async function releaseGoalCommentWakeClaim(
+  sql: Sql,
+  commentId: string,
+  claimedAt?: Date | null,
+): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'pending',
+        supervisor_wake_claimed_at = NULL
+      WHERE id = ${commentId}
+        AND supervisor_wake_status = 'claimed'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
+  await sql`
+    UPDATE goal_comments
+    SET
+      supervisor_wake_status = 'pending',
+      supervisor_wake_claimed_at = NULL
+    WHERE id = ${commentId}
+      AND supervisor_wake_status = 'claimed'
+  `;
+}
+
+export async function markGoalCommentWakeProcessed(
+  sql: Sql,
+  commentId: string,
+  claimedAt?: Date | null,
+): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'woken',
+        supervisor_wake_claimed_at = NULL,
+        supervisor_woken_at = NOW()
+      WHERE id = ${commentId}
+        AND supervisor_wake_status = 'claimed'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
+  await sql`
+    UPDATE goal_comments
+    SET
+      supervisor_wake_status = 'woken',
+      supervisor_wake_claimed_at = NULL,
+      supervisor_woken_at = NOW()
+    WHERE id = ${commentId}
+      AND supervisor_wake_status = 'claimed'
+  `;
+}
+
+export async function markGoalCommentWakeSkipped(
+  sql: Sql,
+  commentId: string,
+  claimedAt?: Date | null,
+): Promise<void> {
+  if (claimedAt) {
+    await sql`
+      UPDATE goal_comments
+      SET
+        supervisor_wake_status = 'skipped',
+        supervisor_wake_claimed_at = NULL
+      WHERE id = ${commentId}
+        AND supervisor_wake_status <> 'woken'
+        AND supervisor_wake_claimed_at = ${claimedAt}
+    `;
+    return;
+  }
+
+  await sql`
+    UPDATE goal_comments
+    SET
+      supervisor_wake_status = 'skipped',
+      supervisor_wake_claimed_at = NULL
+    WHERE id = ${commentId}
+      AND supervisor_wake_status <> 'woken'
+  `;
+}
+
 export async function withGoalSupervisorWakeLock<T>(
   sql: Sql,
   goalId: string,
