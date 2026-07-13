@@ -2,13 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_POSTGRES_DEFAULT_PORT,
   resolveLocalPostgresConfig,
+  resolveLocalPostgresConfigWithOptions,
   resolveRuntimeRoot,
   shouldUseManagedLocalPostgres,
 } from "../../scripts/lib/local-postgres";
 
 describe("local embedded Postgres runtime config", () => {
   it("uses ~/.hivewright by default and keeps data outside the repo", () => {
-    const config = resolveLocalPostgresConfig({ HOME: "/home/tester" });
+    const config = resolveLocalPostgresConfigWithOptions(
+      { HOME: "/home/tester" },
+      {
+        userHomeDir: "/home/tester",
+        osHomeDir: "/home/tester",
+        runtimeRootExists: () => false,
+      },
+    );
 
     expect(config.runtimeRoot).toBe("/home/tester/.hivewright");
     expect(config.stateDir).toBe("/home/tester/.hivewright/postgres");
@@ -35,6 +43,17 @@ describe("local embedded Postgres runtime config", () => {
     expect(config.dataDir).toBe("/tmp/hw-runtime/postgres/data");
     expect(config.port).toBe(55440);
     expect(config.url).toContain("127.0.0.1:55440/hivewrightv2");
+  });
+
+  it("falls back to the real user home when task HOME has no runtime root", () => {
+    expect(resolveRuntimeRoot(
+      { HOME: "/tmp/hivewright-agent-home" },
+      {
+        userHomeDir: "/home/tester",
+        osHomeDir: "/tmp/hivewright-agent-home",
+        runtimeRootExists: (candidate) => candidate === "/home/tester/.hivewright",
+      },
+    )).toBe("/home/tester/.hivewright");
   });
 
   it("preserves explicit DATABASE_URL and only manages local Postgres when unset", () => {

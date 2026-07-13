@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as os from "node:os";
+import type { RuntimeHomeResolutionOptions } from "../../src/runtime/paths";
+import { resolveDefaultRuntimeHome } from "../../src/runtime/paths";
 
 export const LOCAL_POSTGRES_DATABASE = "hivewrightv2";
 export const LOCAL_POSTGRES_USER = "hivewright";
@@ -24,12 +25,22 @@ export type LocalPostgresConfig = {
   safeUrl: string;
 };
 
-export function resolveRuntimeRoot(env: EnvLike = process.env): string {
-  return path.resolve(env.HIVEWRIGHT_RUNTIME_ROOT || path.join(env.HOME || os.homedir(), ".hivewright"));
+export function resolveRuntimeRoot(
+  env: EnvLike = process.env,
+  options: RuntimeHomeResolutionOptions = {},
+): string {
+  return path.resolve(env.HIVEWRIGHT_RUNTIME_ROOT || path.join(resolveDefaultRuntimeHome(env, options), ".hivewright"));
 }
 
 export function resolveLocalPostgresConfig(env: EnvLike = process.env): LocalPostgresConfig {
-  const runtimeRoot = resolveRuntimeRoot(env);
+  return resolveLocalPostgresConfigWithOptions(env);
+}
+
+export function resolveLocalPostgresConfigWithOptions(
+  env: EnvLike = process.env,
+  options: RuntimeHomeResolutionOptions = {},
+): LocalPostgresConfig {
+  const runtimeRoot = resolveRuntimeRoot(env, options);
   const port = parsePort(env.HIVEWRIGHT_EMBEDDED_POSTGRES_PORT);
   const stateDir = path.join(runtimeRoot, "postgres");
   const dataDir = path.join(stateDir, "data");

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import * as process from "node:process";
 import postgres from "postgres";
 import {
@@ -16,6 +17,25 @@ if (command.length === 0) {
 }
 
 const config = resolveLocalPostgresConfig();
+
+function commandAvailable(name: string): boolean {
+  const result = spawnSync("bash", ["-lc", `command -v ${name}`], {
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  return result.status === 0;
+}
+
+function resolveTsxCommand(): string[] {
+  return commandAvailable("tsx") ? ["tsx"] : ["npx", "--yes", "tsx"];
+}
+
+function normalizeCommand(commandToRun: string[]): string[] {
+  if (commandToRun[0] === "tsx" && !commandAvailable("tsx")) {
+    return ["npx", "--yes", ...commandToRun];
+  }
+  return commandToRun;
+}
 
 async function canConnectToManagedDatabase(url: string): Promise<boolean> {
   const sql = postgres(url, { max: 1, connect_timeout: 2 });
@@ -80,7 +100,8 @@ function spawnDetachedDaemon() {
   ensureLocalPostgresDirs(config);
   const out = fs.openSync(config.logFile, "a", 0o600);
   const err = fs.openSync(config.logFile, "a", 0o600);
-  const child = spawn("tsx", ["scripts/embedded-postgres-daemon.ts"], {
+  const tsxCommand = resolveTsxCommand();
+  const child = spawn(tsxCommand[0]!, [...tsxCommand.slice(1), "scripts/embedded-postgres-daemon.ts"], {
     cwd: process.cwd(),
     env: process.env,
     detached: true,
@@ -123,8 +144,9 @@ async function run(commandToRun: string[], env: NodeJS.ProcessEnv): Promise<numb
 }
 
 async function main() {
+  const normalizedCommand = normalizeCommand(command);
   if (!shouldUseManagedLocalPostgres()) {
-    process.exit(await run(command, process.env));
+    process.exit(await run(normalizedCommand, process.env));
   }
 
   await withStartupLock(async () => {
@@ -144,13 +166,13 @@ async function main() {
   };
 
   if (shouldRunMigrations()) {
-    const migrationExit = await run(["tsx", "scripts/migrate-app-db.ts"], env);
+    const migrationExit = await run([...resolveTsxCommand(), "scripts/migrate-app-db.ts"], env);
     if (migrationExit !== 0) {
       process.exit(migrationExit);
     }
   }
 
-  process.exit(await run(command, env));
+  process.exit(await run(normalizedCommand, env));
 }
 
 main().catch((error) => {

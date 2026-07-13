@@ -1,8 +1,9 @@
 import * as path from "node:path";
+import { resolveHivewrightRuntimeRoot } from "@/runtime/paths";
 
 type EnvLike = Record<string, string | undefined>;
 
 export function resolveUpdateLogDirectory(env: EnvLike = process.env): string {
-  const runtimeRoot = env.HIVEWRIGHT_RUNTIME_ROOT || path.join(env.HOME || process.cwd(), ".hivewright");
+  const runtimeRoot = resolveHivewrightRuntimeRoot(env);
   return path.join(runtimeRoot, "logs", "updates");
 }
