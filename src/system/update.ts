@@ -150,9 +150,11 @@ export function parseUpdateStatus(snapshot: GitUpdateSnapshot): UpdateStatus {
   }
 
   const updateAvailable = relation === "behind" || snapshot.upstreamCommit !== snapshot.currentCommit;
+  const hasRuntimeEvidence = Object.prototype.hasOwnProperty.call(snapshot, "latestDeployedCommit")
+    || Object.prototype.hasOwnProperty.call(snapshot, "latestBuildHash");
   const deployedMismatch = !snapshot.latestDeployedCommit || snapshot.latestDeployedCommit !== snapshot.currentCommit;
   const buildMismatch = !snapshot.latestBuildHash || snapshot.latestBuildHash !== snapshot.currentCommit;
-  if (!updateAvailable && (deployedMismatch || buildMismatch)) {
+  if (!updateAvailable && hasRuntimeEvidence && (deployedMismatch || buildMismatch)) {
     return withRuntimeEvidence({
       currentVersion: snapshot.packageVersion,
       currentCommit: snapshot.currentCommit,

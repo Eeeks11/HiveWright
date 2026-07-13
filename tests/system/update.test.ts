@@ -92,6 +92,21 @@ describe("HiveWright update system", () => {
     expect(status.state).toBe("current");
   });
 
+  it("marks a clean fallback checkout current when runtime cutover evidence is absent", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+    });
+
+    expect(status.updateAvailable).toBe(false);
+    expect(status.state).toBe("current");
+  });
+
   it("requires repair when local and upstream match but runtime cutover evidence is stale", () => {
     const status = parseUpdateStatus({
       packageVersion: "1.2.3",
@@ -103,6 +118,25 @@ describe("HiveWright update system", () => {
       relation: "current",
       latestDeployedCommit: "old1234",
       latestBuildHash: "old1234",
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.updateAvailable).toBe(true);
+    expect(status.state).toBe("repair-required");
+    expect(plan.allowed).toBe(true);
+  });
+
+  it("requires repair when privileged runtime cutover evidence is explicitly missing", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+      latestDeployedCommit: null,
+      latestBuildHash: null,
     });
     const plan = buildUpdatePlan(status, { apply: true });
 
