@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 export type ExecutionCapsuleStatus = "active" | "qa_failed" | "completed" | "abandoned";
 
@@ -114,7 +114,7 @@ export async function markCapsuleQaFailed(
   `;
 }
 
-export async function markCapsuleCompleted(sql: Sql, taskId: string): Promise<void> {
+export async function markCapsuleCompleted(sql: Sql | TransactionSql, taskId: string): Promise<void> {
   await sql`
     UPDATE task_execution_capsules
     SET status = 'completed',

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
 import { startPipelineRun } from "@/pipelines/service";
@@ -458,6 +459,54 @@ verification: unit checked.` });
     expect(nextTask).toEqual({ assigned_to: "claimer-test-role", parent_task_id: started.taskId, qa_required: true });
   });
 
+  it("does not let a late retry-cap failure overwrite a completed and advanced pipeline step", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    await sql`UPDATE pipeline_steps SET max_retries = 0 WHERE id = ${pipeline.firstStepId}`;
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    await completeTask(sql, started.taskId, `summary: Build completed through dispatcher path.
+verification: unit checked.`);
+    await releaseTask(sql, started.taskId, 60, "Late retry-cap failure should not overwrite completion.");
+
+    const stepRuns = await sql<{ step_id: string; task_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const [run] = await sql<{ status: string; current_step_id: string; supervisor_handoff: string | null }[]>`
+      SELECT status, current_step_id, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const [sourceTask] = await sql<{ status: string; result_summary: string | null; failure_reason: string | null }[]>`
+      SELECT status, result_summary, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+    const [nextTask] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${stepRuns[1].task_id}
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({
+      step_id: pipeline.firstStepId,
+      task_id: started.taskId,
+      status: "complete",
+      result_summary: `summary: Build completed through dispatcher path.
+verification: unit checked.`,
+    });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending", result_summary: null });
+    expect(run).toEqual({ status: "active", current_step_id: pipeline.secondStepId, supervisor_handoff: null });
+    expect(sourceTask).toEqual({
+      status: "completed",
+      result_summary: `summary: Build completed through dispatcher path.
+verification: unit checked.`,
+      failure_reason: null,
+    });
+    expect(nextTask).toEqual({ status: "pending", failure_reason: null });
+  });
+
   it("advances when required output fields are markdown bold labels", async () => {
     const pipeline = await seedTwoStepPipelineForClaimedTask();
     const started = await startPipelineRun(sql, {
@@ -686,5 +735,128 @@ verification: checked.`);
     expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, status: "complete", result_summary: `summary: First completion.
 verification: checked.` });
     expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
+  });
+
+  it("rolls back task completion when next step-run insertion fails and retries exactly once", async () => {
+    const pipeline = await seedTwoStepPipelineForClaimedTask();
+    const started = await startPipelineRun(sql, {
+      hiveId: bizId,
+      templateId: pipeline.templateId,
+      sourceContext: "Route this existing work through a pipeline.",
+    });
+
+    const injectedDuplicateStepRun = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_step_runs (run_id, step_id, status)
+      VALUES (${started.runId}, ${pipeline.secondStepId}, 'pending')
+      RETURNING id
+    `;
+    expect(injectedDuplicateStepRun).toHaveLength(1);
+
+    const firstResult = `summary: Completion should roll back.
+verification: duplicate step-run blocks advancement.`;
+    await expect(completeTask(sql, started.taskId, firstResult)).rejects.toThrow();
+
+    const [rolledBackTask] = await sql<{ status: string; result_summary: string | null; completed_at: Date | null }[]>`
+      SELECT status, result_summary, completed_at
+      FROM tasks
+      WHERE id = ${started.taskId}
+    `;
+    const [rolledBackStepRun] = await sql<{ status: string; result_summary: string | null; completed_at: Date | null }[]>`
+      SELECT status, result_summary, completed_at
+      FROM pipeline_step_runs
+      WHERE task_id = ${started.taskId}
+    `;
+    const [rolledBackRun] = await sql<{ status: string; current_step_id: string | null }[]>`
+      SELECT status, current_step_id
+      FROM pipeline_runs
+      WHERE id = ${started.runId}
+    `;
+    const duplicateNextTasks = await sql<{ id: string }[]>`
+      SELECT id
+      FROM tasks
+      WHERE parent_task_id = ${started.taskId}
+    `;
+
+    expect(rolledBackTask).toEqual({ status: "pending", result_summary: null, completed_at: null });
+    expect(rolledBackStepRun).toEqual({ status: "pending", result_summary: null, completed_at: null });
+    expect(rolledBackRun).toEqual({ status: "active", current_step_id: pipeline.firstStepId });
+    expect(duplicateNextTasks).toHaveLength(0);
+
+    await sql`
+      DELETE FROM pipeline_step_runs
+      WHERE id = ${injectedDuplicateStepRun[0].id}
+    `;
+
+    const retryResult = `summary: Completion retried safely.
+verification: duplicate injection removed.`;
+    await completeTask(sql, started.taskId, retryResult);
+    await completeTask(sql, started.taskId, `summary: Duplicate retry should be ignored.
+verification: checked.`);
+
+    const stepRuns = await sql<{ step_id: string; task_id: string | null; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const nextTasks = await sql<{ id: string; status: string }[]>`
+      SELECT id, status
+      FROM tasks
+      WHERE parent_task_id = ${started.taskId}
+      ORDER BY created_at ASC
+    `;
+
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({ step_id: pipeline.firstStepId, task_id: started.taskId, status: "complete", result_summary: retryResult });
+    expect(stepRuns[1]).toMatchObject({ step_id: pipeline.secondStepId, status: "pending" });
+    expect(nextTasks).toHaveLength(1);
+    expect(stepRuns[1].task_id).toBe(nextTasks[0].id);
+  });
+
+  it("documents completion/failure lock ordering for pipeline task races", () => {
+    // PostgreSQL deadlock reproduction is timing-sensitive in unit tests. This
+    // regression proof pins the invariant that prevents the deadlock reviewed
+    // in PR #249: every completion-style transaction locks pipeline_step_runs
+    // and pipeline_runs before updating tasks, matching the failure path.
+    const taskClaimer = readFileSync("src/dispatcher/task-claimer.ts", "utf8");
+    const qaRouter = readFileSync("src/dispatcher/qa-router.ts", "utf8");
+    const pipelineService = readFileSync("src/pipelines/service.ts", "utf8");
+
+    const completeTaskBody = taskClaimer.slice(
+      taskClaimer.indexOf("export async function completeTask"),
+      taskClaimer.indexOf("async function markTaskCompletedInTransaction"),
+    );
+    expect(completeTaskBody.indexOf("lockPipelineStepRunForTask(tx, taskId)")).toBeLessThan(
+      completeTaskBody.indexOf("markTaskCompletedInTransaction(tx"),
+    );
+    expect(completeTaskBody.indexOf("markTaskCompletedInTransaction(tx")).toBeLessThan(
+      completeTaskBody.indexOf("advancePipelineRunFromTaskInTransaction(tx"),
+    );
+
+    const qaLockIndex = qaRouter.indexOf("lockPipelineStepRunForTask(tx, taskId)");
+    const qaTaskUpdateIndex = qaRouter.indexOf("UPDATE tasks", qaLockIndex);
+    const qaAdvanceIndex = qaRouter.indexOf("advancePipelineRunFromTaskInTransaction(tx", qaLockIndex);
+    expect(qaLockIndex).toBeGreaterThan(-1);
+    expect(qaLockIndex).toBeLessThan(qaTaskUpdateIndex);
+    expect(qaTaskUpdateIndex).toBeLessThan(qaAdvanceIndex);
+
+    const lockHelper = pipelineService.slice(
+      pipelineService.indexOf("export async function lockPipelineStepRunForTask"),
+      pipelineService.indexOf("export async function advancePipelineRunFromTaskInTransaction"),
+    );
+    expect(lockHelper).toContain("FROM pipeline_step_runs psr");
+    expect(lockHelper).toContain("JOIN pipeline_runs pr ON pr.id = psr.run_id");
+    expect(lockHelper).toContain("FOR UPDATE OF psr, pr");
+
+    const failureBody = pipelineService.slice(
+      pipelineService.indexOf("export async function failPipelineRunFromTask"),
+      pipelineService.indexOf("export type PipelineValidationIssue"),
+    );
+    expect(failureBody.indexOf("UPDATE pipeline_step_runs")).toBeLessThan(
+      failureBody.indexOf("UPDATE pipeline_runs"),
+    );
+    expect(failureBody.indexOf("UPDATE pipeline_runs")).toBeLessThan(
+      failureBody.indexOf("UPDATE tasks"),
+    );
   });
 });

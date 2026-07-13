@@ -1,4 +1,4 @@
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 export interface OwnerHandoffSignal {
   needsOwner: boolean;
@@ -132,7 +132,7 @@ export function detectOwnerHandoffSignal(deliverable: string, taskTitle = "this 
 }
 
 export async function ensureOwnerHandoffDecision(
-  sql: Sql,
+  sql: Sql | TransactionSql,
   input: EnsureOwnerHandoffDecisionInput,
 ): Promise<{ created: boolean; decisionId?: string; reason?: string }> {
   const signal = detectOwnerHandoffSignal(input.deliverable, input.taskTitle);

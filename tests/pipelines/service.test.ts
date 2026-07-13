@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   startPipelineRun,
   advancePipelineRunFromTask,
+  failPipelineRunFromTask,
   validatePipelineOutputContract,
 } from "../../src/pipelines/service";
 import { createFixtureNamespace, testSql as sql, truncateAll } from "../_lib/test-db";
@@ -244,6 +245,62 @@ describe("pipeline service", () => {
     expect(nextTask.brief).toContain("Review the implementation and report defects.");
     expect(nextTask.brief).toContain("Previous step result:\nBuild is complete.");
     expect(nextTask.qa_required).toBe(true);
+  });
+
+  it("ignores a late failure after a step has already advanced", async () => {
+    const fixture = await seedPipelineFixture();
+    const started = await startPipelineRun(sql, {
+      hiveId: fixture.hiveId,
+      templateId: fixture.templateId,
+      sourceContext: "Initial request context.",
+    });
+
+    const advanced = await advancePipelineRunFromTask(sql, {
+      taskId: started.taskId,
+      resultSummary: "Build is complete.",
+    });
+    expect(advanced.status).toBe("advanced");
+    if (advanced.status !== "advanced") throw new Error("Expected pipeline to advance");
+
+    const lateFailure = await failPipelineRunFromTask(sql, {
+      taskId: started.taskId,
+      reason: "Late watchdog failure should not overwrite completion.",
+    });
+
+    expect(lateFailure).toEqual({ status: "not_fail_eligible", runId: started.runId });
+
+    const [run] = await sql<{ status: string; current_step_id: string | null; supervisor_handoff: string | null }[]>`
+      SELECT status, current_step_id, supervisor_handoff FROM pipeline_runs WHERE id = ${started.runId}
+    `;
+    const stepRuns = await sql<{ step_id: string; task_id: string; status: string; result_summary: string | null }[]>`
+      SELECT step_id, task_id, status, result_summary
+      FROM pipeline_step_runs
+      WHERE run_id = ${started.runId}
+      ORDER BY created_at ASC
+    `;
+    const [sourceTask] = await sql<{ status: string; result_summary: string | null; failure_reason: string | null }[]>`
+      SELECT status, result_summary, failure_reason FROM tasks WHERE id = ${started.taskId}
+    `;
+    const [nextTask] = await sql<{ status: string; failure_reason: string | null }[]>`
+      SELECT status, failure_reason FROM tasks WHERE id = ${advanced.taskId}
+    `;
+
+    expect(run).toEqual({ status: "active", current_step_id: fixture.secondStepId, supervisor_handoff: null });
+    expect(stepRuns).toHaveLength(2);
+    expect(stepRuns[0]).toMatchObject({
+      step_id: fixture.firstStepId,
+      task_id: started.taskId,
+      status: "complete",
+      result_summary: "Build is complete.",
+    });
+    expect(stepRuns[1]).toMatchObject({
+      step_id: fixture.secondStepId,
+      task_id: advanced.taskId,
+      status: "pending",
+      result_summary: null,
+    });
+    expect(sourceTask).toEqual({ status: "completed", result_summary: "Build is complete.", failure_reason: null });
+    expect(nextTask).toEqual({ status: "pending", failure_reason: null });
   });
 
   it("propagates goal and sprint metadata to every pipeline step task so completion wakes the goal supervisor", async () => {

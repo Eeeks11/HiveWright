@@ -8,7 +8,7 @@ import { inheritTaskWorkspaceFromParent } from "./worktree-manager";
 import { markCapsuleCompleted, markCapsuleQaFailed } from "./execution-capsules";
 import { findExistingQaReplanTask } from "./recovery-loop-guard";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
-import { advancePipelineRunFromTask } from "@/pipelines/service";
+import { advancePipelineRunFromTaskInTransaction, lockPipelineStepRunForTask } from "@/pipelines/service";
 import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
 
 const QA_DELIVERABLE_INLINE_LIMIT = 4000;
@@ -447,28 +447,31 @@ export async function processQaResult(
       return;
     }
 
-    await sql`
-      UPDATE tasks
-      SET status = 'completed',
-          completed_at = NOW(),
-          updated_at = NOW(),
-          failure_reason = NULL
-      WHERE id = ${taskId}
-    `;
-    await markCapsuleCompleted(sql, taskId);
+    await sql.begin(async (tx) => {
+      await lockPipelineStepRunForTask(tx, taskId);
+      await tx`
+        UPDATE tasks
+        SET status = 'completed',
+            completed_at = NOW(),
+            updated_at = NOW(),
+            failure_reason = NULL
+        WHERE id = ${taskId}
+      `;
+      await markCapsuleCompleted(tx, taskId);
 
-    if (task) {
-      await ensureOwnerHandoffDecision(sql, {
-        hiveId: task.hive_id,
-        goalId: task.goal_id,
-        taskId: task.id,
-        taskTitle: task.title,
-        deliverable: resultSummary,
+      if (task) {
+        await ensureOwnerHandoffDecision(tx, {
+          hiveId: task.hive_id,
+          goalId: task.goal_id,
+          taskId: task.id,
+          taskTitle: task.title,
+          deliverable: resultSummary,
+        });
+      }
+      await advancePipelineRunFromTaskInTransaction(tx, {
+        taskId,
+        resultSummary,
       });
-    }
-    await advancePipelineRunFromTask(sql, {
-      taskId,
-      resultSummary,
     });
   } else {
     const [task] = await sql`SELECT brief, retry_count, goal_id FROM tasks WHERE id = ${taskId}`;

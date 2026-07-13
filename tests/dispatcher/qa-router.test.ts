@@ -235,6 +235,54 @@ describe("processQaResult", () => {
     expect(nextTask.brief).toContain("Previous step result:\nEdited deliverable");
   });
 
+  it("rolls back QA completion when pipeline advancement fails", async () => {
+    const [template] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_templates (scope, hive_id, slug, name, department, version, active)
+      VALUES ('hive', ${bizId}, 'qa-rollback-pipeline', 'QA rollback pipeline', 'content', 1, true)
+      RETURNING id
+    `;
+    const steps = await sql<{ id: string; step_order: number }[]>`
+      INSERT INTO pipeline_steps (template_id, step_order, slug, name, role_slug, duty, qa_required)
+      VALUES
+        (${template.id}, 1, 'review', 'Review', 'qa-test-role', 'Review work', true),
+        (${template.id}, 2, 'release', 'Release', 'qa-test-role', 'Release work', false)
+      RETURNING id, step_order
+    `;
+    const firstStepId = steps.find((step) => step.step_order === 1)!.id;
+    const secondStepId = steps.find((step) => step.step_order === 2)!.id;
+    const [task] = await sql<{ id: string }[]>`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, qa_required, result_summary)
+      VALUES (${bizId}, 'qa-test-role', 'pipeline', 'Pipeline: Review', 'Review brief', 'in_review', true, 'Reviewed deliverable')
+      RETURNING id
+    `;
+    const [run] = await sql<{ id: string }[]>`
+      INSERT INTO pipeline_runs (hive_id, template_id, template_version, status, current_step_id)
+      VALUES (${bizId}, ${template.id}, 1, 'active', ${firstStepId})
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO pipeline_step_runs (run_id, step_id, task_id, status)
+      VALUES (${run.id}, ${firstStepId}, ${task.id}, 'pending'),
+             (${run.id}, ${secondStepId}, NULL, 'pending')
+    `;
+
+    await expect(processQaResult(sql, task.id, { passed: true, feedback: null })).rejects.toThrow();
+
+    const [rolledBackTask] = await sql<{ status: string; completed_at: Date | null }[]>`
+      SELECT status, completed_at FROM tasks WHERE id = ${task.id}
+    `;
+    const [firstStepRun] = await sql<{ status: string; result_summary: string | null }[]>`
+      SELECT status, result_summary FROM pipeline_step_runs WHERE run_id = ${run.id} AND step_id = ${firstStepId}
+    `;
+    const [pipelineRun] = await sql<{ current_step_id: string }[]>`
+      SELECT current_step_id FROM pipeline_runs WHERE id = ${run.id}
+    `;
+
+    expect(rolledBackTask).toEqual({ status: "in_review", completed_at: null });
+    expect(firstStepRun).toEqual({ status: "pending", result_summary: null });
+    expect(pipelineRun.current_step_id).toBe(firstStepId);
+  });
+
   it("resets task to pending on true quality QA fail with lean delta feedback appended", async () => {
     const [task] = await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
