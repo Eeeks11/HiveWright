@@ -75,7 +75,24 @@ describe("HiveWright update system", () => {
     expect(status.state).toBe("update-available");
   });
 
-  it("marks a clean checkout current when local and upstream commits match", () => {
+  it("marks a clean checkout current when local, upstream, cutover, and build commits match", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+      latestDeployedCommit: "abc1234",
+      latestBuildHash: "abc1234",
+    });
+
+    expect(status.updateAvailable).toBe(false);
+    expect(status.state).toBe("current");
+  });
+
+  it("marks a clean fallback checkout current when runtime cutover evidence is absent", () => {
     const status = parseUpdateStatus({
       packageVersion: "1.2.3",
       currentCommit: "abc1234",
@@ -88,6 +105,66 @@ describe("HiveWright update system", () => {
 
     expect(status.updateAvailable).toBe(false);
     expect(status.state).toBe("current");
+  });
+
+  it("requires repair when local and upstream match but runtime cutover evidence is stale", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+      latestDeployedCommit: "old1234",
+      latestBuildHash: "old1234",
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.updateAvailable).toBe(true);
+    expect(status.state).toBe("repair-required");
+    expect(plan.allowed).toBe(true);
+  });
+
+  it("requires repair when privileged runtime cutover evidence is explicitly missing", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+      latestDeployedCommit: null,
+      latestBuildHash: null,
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.updateAvailable).toBe(true);
+    expect(status.state).toBe("repair-required");
+    expect(plan.allowed).toBe(true);
+  });
+
+  it("requires repair when a previous privileged cutover failure is recorded", () => {
+    const status = parseUpdateStatus({
+      packageVersion: "1.2.3",
+      currentCommit: "abc1234",
+      upstreamCommit: "abc1234",
+      remoteUrl: "https://github.com/example/hivewright-v2.git",
+      branch: "main",
+      dirty: false,
+      relation: "current",
+      latestDeployedCommit: "abc1234",
+      latestBuildHash: "abc1234",
+      failedUpdatePhase: "database-migration",
+      failedUpdateTargetCommit: "abc1234",
+    });
+    const plan = buildUpdatePlan(status, { apply: true });
+
+    expect(status.updateAvailable).toBe(true);
+    expect(status.state).toBe("repair-required");
+    expect(status.failedUpdatePhase).toBe("database-migration");
+    expect(plan.allowed).toBe(true);
   });
 
   it("blocks automatic update when the install has local changes", () => {
@@ -172,7 +249,7 @@ describe("HiveWright update system", () => {
       "utf8",
     );
 
-    expect(script).toContain("npm run build:runtime");
+    expect(script).toContain('npm --prefix "$candidate_dir" run build:runtime');
     expect(script).not.toMatch(/^\s*npm run build\s*$/m);
   });
 
@@ -213,7 +290,7 @@ describe("HiveWright update system", () => {
     );
 
     expect(script).toContain('commands":["systemctl start hivewright-update.service"]');
-    expect(script).toContain("ensure_canonical_remote\n    [ \"$(git rev-parse --show-toplevel)\" = \"$INSTALL_DIR\" ]");
+    expect(script).toContain("ensure_canonical_remote\n  [ \"$(git rev-parse --show-toplevel)\" = \"$INSTALL_DIR\" ]");
     expect(script).toContain('lock) ensure_root; ensure_paths; configure_root_git; ensure_canonical_remote; lock_repo ;;');
   });
 
