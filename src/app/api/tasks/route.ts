@@ -1,3 +1,4 @@
+import type { Sql, TransactionSql } from "postgres";
 import { sql } from "../_lib/db";
 import { jsonError, jsonPaginated, parseSearchParams } from "../_lib/responses";
 import {
@@ -24,6 +25,8 @@ import {
   isCreationPauseDbError,
 } from "@/operations/creation-pause";
 import { toPublicUsageSummary } from "@/usage/billable-usage";
+
+type SqlExecutor = Sql | TransactionSql;
 
 type TaskRow = {
   id: string;
@@ -323,21 +326,26 @@ export async function POST(request: Request) {
       }
     }
 
-    const sourceTaskResult = await resolveTaskSourceForCreate({
-      hiveId: requestedHiveId,
-      goalId: requestedGoalId,
-      sourceTaskId: requestedSourceTaskId,
-      title,
-    });
-    if ("response" in sourceTaskResult) return sourceTaskResult.response;
-    const resolvedSourceTaskId = sourceTaskResult.taskId;
-
     return await runIdempotentCreate(sql, {
       hiveId: requestedHiveId,
       route: "/api/tasks",
       key: typeof idempotencyKey === "string" ? idempotencyKey : null,
       requestBody: body,
       create: async (tx) => {
+        const sourceTaskResult = await resolveTaskSourceForCreate(tx, {
+          hiveId: requestedHiveId,
+          goalId: requestedGoalId,
+          sourceTaskId: requestedSourceTaskId,
+          title,
+        });
+        if ("response" in sourceTaskResult) {
+          return {
+            body: await sourceTaskResult.response.json() as Record<string, unknown>,
+            status: sourceTaskResult.response.status,
+          };
+        }
+        const resolvedSourceTaskId = sourceTaskResult.taskId;
+
         const rows = await tx`
           INSERT INTO tasks (
             hive_id, assigned_to, created_by, title, brief,
@@ -393,7 +401,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function resolveTaskSourceForCreate(input: {
+async function resolveTaskSourceForCreate(db: SqlExecutor, input: {
   hiveId: string;
   goalId: string | null;
   sourceTaskId: unknown;
@@ -410,7 +418,7 @@ async function resolveTaskSourceForCreate(input: {
     return { response: jsonError("sourceTaskId must be a valid task id", 400) };
   }
 
-  const [sourceTask] = await sql<{ id: string; goal_id: string | null }[]>`
+  const [sourceTask] = await db<{ id: string; goal_id: string | null }[]>`
     SELECT id, goal_id
     FROM tasks
     WHERE id = ${sourceTaskId}
@@ -421,7 +429,8 @@ async function resolveTaskSourceForCreate(input: {
     return { response: jsonError("sourceTaskId does not belong to the supplied goal", 403) };
   }
 
-  const budget = await parkTaskIfRecoveryBudgetExceeded(sql, sourceTaskId, {
+  await lockFailureFamilyRootForReplacementBudget(db, sourceTaskId);
+  const budget = await parkTaskIfRecoveryBudgetExceeded(db, sourceTaskId, {
     action: "POST /api/tasks replacement create",
     reason: String(input.title ?? "replacement task"),
     replacementTasksToCreate: 1,
@@ -429,6 +438,34 @@ async function resolveTaskSourceForCreate(input: {
   if (!budget.ok) return { response: jsonError(budget.reason, 409) };
 
   return { taskId: sourceTaskId };
+}
+
+async function lockFailureFamilyRootForReplacementBudget(db: SqlExecutor, taskId: string): Promise<void> {
+  const [root] = await db<{ id: string }[]>`
+    WITH RECURSIVE ancestors AS (
+      SELECT id, parent_task_id, 0 AS depth
+      FROM tasks
+      WHERE id = ${taskId}
+
+      UNION ALL
+
+      SELECT parent.id, parent.parent_task_id, ancestors.depth + 1
+      FROM tasks parent
+      JOIN ancestors ON ancestors.parent_task_id = parent.id
+    )
+    SELECT id
+    FROM ancestors
+    ORDER BY depth DESC
+    LIMIT 1
+  `;
+  if (!root) return;
+
+  await db`
+    SELECT id
+    FROM tasks
+    WHERE id = ${root.id}
+    FOR NO KEY UPDATE
+  `;
 }
 
 function isUuidLike(value: string): boolean {

@@ -48,8 +48,10 @@ export async function runIdempotentCreate<T extends ResponseBody>(
   },
 ): Promise<Response> {
   if (input.key === null) {
-    const created = await input.create(sql);
-    return NextResponse.json(created.body, { status: created.status });
+    return sql.begin(async (tx) => {
+      const created = await input.create(tx);
+      return NextResponse.json(created.body, { status: created.status });
+    });
   }
 
   const requestHash = hashRequestBody(input.requestBody);
@@ -84,6 +86,9 @@ export async function runIdempotentCreate<T extends ResponseBody>(
     }
 
     const created = await input.create(tx);
+    if (created.status >= 400) {
+      return NextResponse.json(created.body, { status: created.status });
+    }
     await tx`
       INSERT INTO idempotency_keys (
         hive_id, route, key, request_hash, response_body, response_status
