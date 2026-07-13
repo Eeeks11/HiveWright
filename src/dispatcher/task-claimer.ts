@@ -17,7 +17,19 @@ import { validateRoutingPublicationCompletion, type AnalystOutputDisposition } f
 
 const ROLE_CLAIM_LOCK_SEED = 215;
 
-export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
+type CandidateRole = {
+  assignedTo: string;
+};
+
+type ClaimNextTaskOptions = {
+  afterCandidateRolesSelected?: (tx: TransactionSql, roles: readonly CandidateRole[]) => Promise<void> | void;
+};
+
+export async function claimNextTask(
+  sql: Sql,
+  pid: number,
+  options: ClaimNextTaskOptions = {},
+): Promise<ClaimedTask | null> {
   await pauseOverBudgetGoalsForClaim(sql);
 
   return sql.begin(async (tx) => {
@@ -40,14 +52,24 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
     // do not serialize the role-wide active-count decision: two dispatchers can
     // lock different pending rows for the same role and both observe the prior
     // count. A transaction-scoped advisory lock keyed by role covers the
-    // role-wide count + claim in this transaction. pg_try_advisory_xact_lock
-    // avoids head-of-line blocking: when another dispatcher is already making a
-    // decision for the top role, this claimer may still claim work for another
-    // eligible role while preserving task priority order among available roles.
-    const rows = await tx`
-      WITH candidate_roles AS MATERIALIZED (
+    // role-wide count + claim in this transaction.
+    //
+    // Important: the role lock must be acquired in a separate statement before
+    // the active-count + claim statement. In READ COMMITTED, a single SQL
+    // statement uses one snapshot; acquiring pg_try_advisory_xact_lock inside
+    // that statement can still pair a freshly acquired lock with a stale
+    // pre-commit active-count snapshot. Splitting candidate discovery from the
+    // locked count/claim gives the count statement a fresh snapshot while the
+    // role lock is already held.
+    //
+    // pg_try_advisory_xact_lock avoids head-of-line blocking: when another
+    // dispatcher is already making a decision for the top role, this claimer may
+    // still claim work for another eligible role while preserving task priority
+    // order among available roles.
+    const candidateRoles = await tx<CandidateRole[]>`
+      WITH top_pending_by_role AS MATERIALIZED (
         SELECT DISTINCT ON (t.assigned_to)
-          t.assigned_to,
+          t.assigned_to AS "assignedTo",
           t.priority,
           t.created_at,
           t.id
@@ -69,76 +91,78 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
                 AND g.status = 'active'
             )
           )
-          AND (
-            SELECT COUNT(*) FROM tasks busy
-            WHERE busy.status = 'active'
-              AND busy.assigned_to = t.assigned_to
-          ) < COALESCE(
-            (SELECT concurrency_limit FROM role_templates WHERE slug = t.assigned_to),
-            1
-          )
         ORDER BY t.assigned_to ASC, t.priority ASC, t.created_at ASC, t.id ASC
-      ),
-      locked_role AS MATERIALIZED (
-        SELECT cr.assigned_to
-        FROM candidate_roles cr
-        WHERE pg_try_advisory_xact_lock(hashtextextended(cr.assigned_to, ${ROLE_CLAIM_LOCK_SEED}))
-        ORDER BY cr.priority ASC, cr.created_at ASC, cr.id ASC
-        LIMIT 1
       )
-      UPDATE tasks
-      SET status = 'active', started_at = NOW(), dispatcher_pid = ${pid}, updated_at = NOW()
-      WHERE id = (
-        SELECT t.id FROM tasks t
-        JOIN locked_role lr ON lr.assigned_to = t.assigned_to
-        WHERE t.status = 'pending'
-          AND (t.retry_after IS NULL OR t.retry_after <= NOW())
-          AND NOT EXISTS (
-            SELECT 1
-            FROM hive_runtime_locks hrl
-            WHERE hrl.hive_id = t.hive_id
-              AND hrl.creation_paused = true
-          )
-          AND (
-            t.goal_id IS NULL
-            OR EXISTS (
-              SELECT 1
-              FROM goals g
-              WHERE g.id = t.goal_id
-                AND g.status = 'active'
-            )
-          )
-          AND (
-            SELECT COUNT(*) FROM tasks busy
-            WHERE busy.status = 'active'
-              AND busy.assigned_to = t.assigned_to
-          ) < COALESCE(
-            (SELECT concurrency_limit FROM role_templates WHERE slug = t.assigned_to),
-            1
-          )
-        ORDER BY t.priority ASC, t.created_at ASC, t.id ASC
-        LIMIT 1
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING
-        id, hive_id as "hiveId", assigned_to as "assignedTo",
-        created_by as "createdBy", status, priority, title, brief,
-        parent_task_id as "parentTaskId", goal_id as "goalId",
-        sprint_number as "sprintNumber", qa_required as "qaRequired",
-        acceptance_criteria as "acceptanceCriteria",
-        retry_count as "retryCount", doctor_attempts as "doctorAttempts",
-        failure_reason as "failureReason",
-        adapter_override as "adapterOverride",
-        model_override as "modelOverride",
-        project_id as "projectId"
+      SELECT "assignedTo"
+      FROM top_pending_by_role
+      ORDER BY priority ASC, created_at ASC, id ASC
     `;
 
-    if (rows.length === 0) return null;
+    await options.afterCandidateRolesSelected?.(tx, candidateRoles);
 
-    const row = rows[0] as Record<string, unknown>;
-    await markPipelineTaskRunning(tx, row["id"] as string);
+    for (const role of candidateRoles) {
+      const [lock] = await tx<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtextextended(${role.assignedTo}, ${ROLE_CLAIM_LOCK_SEED})) AS acquired
+      `;
+      if (!lock?.acquired) continue;
 
-    return normalizeClaimedTask(row);
+      const rows = await tx`
+        UPDATE tasks
+        SET status = 'active', started_at = NOW(), dispatcher_pid = ${pid}, updated_at = NOW()
+        WHERE id = (
+          SELECT t.id FROM tasks t
+          WHERE t.status = 'pending'
+            AND t.assigned_to = ${role.assignedTo}
+            AND (t.retry_after IS NULL OR t.retry_after <= NOW())
+            AND NOT EXISTS (
+              SELECT 1
+              FROM hive_runtime_locks hrl
+              WHERE hrl.hive_id = t.hive_id
+                AND hrl.creation_paused = true
+            )
+            AND (
+              t.goal_id IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM goals g
+                WHERE g.id = t.goal_id
+                  AND g.status = 'active'
+              )
+            )
+            AND (
+              SELECT COUNT(*) FROM tasks busy
+              WHERE busy.status = 'active'
+                AND busy.assigned_to = t.assigned_to
+            ) < COALESCE(
+              (SELECT concurrency_limit FROM role_templates WHERE slug = t.assigned_to),
+              1
+            )
+          ORDER BY t.priority ASC, t.created_at ASC, t.id ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
+        )
+        RETURNING
+          id, hive_id as "hiveId", assigned_to as "assignedTo",
+          created_by as "createdBy", status, priority, title, brief,
+          parent_task_id as "parentTaskId", goal_id as "goalId",
+          sprint_number as "sprintNumber", qa_required as "qaRequired",
+          acceptance_criteria as "acceptanceCriteria",
+          retry_count as "retryCount", doctor_attempts as "doctorAttempts",
+          failure_reason as "failureReason",
+          adapter_override as "adapterOverride",
+          model_override as "modelOverride",
+          project_id as "projectId"
+      `;
+
+      if (rows.length === 0) continue;
+
+      const row = rows[0] as Record<string, unknown>;
+      await markPipelineTaskRunning(tx, row["id"] as string);
+
+      return normalizeClaimedTask(row);
+    }
+
+    return null;
   });
 }
 

@@ -269,6 +269,42 @@ describe("claimNextTask", () => {
     }
   });
 
+  it("re-checks active role counts after candidate discovery under a fresh role lock snapshot", async () => {
+    await sql`
+      UPDATE role_templates
+      SET concurrency_limit = 1
+      WHERE slug = 'claimer-test-role'
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, priority)
+      VALUES
+        (${bizId}, 'claimer-test-role', 'owner', 'claimer-stale-snapshot-1', 'Brief', 1),
+        (${bizId}, 'claimer-test-role', 'owner', 'claimer-stale-snapshot-2', 'Brief', 2)
+    `;
+
+    const task = await claimNextTask(sql, 30303, {
+      afterCandidateRolesSelected: async (_tx, roles) => {
+        expect(roles.map((role) => role.assignedTo)).toContain("claimer-test-role");
+        await sql`
+          UPDATE tasks
+          SET status = 'active', started_at = NOW(), dispatcher_pid = 40404, updated_at = NOW()
+          WHERE title = 'claimer-stale-snapshot-1'
+        `;
+      },
+    });
+
+    expect(task).toBeNull();
+
+    const [counts] = await sql<{ active_count: number; pending_count: number }[]>`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+        COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+      FROM tasks
+      WHERE title LIKE 'claimer-stale-snapshot-%'
+    `;
+    expect(counts).toEqual({ active_count: 1, pending_count: 1 });
+  });
+
   it("does claim a second task for a different role", async () => {
     await sql`
       INSERT INTO role_templates (slug, name, type, adapter_type)
