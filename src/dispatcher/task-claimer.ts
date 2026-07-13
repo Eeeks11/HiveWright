@@ -15,77 +15,160 @@ import type { ClaimedTask } from "./types";
 import { pauseOverBudgetGoalsForClaim } from "./budget-policy";
 import { validateRoutingPublicationCompletion, type AnalystOutputDisposition } from "@/tasks/output-disposition";
 
-export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask | null> {
+const ROLE_CLAIM_LOCK_SEED = 215;
+
+type CandidateRole = {
+  assignedTo: string;
+};
+
+type ClaimNextTaskOptions = {
+  afterCandidateRolesSelected?: (tx: TransactionSql, roles: readonly CandidateRole[]) => Promise<void> | void;
+};
+
+export async function claimNextTask(
+  sql: Sql,
+  pid: number,
+  options: ClaimNextTaskOptions = {},
+): Promise<ClaimedTask | null> {
   await pauseOverBudgetGoalsForClaim(sql);
 
-  // Per-role serialisation: skip a pending task if its assigned role has
-  // already reached its `role_templates.concurrency_limit` of active tasks.
-  //
-  // Originally this cap was hardcoded to 1 because OpenClaw shared one
-  // session-file per agent slug and concurrent runs collided on the
-  // .jsonl.lock. OpenClaw is retired (2026-04-21), so the cap is now
-  // configurable per role via `role_templates.concurrency_limit`. Sensible
-  // defaults seeded in migration 0038: dev/qa/research/security at 3,
-  // doctor + hive-supervisor at 1, goal-supervisor at 50 (effectively
-  // unlimited; supervisors run persistent per-goal sessions where
-  // serialisation would deadlock).
-  //
-  // The dispatcher-wide maxConcurrentTasks cap still bounds total in-flight
-  // work — per-role limits compose with that.
-  const rows = await sql`
-    UPDATE tasks
-    SET status = 'active', started_at = NOW(), dispatcher_pid = ${pid}, updated_at = NOW()
-    WHERE id = (
-      SELECT t.id FROM tasks t
-      WHERE t.status = 'pending'
-        AND (t.retry_after IS NULL OR t.retry_after <= NOW())
-        AND NOT EXISTS (
-          SELECT 1
-          FROM hive_runtime_locks hrl
-          WHERE hrl.hive_id = t.hive_id
-            AND hrl.creation_paused = true
-        )
-        AND (
-          t.goal_id IS NULL
-          OR EXISTS (
+  return sql.begin(async (tx) => {
+    // Per-role serialisation: skip a pending task if its assigned role has
+    // already reached its `role_templates.concurrency_limit` of active tasks.
+    //
+    // Originally this cap was hardcoded to 1 because OpenClaw shared one
+    // session-file per agent slug and concurrent runs collided on the
+    // .jsonl.lock. OpenClaw is retired (2026-04-21), so the cap is now
+    // configurable per role via `role_templates.concurrency_limit`. Sensible
+    // defaults seeded in migration 0038: dev/qa/research/security at 3,
+    // doctor + hive-supervisor at 1, goal-supervisor at 50 (effectively
+    // unlimited; supervisors run persistent per-goal sessions where
+    // serialisation would deadlock).
+    //
+    // The dispatcher-wide maxConcurrentTasks cap still bounds total in-flight
+    // work — per-role limits compose with that.
+    //
+    // Candidate task rows are still locked with SKIP LOCKED, but row locks alone
+    // do not serialize the role-wide active-count decision: two dispatchers can
+    // lock different pending rows for the same role and both observe the prior
+    // count. A transaction-scoped advisory lock keyed by role covers the
+    // role-wide count + claim in this transaction.
+    //
+    // Important: the role lock must be acquired in a separate statement before
+    // the active-count + claim statement. In READ COMMITTED, a single SQL
+    // statement uses one snapshot; acquiring pg_try_advisory_xact_lock inside
+    // that statement can still pair a freshly acquired lock with a stale
+    // pre-commit active-count snapshot. Splitting candidate discovery from the
+    // locked count/claim gives the count statement a fresh snapshot while the
+    // role lock is already held.
+    //
+    // pg_try_advisory_xact_lock avoids head-of-line blocking: when another
+    // dispatcher is already making a decision for the top role, this claimer may
+    // still claim work for another eligible role while preserving task priority
+    // order among available roles.
+    const candidateRoles = await tx<CandidateRole[]>`
+      WITH top_pending_by_role AS MATERIALIZED (
+        SELECT DISTINCT ON (t.assigned_to)
+          t.assigned_to AS "assignedTo",
+          t.priority,
+          t.created_at,
+          t.id
+        FROM tasks t
+        WHERE t.status = 'pending'
+          AND (t.retry_after IS NULL OR t.retry_after <= NOW())
+          AND NOT EXISTS (
             SELECT 1
-            FROM goals g
-            WHERE g.id = t.goal_id
-              AND g.status = 'active'
+            FROM hive_runtime_locks hrl
+            WHERE hrl.hive_id = t.hive_id
+              AND hrl.creation_paused = true
           )
+          AND (
+            t.goal_id IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM goals g
+              WHERE g.id = t.goal_id
+                AND g.status = 'active'
+            )
+          )
+        ORDER BY t.assigned_to ASC, t.priority ASC, t.created_at ASC, t.id ASC
+      )
+      SELECT "assignedTo"
+      FROM top_pending_by_role
+      ORDER BY priority ASC, created_at ASC, id ASC
+    `;
+
+    await options.afterCandidateRolesSelected?.(tx, candidateRoles);
+
+    for (const role of candidateRoles) {
+      const [lock] = await tx<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtextextended(${role.assignedTo}, ${ROLE_CLAIM_LOCK_SEED})) AS acquired
+      `;
+      if (!lock?.acquired) continue;
+
+      const rows = await tx`
+        UPDATE tasks
+        SET status = 'active', started_at = NOW(), dispatcher_pid = ${pid}, updated_at = NOW()
+        WHERE id = (
+          SELECT t.id FROM tasks t
+          WHERE t.status = 'pending'
+            AND t.assigned_to = ${role.assignedTo}
+            AND (t.retry_after IS NULL OR t.retry_after <= NOW())
+            AND NOT EXISTS (
+              SELECT 1
+              FROM hive_runtime_locks hrl
+              WHERE hrl.hive_id = t.hive_id
+                AND hrl.creation_paused = true
+            )
+            AND (
+              t.goal_id IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM goals g
+                WHERE g.id = t.goal_id
+                  AND g.status = 'active'
+              )
+            )
+            AND (
+              SELECT COUNT(*) FROM tasks busy
+              WHERE busy.status = 'active'
+                AND busy.assigned_to = t.assigned_to
+            ) < COALESCE(
+              (SELECT concurrency_limit FROM role_templates WHERE slug = t.assigned_to),
+              1
+            )
+          ORDER BY t.priority ASC, t.created_at ASC, t.id ASC
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED
         )
-        AND (
-          SELECT COUNT(*) FROM tasks busy
-          WHERE busy.status = 'active'
-            AND busy.assigned_to = t.assigned_to
-        ) < COALESCE(
-          (SELECT concurrency_limit FROM role_templates WHERE slug = t.assigned_to),
-          1
-        )
-      ORDER BY t.priority ASC, t.created_at ASC
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING
-      id, hive_id as "hiveId", assigned_to as "assignedTo",
-      created_by as "createdBy", status, priority, title, brief,
-      parent_task_id as "parentTaskId", goal_id as "goalId",
-      sprint_number as "sprintNumber", qa_required as "qaRequired",
-      acceptance_criteria as "acceptanceCriteria",
-      retry_count as "retryCount", doctor_attempts as "doctorAttempts",
-      failure_reason as "failureReason",
-      adapter_override as "adapterOverride",
-      model_override as "modelOverride",
-      project_id as "projectId"
-  `;
+        RETURNING
+          id, hive_id as "hiveId", assigned_to as "assignedTo",
+          created_by as "createdBy", status, priority, title, brief,
+          parent_task_id as "parentTaskId", goal_id as "goalId",
+          sprint_number as "sprintNumber", qa_required as "qaRequired",
+          acceptance_criteria as "acceptanceCriteria",
+          retry_count as "retryCount", doctor_attempts as "doctorAttempts",
+          failure_reason as "failureReason",
+          adapter_override as "adapterOverride",
+          model_override as "modelOverride",
+          project_id as "projectId"
+      `;
 
-  if (rows.length === 0) return null;
+      if (rows.length === 0) continue;
 
-  const row = rows[0] as Record<string, unknown>;
-  await markPipelineTaskRunning(sql, row["id"] as string);
+      const row = rows[0] as Record<string, unknown>;
+      await markPipelineTaskRunning(tx, row["id"] as string);
 
+      return normalizeClaimedTask(row);
+    }
+
+    return null;
+  });
+}
+
+function normalizeClaimedTask(row: Record<string, unknown>): ClaimedTask {
   // postgres.js may return snake_case keys despite AS aliases — normalize to camelCase
-  const task: ClaimedTask = {
+  return {
     id: (row["id"] ?? row["id"]) as string,
     hiveId: (row["hiveId"] ?? row["hive_id"]) as string,
     assignedTo: (row["assignedTo"] ?? row["assigned_to"]) as string,
@@ -106,8 +189,6 @@ export async function claimNextTask(sql: Sql, pid: number): Promise<ClaimedTask 
     modelOverride: (row["modelOverride"] ?? row["model_override"] ?? null) as string | null,
     projectId: (row["projectId"] ?? row["project_id"] ?? null) as string | null,
   };
-
-  return task;
 }
 
 export async function releaseTask(sql: Sql, taskId: string, retryAfterSeconds: number, reason = "Pipeline step retry budget exceeded"): Promise<void> {
