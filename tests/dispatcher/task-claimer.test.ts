@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import postgres from "postgres";
 import { describe, it, expect, beforeEach } from "vitest";
 import { claimNextTask, completeTask, releaseTask } from "@/dispatcher/task-claimer";
 import { startPipelineRun } from "@/pipelines/service";
@@ -167,6 +168,104 @@ describe("claimNextTask", () => {
     const task = await claimNextTask(sql, process.pid);
     if (task) {
       expect(task.title).not.toBe("claimer-test-blocked-by-busy");
+    }
+  });
+
+  it("uses the schema default limit of one when a role omits concurrency_limit", async () => {
+    await sql`
+      INSERT INTO role_templates (slug, name, type, adapter_type)
+      VALUES ('claimer-default-limit-role', 'CT Default Limit', 'executor', 'claude-code')
+      ON CONFLICT (slug) DO NOTHING
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (${bizId}, 'claimer-default-limit-role', 'owner', 'claimer-default-limit-active', 'Brief', 'active')
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief)
+      VALUES (${bizId}, 'claimer-default-limit-role', 'owner', 'claimer-default-limit-pending', 'Brief')
+    `;
+
+    const task = await claimNextTask(sql, process.pid);
+    if (task) {
+      expect(task.title).not.toBe("claimer-default-limit-pending");
+    }
+  });
+
+  it("atomically allows only one concurrent claim for a role with limit one", async () => {
+    await sql`
+      UPDATE role_templates
+      SET concurrency_limit = 1
+      WHERE slug = 'claimer-test-role'
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, priority)
+      VALUES
+        (${bizId}, 'claimer-test-role', 'owner', 'claimer-race-1', 'Brief', 1),
+        (${bizId}, 'claimer-test-role', 'owner', 'claimer-race-2', 'Brief', 2)
+    `;
+
+    // Delay the first active transition long enough for the second reserved DB
+    // connection to enter claimNextTask. Without a role-wide lock around the
+    // count + claim decision, both connections can lock different pending task
+    // rows, observe zero active tasks, and claim both despite limit=1.
+    await sql`
+      CREATE OR REPLACE FUNCTION claim_next_task_race_delay()
+      RETURNS trigger AS $$
+      BEGIN
+        IF OLD.status = 'pending'
+           AND NEW.status = 'active'
+           AND NEW.title LIKE 'claimer-race-%' THEN
+          PERFORM pg_sleep(0.25);
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql
+    `;
+    await sql`
+      CREATE TRIGGER claim_next_task_race_delay_trigger
+      BEFORE UPDATE OF status ON tasks
+      FOR EACH ROW
+      EXECUTE FUNCTION claim_next_task_race_delay()
+    `;
+
+    const testDbUrl =
+      process.env.TEST_DATABASE_URL ??
+      process.env.DATABASE_URL ??
+      "postgresql://hivewright:***@localhost:5432/hivewrightv2_test";
+    const conn1 = postgres(testDbUrl, { max: 1 });
+    const conn2 = postgres(testDbUrl, { max: 1 });
+    let releaseStart!: () => void;
+    const startBarrier = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const claimFrom = async (conn: typeof conn1, pid: number) => {
+      await startBarrier;
+      return claimNextTask(conn, pid);
+    };
+
+    try {
+      const first = claimFrom(conn1, 10101);
+      const second = claimFrom(conn2, 20202);
+      releaseStart();
+      const results = await Promise.all([first, second]);
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect(results.filter((task) => task?.assignedTo === "claimer-test-role")).toHaveLength(1);
+
+      const [counts] = await sql<{ active_count: number; pending_count: number }[]>`
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
+          COUNT(*) FILTER (WHERE status = 'pending')::int AS pending_count
+        FROM tasks
+        WHERE title LIKE 'claimer-race-%'
+      `;
+      expect(counts).toEqual({ active_count: 1, pending_count: 1 });
+    } finally {
+      await conn1.end({ timeout: 5 });
+      await conn2.end({ timeout: 5 });
+      await sql`DROP TRIGGER IF EXISTS claim_next_task_race_delay_trigger ON tasks`;
+      await sql`DROP FUNCTION IF EXISTS claim_next_task_race_delay()`;
     }
   });
 
