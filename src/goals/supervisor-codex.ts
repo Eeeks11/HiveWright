@@ -59,8 +59,12 @@ function runCodex(
   });
 }
 
+type CodexWakeKind = "sprint" | "comment";
+
+type CodexRunResult = { stdout: string; stderr: string; code: number };
+
 /** Pull the thread_id UUID out of the first `thread.started` event in JSONL stdout. */
-function extractThreadId(stdout: string): string | null {
+export function extractThreadId(stdout: string): string | null {
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed.startsWith('{"type":"thread.started"')) continue;
@@ -70,6 +74,107 @@ function extractThreadId(stdout: string): string | null {
     } catch { /* keep scanning */ }
   }
   return null;
+}
+
+function baseCodexExecFlags(): string[] {
+  return [
+    "--json",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--skip-git-repo-check",
+  ];
+}
+
+function buildFreshCodexExecArgs(modelName: string, workspacePath: string): string[] {
+  return [
+    "exec",
+    ...baseCodexExecFlags(),
+    "-m", modelName,
+    "-C", workspacePath,
+  ];
+}
+
+function buildResumeCodexExecArgs(threadId: string): string[] {
+  // `codex exec resume` quirks:
+  //  - `-C <workspace>` isn't accepted — resumed sessions keep their original
+  //    cwd from rollout metadata. Only valid on a fresh `exec`.
+  //  - `-` must be passed as the PROMPT positional to signal stdin read.
+  //  - `-m <model>` is NOT passed on resume: if the session was created with a
+  //    different model (e.g. original openai-codex vs. a later recommended_model
+  //    switch), codex can exit 0 without a useful terminal agent message.
+  //    Letting the session keep its original model is the safe path; model
+  //    upgrades happen when the session is recreated from scratch.
+  return ["exec", "resume", threadId, ...baseCodexExecFlags(), "-"];
+}
+
+export function buildCodexWakeArgs({
+  threadId,
+  modelName,
+  workspacePath,
+}: {
+  threadId: string | null;
+  modelName: string;
+  workspacePath: string;
+  wakeKind: CodexWakeKind;
+}): string[] {
+  return threadId
+    ? buildResumeCodexExecArgs(threadId)
+    : buildFreshCodexExecArgs(modelName, workspacePath);
+}
+
+export function hasTerminalAgentMessage(stdout: string): boolean {
+  for (const line of stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      const ev = JSON.parse(trimmed) as {
+        type?: string;
+        item?: { type?: string; text?: unknown };
+        last_agent_message?: unknown;
+      };
+      if (
+        ev.type === "item.completed" &&
+        ev.item?.type === "agent_message" &&
+        typeof ev.item.text === "string" &&
+        ev.item.text.trim().length > 0
+      ) {
+        return true;
+      }
+      if (
+        ev.type === "turn.completed" &&
+        typeof ev.last_agent_message === "string" &&
+        ev.last_agent_message.trim().length > 0
+      ) {
+        return true;
+      }
+    } catch { /* keep scanning */ }
+  }
+  return false;
+}
+
+export function validateCodexWakeResult({
+  wakeKind,
+  runResult,
+}: {
+  wakeKind: CodexWakeKind;
+  runResult: CodexRunResult;
+}): { success: boolean; output: string; error?: string } {
+  if (runResult.code !== 0) {
+    return {
+      success: false,
+      output: runResult.stderr,
+      error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}`,
+    };
+  }
+
+  if (!hasTerminalAgentMessage(runResult.stdout)) {
+    return {
+      success: false,
+      output: runResult.stdout,
+      error: `codex ${wakeKind} wake exited 0 without a terminal agent message; treating as failed so it can be retried`,
+    };
+  }
+
+  return { success: true, output: runResult.stdout };
 }
 
 export async function startGoalSupervisor(
@@ -193,32 +298,12 @@ export async function wakeUpSupervisor(
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
 
-  // `codex exec resume` quirks:
-  //  - `-C <workspace>` isn't accepted — resumed sessions keep their
-  //    original cwd from rollout metadata. Only valid on a fresh `exec`.
-  //  - `-` must be passed as the PROMPT positional to signal stdin read.
-  //  - `-m <model>` is NOT passed on resume: if the session was created
-  //    with a different model (e.g. original openai-codex vs. a later
-  //    recommended_model switch to anthropic/claude-opus-4-7), codex
-  //    silently exits with last_agent_message=null instead of either
-  //    switching or erroring cleanly. Letting the session keep its
-  //    original model is the safe path; model upgrades happen when the
-  //    session is recreated from scratch.
-  const freshFlags = [
-    "--json",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--skip-git-repo-check",
-    "-m", modelName,
-    "-C", workspacePath,
-  ];
-  const resumeFlags = [
-    "--json",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--skip-git-repo-check",
-  ];
-  const args = threadId
-    ? ["exec", "resume", threadId, ...resumeFlags, "-"]
-    : ["exec", ...freshFlags];
+  const args = buildCodexWakeArgs({
+    threadId,
+    modelName,
+    workspacePath,
+    wakeKind: "sprint",
+  });
 
   const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
     credentials,
@@ -227,9 +312,8 @@ export async function wakeUpSupervisor(
     supervisorSession,
   });
 
-  if (runResult.code !== 0) {
-    return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };
-  }
+  const validated = validateCodexWakeResult({ wakeKind: "sprint", runResult });
+  if (!validated.success) return validated;
 
   // Capture a fresh thread_id when we did NOT resume — every fresh exec starts a new thread.
   if (!threadId) {
@@ -237,7 +321,7 @@ export async function wakeUpSupervisor(
     if (newId) fs.writeFileSync(threadIdPath, newId, "utf-8");
   }
 
-  return { success: true, output: runResult.stdout };
+  return validated;
 }
 
 /**
@@ -277,22 +361,12 @@ export async function wakeUpSupervisorOnComment(
   const threadIdPath = path.join(workspacePath, THREAD_ID_FILE);
   const threadId = fs.existsSync(threadIdPath) ? fs.readFileSync(threadIdPath, "utf-8").trim() : null;
 
-  // `-C` is only valid on a fresh `codex exec`; `codex exec resume` rejects it
-  // with "unexpected argument '-C'" because the resumed session already has
-  // its cwd captured in the rollout metadata.
-  const commonFlags = [
-    "--json",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--skip-git-repo-check",
-    "-m", modelName,
-  ];
-  // `codex exec resume` needs `-` as the explicit PROMPT positional to read
-  // from stdin — the help says "If `-` is used, read from stdin". Without
-  // it, codex emits "Reading prompt from stdin..." and then exits 1 when the
-  // positional PROMPT is absent.
-  const args = threadId
-    ? ["exec", "resume", threadId, ...commonFlags, "-"]
-    : ["exec", ...commonFlags, "-C", workspacePath];
+  const args = buildCodexWakeArgs({
+    threadId,
+    modelName,
+    workspacePath,
+    wakeKind: "comment",
+  });
 
   const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
     credentials,
@@ -301,16 +375,15 @@ export async function wakeUpSupervisorOnComment(
     supervisorSession,
   });
 
-  if (runResult.code !== 0) {
-    return { success: false, output: runResult.stderr, error: `codex exec failed (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}` };
-  }
+  const validated = validateCodexWakeResult({ wakeKind: "comment", runResult });
+  if (!validated.success) return validated;
 
   if (!threadId) {
     const newId = extractThreadId(runResult.stdout);
     if (newId) fs.writeFileSync(threadIdPath, newId, "utf-8");
   }
 
-  return { success: true, output: runResult.stdout };
+  return validated;
 }
 
 export async function terminateGoalSupervisor(
