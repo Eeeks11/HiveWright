@@ -1,0 +1,192 @@
+{
+  "generatedAt": "2026-07-15T00:16:55+10:00",
+  "hiveId": "b6b815ba-5109-4066-8a33-cc5560d3a0e1",
+  "baselineComparison": {
+    "baselineArtifactSourcePath": "/home/trent/dev/hivewright/.claude/worktrees/bd5a95cf-8fbc-472c-ab4a-7812902482b5/work_products/operations-coordinator/2026-07-14-doctor-runtime-residue-reconciliation.md",
+    "currentArtifactPath": "work_products/operations-coordinator/2026-07-14-doctor-runtime-residue-reconciliation.md",
+    "baselineRuntimeBuildHash": "9f267fea1f89e5519e9cb9fbab2289b9f546ac55",
+    "currentRuntimeBuildHash": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+    "runtimeBuildHashChanged": true,
+    "baselineStaleParentTaskIds": [
+      "12f54162-1fe8-4b2a-b37d-8556eadcf4f8",
+      "6ecf49de-b4f3-441c-8127-be724472bf68",
+      "7770d68a-e950-4433-bbd3-1bbc2d9191d2",
+      "a2c9bae3-66e1-4431-a682-71f3f05e2d5b",
+      "e9167d6f-0577-4faa-b7ce-846a8df7219a",
+      "ef30ef95-360b-4047-82d1-278da20820c1",
+      "396ce681-1258-4231-a3ec-2035bf2c083c",
+      "57ee1c3e-2a42-4453-b219-62be7805a143",
+      "5a7b0afc-6b50-4519-8bc4-cca92c324472",
+      "f6ab22bc-892e-48ba-abc1-06a260d1d81a"
+    ],
+    "currentStaleParentTaskIds": [
+      "12f54162-1fe8-4b2a-b37d-8556eadcf4f8",
+      "6ecf49de-b4f3-441c-8127-be724472bf68",
+      "7770d68a-e950-4433-bbd3-1bbc2d9191d2",
+      "a2c9bae3-66e1-4431-a682-71f3f05e2d5b",
+      "e9167d6f-0577-4faa-b7ce-846a8df7219a",
+      "ef30ef95-360b-4047-82d1-278da20820c1"
+    ],
+    "droppedFromCurrentStaleParentSet": [
+      "396ce681-1258-4231-a3ec-2035bf2c083c",
+      "57ee1c3e-2a42-4453-b219-62be7805a143",
+      "5a7b0afc-6b50-4519-8bc4-cca92c324472",
+      "f6ab22bc-892e-48ba-abc1-06a260d1d81a"
+    ],
+    "staleParentSetChanged": true
+  },
+  "authenticatedAnalystTelemetry": {
+    "checkedAt": "2026-07-14T14:13:00.753Z",
+    "runtimeBuildHash": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+    "dispatcherHeartbeat": {
+      "state": "fresh",
+      "ageMs": 2894,
+      "lastHeartbeatAt": "2026-07-14T14:12:57.859Z",
+      "version": "0.1.4",
+      "buildHash": "1797ae79e45fdddfc41d48d2704fb8a1e3b43188",
+      "buildHashScope": "dispatcher_heartbeat",
+      "buildHashStatus": "differs_from_current_runtime",
+      "currentRuntimeBuildHash": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+      "buildHashInterpretation": "dispatcherHeartbeat.buildHash is cached dispatcher heartbeat evidence from a different build; use currentRuntimeBuildHash/improvementScanEvidence.runtimeBuildHash for current deployed runtime identity."
+    }
+  },
+  "authenticatedRuntimeDrift": {
+    "checkedAt": "2026-07-14T14:13:00.759Z",
+    "runtime": {
+      "repoPath": "/home/trent/apps/HiveWright",
+      "gitSha": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+      "buildHash": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+      "bootTime": "2026-07-14T04:35:48.031Z"
+    },
+    "dispatcherHeartbeat": {
+      "state": "fresh",
+      "dispatcherId": "default",
+      "pid": 1079214,
+      "hostId": "trentsclawdbot",
+      "version": "0.1.4",
+      "buildHash": "1797ae79e45fdddfc41d48d2704fb8a1e3b43188",
+      "lastHeartbeatAt": "2026-07-14T14:12:57.859Z",
+      "ageMs": 2900,
+      "buildHashScope": "dispatcher_heartbeat",
+      "buildHashStatus": "differs_from_current_runtime",
+      "currentRuntimeBuildHash": "dcfe39f1776817bc4d4b9dac8a649b071e8b5d4c",
+      "buildHashInterpretation": "dispatcherHeartbeat.buildHash is cached dispatcher heartbeat evidence from a different build; use currentRuntimeBuildHash/improvementScanEvidence.runtimeBuildHash for current deployed runtime identity."
+    },
+    "operatorVerdict": {
+      "status": "running",
+      "canRunNow": true,
+      "summary": "Hive is running with 2 runnable/open task(s) and 4 ready model route(s)."
+    }
+  },
+  "latestHeartbeatReport": {
+    "id": "3a6cc40d-1b93-4311-8973-a36589b2e53f",
+    "ranAt": "2026-07-15 00:00:56.397057",
+    "scannedAt": "2026-07-14T14:00:56.394Z",
+    "recurringFailure": {
+      "id": "recurring_failure:hive-supervisor:3560994b2a02b268",
+      "summary": "Recurring failure on hive-supervisor (6 in 24h): Codex exited code <n>: codex reported error",
+      "taskIds": [
+        "12f54162-1fe8-4b2a-b37d-8556eadcf4f8",
+        "6ecf49de-b4f3-441c-8127-be724472bf68",
+        "7770d68a-e950-4433-bbd3-1bbc2d9191d2",
+        "a2c9bae3-66e1-4431-a682-71f3f05e2d5b",
+        "e9167d6f-0577-4faa-b7ce-846a8df7219a",
+        "ef30ef95-360b-4047-82d1-278da20820c1"
+      ]
+    },
+    "parentTasks": [
+      {
+        "id": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      },
+      {
+        "id": "6ecf49de-b4f3-441c-8127-be724472bf68",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      },
+      {
+        "id": "7770d68a-e950-4433-bbd3-1bbc2d9191d2",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      },
+      {
+        "id": "a2c9bae3-66e1-4431-a682-71f3f05e2d5b",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      },
+      {
+        "id": "e9167d6f-0577-4faa-b7ce-846a8df7219a",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      },
+      {
+        "id": "ef30ef95-360b-4047-82d1-278da20820c1",
+        "title": "Hive supervisor heartbeat — 53 finding(s)",
+        "status": "failed"
+      }
+    ]
+  },
+  "openDoctorDescendants": [],
+  "openDoctorInventory": [],
+  "doctorCreatedFollowups": [
+    {
+      "id": "4de22592-764f-4c80-87c4-bdb5b01a94d6",
+      "title": "Verify same-build Codex runtime health on live dispatcher",
+      "status": "superseded",
+      "assignedTo": "system-health-auditor",
+      "createdBy": "doctor",
+      "parentTaskId": "bd5a95cf-8fbc-472c-ab4a-7812902482b5"
+    },
+    {
+      "id": "97ff53f6-c504-4880-9435-022351c686c8",
+      "title": "Reconcile recursive Doctor recovery residue after runtime cutover",
+      "status": "cancelled",
+      "assignedTo": "operations-coordinator",
+      "createdBy": "doctor",
+      "parentTaskId": "bd5a95cf-8fbc-472c-ab4a-7812902482b5"
+    }
+  ],
+  "remainingOpenNonDoctorLanes": [
+    {
+      "id": "27759973-9926-4a5e-8b4a-d5e8ede1a247",
+      "title": "Investigate hive-supervisor empty Codex exits",
+      "status": "blocked",
+      "assignedTo": "dev-agent",
+      "createdBy": "hive-supervisor",
+      "parentTaskId": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8"
+    },
+    {
+      "id": "d77f924a-9bd4-4e45-96f0-ec525d088305",
+      "title": "Investigate hive-supervisor Codex empty-output failures",
+      "status": "pending",
+      "assignedTo": "infrastructure-agent",
+      "createdBy": "hive-supervisor",
+      "parentTaskId": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8"
+    },
+    {
+      "id": "f03f3a14-0d58-4199-b7ea-b98a3987af7f",
+      "title": "Investigate hive-supervisor Codex empty-output runtime failures",
+      "status": "blocked",
+      "assignedTo": "infrastructure-agent",
+      "createdBy": "hive-supervisor",
+      "parentTaskId": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8"
+    },
+    {
+      "id": "f0798d78-3433-4d35-89e0-ec8adf38b2cb",
+      "title": "Investigate Codex supervisor empty-output failures",
+      "status": "blocked",
+      "assignedTo": "dev-agent",
+      "createdBy": "hive-supervisor",
+      "parentTaskId": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8"
+    }
+  ],
+  "supersededPriorLane": {
+    "id": "21b62784-9688-4ca5-90a9-f819b2a8119c",
+    "title": "Investigate hive-supervisor Codex empty-output failures",
+    "status": "superseded",
+    "assignedTo": "dev-agent",
+    "createdBy": "hive-supervisor",
+    "parentTaskId": "12f54162-1fe8-4b2a-b37d-8556eadcf4f8"
+  }
+}
