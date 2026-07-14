@@ -56,9 +56,14 @@ function makeSqlMock(queueRows: Record<string, unknown>[]) {
     }
     return Promise.resolve([]);
   });
-  (fn as typeof fn & { json: (value: unknown) => unknown }).json = (value: unknown) => value;
+  const sql = fn as typeof fn & {
+    begin: <T>(callback: (tx: typeof fn) => Promise<T>) => Promise<T>;
+    json: (value: unknown) => unknown;
+  };
+  sql.begin = (callback) => callback(fn);
+  sql.json = (value: unknown) => value;
 
-  return { sql: fn as unknown as Sql, calls, fn };
+  return { sql: sql as unknown as Sql, calls, fn };
 }
 
 function queryText(call: Call): string {
