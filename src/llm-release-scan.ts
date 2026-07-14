@@ -111,6 +111,7 @@ export interface LlmReleaseScanResult {
   newModelsDetected: number;
   decisionsCreated: number;
   heartbeatRecorded: boolean;
+  duplicateSuppressed?: boolean;
   candidates: CandidateModel[];
   sourceEvidence: ProviderSourceEvidence[];
 }
@@ -203,20 +204,22 @@ export async function runLlmReleaseScan(
   options: LlmReleaseScanOptions = {},
 ): Promise<LlmReleaseScanResult> {
   const now = options.now ?? new Date();
-  const run = await createInitiativeRun(sql, {
-    hiveId: input.hiveId,
-    trigger: {
-      type: LLM_RELEASE_SCAN_TRIGGER,
-      ref: input.trigger.scheduleId ?? null,
-    },
-    guardrailConfig: {
-      providers: PROVIDER_SOURCES.length,
-      sourceCount: PROVIDER_SOURCES.reduce((sum, provider) => sum + provider.urls.length, 0),
-      decisionCooldownHours: DECISION_COOLDOWN_HOURS,
-      ownerGated: "true",
-      autoApply: "false",
-    },
-  });
+  const run = await createReleaseScanRun(sql, input);
+  if (!run.created) {
+    return {
+      runId: run.id,
+      trigger: input.trigger,
+      providersChecked: 0,
+      sourcesChecked: 0,
+      candidatesEvaluated: 0,
+      newModelsDetected: 0,
+      decisionsCreated: 0,
+      heartbeatRecorded: false,
+      duplicateSuppressed: true,
+      candidates: [],
+      sourceEvidence: [],
+    };
+  }
 
   try {
     const [registeredModelIds, researchSources] = await Promise.all([
@@ -348,6 +351,74 @@ export async function runLlmReleaseScan(
     });
     throw error;
   }
+}
+
+async function createReleaseScanRun(
+  sql: Sql,
+  input: LlmReleaseScanInput,
+): Promise<{ id: string; created: boolean }> {
+  const triggerRef = input.trigger.scheduleId ?? null;
+  if (!triggerRef) {
+    const run = await createInitiativeRun(sql, {
+      hiveId: input.hiveId,
+      trigger: {
+        type: LLM_RELEASE_SCAN_TRIGGER,
+        ref: null,
+      },
+      guardrailConfig: releaseScanGuardrailConfig(),
+    });
+    return { id: run.id, created: true };
+  }
+
+  const [inserted] = await sql<Array<{ id: string }>>`
+    INSERT INTO initiative_runs (
+      hive_id,
+      trigger_type,
+      trigger_ref,
+      status,
+      started_at,
+      guardrail_config
+    )
+    VALUES (
+      ${input.hiveId},
+      ${LLM_RELEASE_SCAN_TRIGGER},
+      ${triggerRef},
+      'running',
+      NOW(),
+      ${sql.json(releaseScanGuardrailConfig())}
+    )
+    ON CONFLICT (hive_id, trigger_type, trigger_ref)
+      WHERE status = 'running'
+        AND trigger_type = 'llm-release-scan'
+        AND trigger_ref IS NOT NULL
+    DO NOTHING
+    RETURNING id
+  `;
+  if (inserted?.id) return { id: inserted.id, created: true };
+
+  const [existing] = await sql<Array<{ id: string }>>`
+    SELECT id
+    FROM initiative_runs
+    WHERE hive_id = ${input.hiveId}
+      AND trigger_type = ${LLM_RELEASE_SCAN_TRIGGER}
+      AND trigger_ref = ${triggerRef}
+      AND status = 'running'
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+  `;
+  if (existing?.id) return { id: existing.id, created: false };
+
+  throw new Error(`Failed to claim LLM release scan run for schedule ${triggerRef}`);
+}
+
+function releaseScanGuardrailConfig(): Record<string, number | string | null> {
+  return {
+    providers: PROVIDER_SOURCES.length,
+    sourceCount: PROVIDER_SOURCES.reduce((sum, provider) => sum + provider.urls.length, 0),
+    decisionCooldownHours: DECISION_COOLDOWN_HOURS,
+    ownerGated: "true",
+    autoApply: "false",
+  };
 }
 
 async function researchOfficialSources(options: LlmReleaseScanOptions): Promise<ResearchSource[]> {
