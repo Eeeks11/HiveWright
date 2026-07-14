@@ -20,6 +20,20 @@ interface ScheduleTaskTemplate {
   priority?: number;
 }
 
+interface ClaimedScheduleRow {
+  id: string;
+  hive_id: string;
+  cron_expression: string;
+  task_template: unknown;
+  enabled: boolean;
+  origin_type: string | null;
+  origin_key: string | null;
+  last_run_at: Date | null;
+  next_run_at: Date | null;
+  created_by: string;
+  created_at: Date | null;
+}
+
 async function resolveScheduledTaskProjectId(
   sql: Sql,
   hiveId: string,
@@ -58,12 +72,36 @@ async function persistScheduleFireSnapshot(
   `;
 }
 
+function computeNextRunAt(cronExpression: string): Date {
+  const interval = CronExpressionParser.parse(cronExpression);
+  return interval.next().toDate();
+}
+
+async function claimDueSchedules(sql: Sql): Promise<ClaimedScheduleRow[]> {
+  return sql.begin(async (tx) => {
+    const dueSchedules = await tx<ClaimedScheduleRow[]>`
+      SELECT *
+      FROM schedules
+      WHERE enabled = true
+        AND next_run_at <= NOW()
+      ORDER BY next_run_at ASC, id ASC
+      FOR UPDATE SKIP LOCKED
+    `;
+
+    for (const schedule of dueSchedules) {
+      await tx`
+        UPDATE schedules
+        SET last_run_at = NOW(), next_run_at = ${computeNextRunAt(schedule.cron_expression)}
+        WHERE id = ${schedule.id}
+      `;
+    }
+
+    return dueSchedules;
+  });
+}
+
 export async function checkAndFireSchedules(sql: Sql): Promise<number> {
-  const dueSchedules = await sql`
-    SELECT * FROM schedules
-    WHERE enabled = true
-      AND next_run_at <= NOW()
-  `;
+  const dueSchedules = await claimDueSchedules(sql);
 
   let created = 0;
 
@@ -228,15 +266,6 @@ export async function checkAndFireSchedules(sql: Sql): Promise<number> {
     }
 
     await persistScheduleFireSnapshot(sql, revisionSnapshot, enqueuedTaskId);
-
-    const interval = CronExpressionParser.parse(schedule.cron_expression);
-    const nextRun = interval.next().toDate();
-
-    await sql`
-      UPDATE schedules
-      SET last_run_at = NOW(), next_run_at = ${nextRun}
-      WHERE id = ${schedule.id}
-    `;
 
     created++;
   }
