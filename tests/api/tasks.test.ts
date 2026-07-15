@@ -1,3 +1,4 @@
+import postgres from "postgres";
 import { describe, it, expect, beforeEach } from "vitest";
 import { GET as getHives } from "@/app/api/hives/route";
 import { GET as getTasks, POST as createTask } from "@/app/api/tasks/route";
@@ -71,6 +72,148 @@ describe("POST /api/tasks", () => {
     expect(body.data.priority).toBe(2);
     expect(body.data.qaRequired).toBe(false);
     expect(body.data.status).toBe("pending");
+  });
+
+  it("allows creating tasks without a goalId", async () => {
+    const title = `${TEST_PREFIX}No goal task`;
+
+    const res = await createTask(taskCreateRequest({
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title,
+      brief: "Standalone task creation must remain allowed",
+      goalId: null,
+      createdBy: "test-runner",
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.goalId).toBeNull();
+    const [created] = await db<{ goal_id: string | null }[]>`
+      SELECT goal_id FROM tasks WHERE id = ${body.data.id}
+    `;
+    expect(created.goal_id).toBeNull();
+  });
+
+  it.each([
+    ["active", 201],
+    ["achieved", 409],
+    ["execution_ready", 409],
+    ["blocked_on_owner_channel", 409],
+    ["cancelled", 409],
+    ["paused", 409],
+  ] as const)("requires supplied goal status %s to be active when creating tasks", async (goalStatus, expectedStatus) => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, ${`${TEST_PREFIX}goal ${goalStatus}`}, ${goalStatus})
+      RETURNING id
+    `;
+    const title = `${TEST_PREFIX}Goal status ${goalStatus} task`;
+
+    const res = await createTask(taskCreateRequest({
+      hiveId: testHiveId,
+      assignedTo: "dev-agent",
+      title,
+      brief: "Task creation must not strand work under a non-active goal",
+      goalId: goal.id,
+      createdBy: "test-runner",
+    }));
+    const body = await res.json();
+
+    expect(res.status).toBe(expectedStatus);
+    if (expectedStatus === 201) {
+      expect(body.data.goalId).toBe(goal.id);
+    } else {
+      expect(body.error).toContain("goal is not active");
+      const [taskCount] = await db<{ total: string }[]>`
+        SELECT COUNT(*)::text AS total FROM tasks WHERE goal_id = ${goal.id} AND title = ${title}
+      `;
+      const [goalCount] = await db<{ total: string }[]>`
+        SELECT COUNT(*)::text AS total FROM goals WHERE hive_id = ${testHiveId}
+      `;
+      expect(taskCount.total).toBe("0");
+      expect(goalCount.total).toBe("1");
+    }
+  });
+
+  it("preserves forbidden semantics for nonexistent or cross-hive goal references", async () => {
+    const [otherHive] = await db<{ id: string }[]>`
+      INSERT INTO hives (slug, name, type)
+      VALUES (${TEST_PREFIX + "other"}, ${TEST_PREFIX + "Other Hive"}, 'service')
+      RETURNING id
+    `;
+    const [otherGoal] = await db<{ id: string }[]>`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${otherHive.id}, ${`${TEST_PREFIX}other hive goal`}, 'active')
+      RETURNING id
+    `;
+
+    for (const goalId of ["99999999-9999-4999-8999-999999999999", otherGoal.id]) {
+      const title = `${TEST_PREFIX}Forbidden goal ${goalId.slice(0, 8)}`;
+      const res = await createTask(taskCreateRequest({
+        hiveId: testHiveId,
+        assignedTo: "dev-agent",
+        title,
+        brief: "Task creation must preserve hive ownership checks",
+        goalId,
+        createdBy: "test-runner",
+      }));
+      const body = await res.json();
+
+      expect(res.status).toBe(403);
+      expect(body.error).toContain("goal does not belong to hive");
+      const created = await db`
+        SELECT id FROM tasks WHERE hive_id = ${testHiveId} AND title = ${title}
+      `;
+      expect(created).toHaveLength(0);
+    }
+  });
+
+  it("rejects task creation when a concurrent goal transition commits before the create transaction can lock the goal", async () => {
+    const [goal] = await db`
+      INSERT INTO goals (hive_id, title, status)
+      VALUES (${testHiveId}, ${`${TEST_PREFIX}concurrent goal transition`}, 'active')
+      RETURNING id
+    `;
+    const testDbUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+    expect(testDbUrl).toBeTruthy();
+    const transitionConn = postgres(testDbUrl!, { max: 1 });
+    const title = `${TEST_PREFIX}Concurrent non-active goal task`;
+
+    try {
+      await transitionConn`BEGIN`;
+      await transitionConn`
+        UPDATE goals
+        SET status = 'achieved', updated_at = NOW()
+        WHERE id = ${goal.id}
+      `;
+
+      const createAttempt = createTask(taskCreateRequest({
+        hiveId: testHiveId,
+        assignedTo: "dev-agent",
+        title,
+        brief: "This create must wait for the goal row and then reject the non-active status",
+        goalId: goal.id,
+        createdBy: "test-runner",
+      }));
+
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      await transitionConn`COMMIT`;
+
+      const res = await createAttempt;
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.error).toContain("goal is not active");
+
+      const created = await db`
+        SELECT id FROM tasks WHERE goal_id = ${goal.id} AND title = ${title}
+      `;
+      expect(created).toHaveLength(0);
+    } finally {
+      await transitionConn`ROLLBACK`.catch(() => undefined);
+      await transitionConn.end({ timeout: 5 });
+    }
   });
 
   it("links replacement tasks to sourceTaskId", async () => {

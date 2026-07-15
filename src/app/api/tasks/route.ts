@@ -280,17 +280,11 @@ export async function POST(request: Request) {
     const creationPause = await assertHiveCreationAllowed(sql, requestedHiveId);
     if (creationPause) return creationPausedResponse(creationPause);
 
-    let resolvedProjectId = await resolveDefaultProjectIdForHive(sql, requestedHiveId, requestedProjectId);
-    if (!resolvedProjectId && requestedGoalId) {
-      const [goalProject] = await sql<{ project_id: string | null }[]>`
-        SELECT project_id FROM goals WHERE id = ${requestedGoalId} AND hive_id = ${requestedHiveId} LIMIT 1
-      `;
-      resolvedProjectId = goalProject?.project_id ?? null;
-    }
+    const defaultResolvedProjectId = await resolveDefaultProjectIdForHive(sql, requestedHiveId, requestedProjectId);
 
     const referenceCheck = await assertTaskReferencesBelongToHive(requestedHiveId, {
       goalId: requestedGoalId,
-      projectId: resolvedProjectId,
+      projectId: defaultResolvedProjectId,
     });
     if (referenceCheck) return referenceCheck;
 
@@ -332,6 +326,15 @@ export async function POST(request: Request) {
       key: typeof idempotencyKey === "string" ? idempotencyKey : null,
       requestBody: body,
       create: async (tx) => {
+        const goalReference = await lockActiveGoalForTaskCreate(tx, requestedHiveId, requestedGoalId);
+        if ("response" in goalReference) {
+          return {
+            body: await goalReference.response.json() as Record<string, unknown>,
+            status: goalReference.response.status,
+          };
+        }
+        const resolvedProjectId = defaultResolvedProjectId ?? goalReference.projectId;
+
         const sourceTaskResult = await resolveTaskSourceForCreate(tx, {
           hiveId: requestedHiveId,
           goalId: requestedGoalId,
@@ -399,6 +402,29 @@ export async function POST(request: Request) {
     }
     return jsonError("Failed to create task", 500);
   }
+}
+
+async function lockActiveGoalForTaskCreate(db: SqlExecutor, hiveId: string, goalId: string | null): Promise<{
+  projectId: string | null;
+} | { response: Response }> {
+  if (!goalId) return { projectId: null };
+
+  const [goal] = await db<{ hive_id: string; status: string; project_id: string | null }[]>`
+    SELECT hive_id, status, project_id
+    FROM goals
+    WHERE id = ${goalId}
+    FOR UPDATE
+  `;
+
+  if (!goal || goal.hive_id !== hiveId) {
+    return { response: jsonError("Forbidden: goal does not belong to hive", 403) };
+  }
+
+  if (goal.status !== "active") {
+    return { response: jsonError("Cannot create task: supplied goal is not active", 409) };
+  }
+
+  return { projectId: goal.project_id ?? null };
 }
 
 async function resolveTaskSourceForCreate(db: SqlExecutor, input: {

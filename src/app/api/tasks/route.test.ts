@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
-  const sql = Object.assign(vi.fn(), { unsafe: vi.fn() });
+  const sql = Object.assign(vi.fn(), {
+    unsafe: vi.fn(),
+    json: vi.fn((value) => value),
+    begin: vi.fn(async (callback: (tx: typeof sql) => Promise<Response>) => callback(sql)),
+  });
   return {
     sql,
     requireApiUser: vi.fn(),
@@ -119,8 +123,14 @@ describe("POST /api/tasks payload compatibility", () => {
   it("accepts snake_case task-create fields used by agent tool contracts", async () => {
     mocks.sql
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ "?column?": 1 }])
+      .mockResolvedValueOnce([
+        {
+          hive_id: "11111111-1111-4111-8111-111111111111",
+          status: "active",
+          project_id: null,
+        },
+      ])
       .mockResolvedValueOnce([
         {
           id: "task-1",
