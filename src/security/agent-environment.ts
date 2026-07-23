@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { buildAgentEnvironmentLifecycleConfig } from "./agent-environment-lifecycle";
+import { buildAgentEnvironmentLifecycleConfig, scopeDirectoryName } from "./agent-environment-lifecycle";
 
 const RUNTIME_ENV_ALLOWLIST = [
   "PATH",
@@ -120,17 +120,6 @@ function copyExplicitValues(
     if (value === undefined || BOUNDARY_OWNED_KEYS.has(key)) continue;
     destination[key] = value;
   }
-}
-
-function scopeDirectoryName(scope: AgentEnvironmentScope): string {
-  if (scope.kind === "task") return `task-${safeSegment(scope.taskId)}--${safeSegment(scope.adapter)}`;
-  if (scope.kind === "goal-supervisor") return `goal-${safeSegment(scope.goalId)}--${safeSegment(scope.adapter)}`;
-  return `probe-${safeSegment(scope.adapter)}--${safeSegment(scope.model)}`;
-}
-
-function safeSegment(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
-  return (safe || "unknown").slice(0, 160);
 }
 
 function ensurePrivateDirectory(directory: string): void {

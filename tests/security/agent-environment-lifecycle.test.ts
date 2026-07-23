@@ -2,10 +2,13 @@ import { mkdir, readFile, rm, symlink, utimes, writeFile } from "fs/promises";
 import path from "path";
 import { tmpdir } from "os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildAgentEnvironment } from "@/security/agent-environment";
 import {
   buildAgentEnvironmentLifecycleConfig,
   checkAgentEnvironmentDiskPressure,
   cleanupAgentEnvironmentScope,
+  cleanupProbeAgentEnvironment,
+  cleanupTaskAgentEnvironmentIfTerminal,
   collectAgentEnvironmentInventory,
   reconcileAgentEnvironmentOrphans,
   simulateAgentEnvironmentRetention,
@@ -169,6 +172,45 @@ describe("agent environment lifecycle", () => {
     expect(inventory.lastCleanup?.reclaimedBytes).toBe(55);
   });
 
+
+  it("cleanup helpers delete the canonical double-delimited directories created by buildAgentEnvironment", async () => {
+    const root = await tempRoot();
+    const probeEnv = buildAgentEnvironment({
+      runtimeRoot: root,
+      scope: { kind: "probe", adapter: "claude-code", model: "anthropic/claude sonnet 4.6" },
+    });
+    const taskEnv = buildAgentEnvironment({
+      runtimeRoot: root,
+      scope: { kind: "task", adapter: "openai-codex", taskId: "task/alpha 42", hiveId: "hive-one" },
+    });
+    const probeScope = path.dirname(probeEnv.HOME!);
+    const taskScope = path.dirname(taskEnv.HOME!);
+    await writeFile(path.join(probeEnv.HOME!, "payload.txt"), "probe payload");
+    await writeFile(path.join(taskEnv.HOME!, "payload.txt"), "task payload");
+
+    expect(path.basename(probeScope)).toBe("probe-claude-code--anthropic-claude-sonnet-4.6");
+    expect(path.basename(taskScope)).toBe("task-task-alpha-42--openai-codex");
+
+    const probeResult = await cleanupProbeAgentEnvironment({
+      runtimeRoot: root,
+      adapter: "claude-code",
+      model: "anthropic/claude sonnet 4.6",
+    });
+    const sql = (async () => [{ status: "completed" }]) as never;
+    const taskResult = await cleanupTaskAgentEnvironmentIfTerminal(sql, {
+      runtimeRoot: root,
+      taskId: "task/alpha 42",
+      adapter: "openai-codex",
+      graceMs: 0,
+    });
+
+    expect(probeResult.path).toBe(probeScope);
+    expect(probeResult.deleted).toBe(true);
+    expect(taskResult?.path).toBe(taskScope);
+    expect(taskResult?.deleted).toBe(true);
+    await expect(readFile(path.join(probeEnv.HOME!, "payload.txt"))).rejects.toThrow();
+    await expect(readFile(path.join(taskEnv.HOME!, "payload.txt"))).rejects.toThrow();
+  });
 
   it("parses hyphenated task ids, adapters, and probe models without truncating segments", async () => {
     const root = await tempRoot();

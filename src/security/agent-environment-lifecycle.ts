@@ -18,6 +18,10 @@ const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "cancelled", "clo
 const TERMINAL_GOAL_STATUSES = new Set(["achieved", "completed", "failed", "cancelled", "abandoned", "archived"]);
 
 export type AgentEnvironmentScopeKind = "task" | "probe" | "goal-supervisor" | "shared-cache" | "unknown";
+export type AgentEnvironmentScopeNameInput =
+  | { kind: "task"; adapter: string; taskId: string }
+  | { kind: "probe"; adapter: string; model: string }
+  | { kind: "goal-supervisor"; adapter: string; goalId: string };
 
 export interface AgentEnvironmentLifecycleConfig {
   runtimeRoot: string;
@@ -162,7 +166,7 @@ export async function cleanupProbeAgentEnvironment(input: {
   const runtimeRoot = path.resolve(input.runtimeRoot ?? defaultRuntimeRoot());
   return cleanupAgentEnvironmentScopeByName({
     runtimeRoot,
-    scopeName: `probe-${safeSegment(input.adapter)}-${safeSegment(input.model)}`,
+    scopeName: scopeDirectoryName({ kind: "probe", adapter: input.adapter, model: input.model }),
     dryRun: input.dryRun,
     reason: input.reason ?? "probe_terminal",
     proof: "adapter probe returned",
@@ -178,7 +182,7 @@ export async function cleanupTaskAgentEnvironmentIfTerminal(sql: Sql, input: {
   graceMs?: number;
 }): Promise<CleanupEvidence | null> {
   const config = buildAgentEnvironmentLifecycleConfig({ runtimeRoot: input.runtimeRoot, dryRun: input.dryRun, taskGraceMs: input.graceMs });
-  const scopeName = `task-${safeSegment(input.taskId)}-${safeSegment(input.adapter)}`;
+  const scopeName = scopeDirectoryName({ kind: "task", taskId: input.taskId, adapter: input.adapter });
   const scopePath = path.join(config.runtimeRoot, scopeName);
   const ref: AgentEnvironmentScopeRef = { kind: "task", scopeId: input.taskId, adapter: input.adapter, path: scopePath };
   const terminal = await defaultTerminalStateChecker(sql)(ref);
@@ -467,6 +471,12 @@ export function parseScopePath(runtimeRoot: string, scopePath: string): AgentEnv
   const goal = parseDelimitedScopeName(name, "goal");
   if (goal) return { kind: "goal-supervisor", scopeId: goal.scopeId, adapter: goal.adapter, path: resolvedPath };
   return { kind: "unknown", scopeId: name, adapter: null, path: resolvedPath };
+}
+
+export function scopeDirectoryName(scope: AgentEnvironmentScopeNameInput): string {
+  if (scope.kind === "task") return `task-${safeSegment(scope.taskId)}--${safeSegment(scope.adapter)}`;
+  if (scope.kind === "goal-supervisor") return `goal-${safeSegment(scope.goalId)}--${safeSegment(scope.adapter)}`;
+  return `probe-${safeSegment(scope.adapter)}--${safeSegment(scope.model)}`;
 }
 
 function parseDelimitedScopeName(name: string, prefix: "task" | "probe" | "goal"): { scopeId: string; adapter: string } | null {
