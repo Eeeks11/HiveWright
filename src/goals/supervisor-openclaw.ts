@@ -5,7 +5,7 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { resolveGoalSupervisorRuntime } from "./supervisor-routing";
-import { buildGoalSupervisorProcessEnv, loadGoalSupervisorCredentials } from "./supervisor-env";
+import { buildGoalSupervisorProcessEnv, checkGoalSupervisorDiskGate, cleanupGoalSupervisorEnvironmentBestEffort, loadGoalSupervisorCredentials } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
 import {
   captureGoalProgress,
@@ -178,6 +178,12 @@ ${initialPrompt}
   if (!claimed) return { agentId };
   const progressBaseline = await captureGoalProgress(sql, goalId);
 
+  const diskGate = await checkGoalSupervisorDiskGate();
+  if (!diskGate.allowed) {
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
+    return { agentId, error: `Supervisor disk gate blocked spawn: ${diskGate.reason}` };
+  }
+
   const ensured = await ensureSupervisorAgent(agentId, workspacePath, primaryModel, spawnScope);
   if (!ensured.ok) {
     await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
@@ -186,6 +192,7 @@ ${initialPrompt}
 
   // Run the supervisor synchronously — blocks until complete or timeout
   const runResult = await runSupervisorInWorkspace(agentId, workspacePath, initialPrompt, spawnScope);
+  await cleanupGoalSupervisorEnvironmentBestEffort({ adapter: "openclaw", goalId });
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor] openclaw agent run failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr}`);
@@ -272,8 +279,12 @@ export async function wakeUpSupervisor(
   const toolsMd = buildSupervisorToolsMd(goal as { hive_id: string; project_id?: string | null; project_git_repo?: boolean | null }, goalId);
   fs.writeFileSync(path.join(workspacePath, "TOOLS.md"), toolsMd, "utf-8");
 
+  const diskGate = await checkGoalSupervisorDiskGate();
+  if (!diskGate.allowed) return { success: false, output: "", error: `Supervisor disk gate blocked spawn: ${diskGate.reason}` };
+
   // Run the supervisor synchronously — blocks until complete or timeout
   const runResult = await runSupervisorInWorkspace(agentId, workspacePath, wakeUpPrompt, spawnScope);
+  await cleanupGoalSupervisorEnvironmentBestEffort({ adapter: "openclaw", goalId });
 
   if (runResult.code !== 0) {
     return { success: false, output: runResult.stderr, error: `openclaw agent run failed (exit ${runResult.code}): ${runResult.stderr}` };

@@ -123,9 +123,9 @@ function copyExplicitValues(
 }
 
 function scopeDirectoryName(scope: AgentEnvironmentScope): string {
-  if (scope.kind === "task") return `task-${safeSegment(scope.taskId)}-${safeSegment(scope.adapter)}`;
-  if (scope.kind === "goal-supervisor") return `goal-${safeSegment(scope.goalId)}-${safeSegment(scope.adapter)}`;
-  return `probe-${safeSegment(scope.adapter)}-${safeSegment(scope.model)}`;
+  if (scope.kind === "task") return `task-${safeSegment(scope.taskId)}--${safeSegment(scope.adapter)}`;
+  if (scope.kind === "goal-supervisor") return `goal-${safeSegment(scope.goalId)}--${safeSegment(scope.adapter)}`;
+  return `probe-${safeSegment(scope.adapter)}--${safeSegment(scope.model)}`;
 }
 
 function safeSegment(value: string): string {

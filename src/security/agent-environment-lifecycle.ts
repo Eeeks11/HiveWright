@@ -12,6 +12,7 @@ const DEFAULT_GOAL_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_PROBE_GRACE_MS = 0;
 const DEFAULT_GLOBAL_BYTE_CAP = 160 * 1024 * 1024 * 1024;
 const DEFAULT_PER_SCOPE_BYTE_CAP = 4 * 1024 * 1024 * 1024;
+const DEFAULT_SHARED_CACHE_BYTE_CAP = 32 * 1024 * 1024 * 1024;
 
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "cancelled", "closed", "done", "archived"]);
 const TERMINAL_GOAL_STATUSES = new Set(["achieved", "completed", "failed", "cancelled", "abandoned", "archived"]);
@@ -31,6 +32,7 @@ export interface AgentEnvironmentLifecycleConfig {
   probeGraceMs: number;
   globalByteCap: number;
   perScopeByteCap: number;
+  sharedCacheByteCap: number;
   buildSharedCacheEnv(base?: Record<string, string | undefined>): Record<string, string>;
 }
 
@@ -69,6 +71,7 @@ export function buildAgentEnvironmentLifecycleConfig(input: Partial<{
   probeGraceMs: number;
   globalByteCap: number;
   perScopeByteCap: number;
+  sharedCacheByteCap: number;
 }> = {}): AgentEnvironmentLifecycleConfig {
   const runtimeRoot = path.resolve(input.runtimeRoot ?? defaultRuntimeRoot());
   const sharedCacheRoot = path.join(runtimeRoot, "_shared-cache");
@@ -85,6 +88,7 @@ export function buildAgentEnvironmentLifecycleConfig(input: Partial<{
     probeGraceMs: input.probeGraceMs ?? envDurationMs("HIVEWRIGHT_AGENT_ENV_PROBE_GRACE_MS", DEFAULT_PROBE_GRACE_MS),
     globalByteCap: input.globalByteCap ?? envBytes("HIVEWRIGHT_AGENT_ENV_GLOBAL_BYTE_CAP", DEFAULT_GLOBAL_BYTE_CAP),
     perScopeByteCap: input.perScopeByteCap ?? envBytes("HIVEWRIGHT_AGENT_ENV_PER_SCOPE_BYTE_CAP", DEFAULT_PER_SCOPE_BYTE_CAP),
+    sharedCacheByteCap: input.sharedCacheByteCap ?? envBytes("HIVEWRIGHT_AGENT_ENV_SHARED_CACHE_BYTE_CAP", DEFAULT_SHARED_CACHE_BYTE_CAP),
   };
   return {
     ...config,
@@ -302,8 +306,16 @@ export async function checkAgentEnvironmentDiskPressure(input: {
   if (mode === "hard") {
     return { allowed: false, reason: formatDiskPressureReason("disk_pressure_hard_stop", watermark, config), watermark };
   }
+
+  const cleanup = await enforceAgentEnvironmentByteCaps({
+    config,
+    now: input.now,
+    terminalStateChecker: input.terminalStateChecker,
+    processInspector: input.processInspector,
+  });
+
   if (mode === "warning") {
-    const cleanup = await reconcileAgentEnvironmentOrphans({
+    const warningCleanup = await reconcileAgentEnvironmentOrphans({
       runtimeRoot: config.runtimeRoot,
       dryRun: config.dryRun,
       now: input.now,
@@ -311,9 +323,106 @@ export async function checkAgentEnvironmentDiskPressure(input: {
       terminalStateChecker: input.terminalStateChecker,
       processInspector: input.processInspector,
     });
+    cleanup.deleted.push(...warningCleanup.deleted);
+    cleanup.skipped.push(...warningCleanup.skipped);
     return { allowed: true, reason: formatDiskPressureReason("disk_pressure_warning_cleanup", watermark, config), watermark, cleanup };
   }
-  return { allowed: true, reason: "disk_pressure_recovered", watermark };
+  return cleanup.deleted.length > 0 || cleanup.skipped.length > 0
+    ? { allowed: true, reason: "disk_pressure_caps_enforced", watermark, cleanup }
+    : { allowed: true, reason: "disk_pressure_recovered", watermark };
+}
+
+async function enforceAgentEnvironmentByteCaps(input: {
+  config: AgentEnvironmentLifecycleConfig;
+  now?: Date;
+  terminalStateChecker?: AgentEnvironmentTerminalStateChecker;
+  processInspector?: AgentEnvironmentProcessInspector;
+}): Promise<{ deleted: CleanupEvidence[]; skipped: CleanupEvidence[] }> {
+  const now = input.now ?? new Date();
+  const { config } = input;
+  const entries = await listScopeEntries(config.runtimeRoot);
+  const deleted: CleanupEvidence[] = [];
+  const skipped: CleanupEvidence[] = [];
+
+  const sharedEntries = await listScopeEntries(config.sharedCacheRoot);
+  let sharedBytes = 0;
+  const sharedSized = [] as Array<{ path: string; bytes: number; mtimeMs: number }>;
+  for (const entry of sharedEntries) {
+    const bytes = await directorySize(entry.path);
+    const mtimeMs = entry.mtimeMs ?? await statMtimeMs(entry.path);
+    sharedBytes += bytes;
+    sharedSized.push({ path: entry.path, bytes, mtimeMs });
+  }
+  for (const entry of sharedSized.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    if (sharedBytes <= config.sharedCacheByteCap) break;
+    const cleanup = await cleanupSharedCacheEntry({ config, entryPath: entry.path, reason: "shared_cache_byte_cap" });
+    (cleanup.deleted ? deleted : skipped).push(cleanup);
+    if (cleanup.deleted) sharedBytes -= entry.bytes;
+  }
+
+  const scoped = [] as Array<AgentEnvironmentScopeRef & { mtimeMs: number; bytes: number; reclaimable: boolean; proof?: string }>;
+  for (const entry of entries) {
+    const ref = parseScopePath(config.runtimeRoot, entry.path);
+    if (!ref || ref.kind === "shared-cache" || ref.kind === "unknown") continue;
+    const bytes = await directorySize(ref.path);
+    const mtimeMs = entry.mtimeMs ?? await statMtimeMs(ref.path);
+    let reclaimable = ref.kind === "probe";
+    let proof = ref.kind === "probe" ? "probe scope is terminal after process exit" : undefined;
+    if (!reclaimable) {
+      const terminal = input.terminalStateChecker ? await input.terminalStateChecker(ref) : { terminal: false, proof: "no_db_checker" };
+      proof = terminal.proof;
+      const proc = input.processInspector ? await input.processInspector(ref.path) : await defaultProcessInspector(ref.path);
+      reclaimable = terminal.terminal && !proc.referenced;
+      if (terminal.terminal && proc.referenced) skipped.push({ path: ref.path, reason: "byte_cap", dryRun: config.dryRun, deleted: false, bytes, skippedReason: "active_process_reference", proof, pids: proc.pids });
+    }
+    scoped.push({ ...ref, bytes, mtimeMs, reclaimable, proof });
+  }
+
+  for (const ref of scoped) {
+    if (ref.bytes <= config.perScopeByteCap || !ref.reclaimable) continue;
+    const cleanup = await cleanupAgentEnvironmentScope({ runtimeRoot: config.runtimeRoot, scopePath: ref.path, dryRun: config.dryRun, reason: "per_scope_byte_cap", proof: ref.proof });
+    (cleanup.deleted ? deleted : skipped).push(cleanup);
+  }
+
+  const afterPerScope = await listScopeEntries(config.runtimeRoot);
+  const remaining = [] as Array<AgentEnvironmentScopeRef & { mtimeMs: number; bytes: number; reclaimable: boolean; proof?: string }>;
+  let totalBytes = await directorySize(config.sharedCacheRoot);
+  for (const entry of afterPerScope) {
+    const ref = parseScopePath(config.runtimeRoot, entry.path);
+    if (!ref || ref.kind === "shared-cache" || ref.kind === "unknown") continue;
+    const bytes = await directorySize(ref.path);
+    totalBytes += bytes;
+    let reclaimable = ref.kind === "probe";
+    let proof = ref.kind === "probe" ? "probe scope is terminal after process exit" : undefined;
+    if (!reclaimable) {
+      const terminal = input.terminalStateChecker ? await input.terminalStateChecker(ref) : { terminal: false, proof: "no_db_checker" };
+      const proc = input.processInspector ? await input.processInspector(ref.path) : await defaultProcessInspector(ref.path);
+      reclaimable = terminal.terminal && !proc.referenced;
+      proof = terminal.proof;
+    }
+    remaining.push({ ...ref, bytes, mtimeMs: entry.mtimeMs ?? await statMtimeMs(ref.path), reclaimable, proof });
+  }
+  for (const ref of remaining.filter((item) => item.reclaimable).sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    if (totalBytes <= config.globalByteCap) break;
+    const cleanup = await cleanupAgentEnvironmentScope({ runtimeRoot: config.runtimeRoot, scopePath: ref.path, dryRun: config.dryRun, reason: "global_byte_cap", proof: ref.proof });
+    (cleanup.deleted ? deleted : skipped).push(cleanup);
+    if (cleanup.deleted) totalBytes -= ref.bytes;
+  }
+  return { deleted, skipped };
+}
+
+async function cleanupSharedCacheEntry(input: { config: AgentEnvironmentLifecycleConfig; entryPath: string; reason: string }): Promise<CleanupEvidence> {
+  const entryPath = path.resolve(input.entryPath);
+  const base: CleanupEvidence = { path: entryPath, reason: input.reason, dryRun: input.config.dryRun, deleted: false, bytes: await directorySize(entryPath) };
+  const sharedRootReal = await realpathOrNull(input.config.sharedCacheRoot);
+  const entryReal = await realpathOrNull(entryPath);
+  const stat = await lstatOrNull(entryPath);
+  if (!sharedRootReal) return { ...base, skippedReason: "shared_cache_missing" };
+  if (!entryReal || !stat) return { ...base, skippedReason: "scope_missing" };
+  if (stat.isSymbolicLink() || !pathWithin(entryReal, sharedRootReal) || entryReal === sharedRootReal) return { ...base, skippedReason: "outside_shared_cache" };
+  if (input.config.dryRun) return base;
+  await fsp.rm(entryPath, { recursive: true, force: false });
+  return { ...base, deleted: true };
 }
 
 export function simulateAgentEnvironmentRetention(input: {
@@ -351,13 +460,44 @@ export function parseScopePath(runtimeRoot: string, scopePath: string): AgentEnv
   if (!pathWithin(resolvedPath, resolvedRoot)) return null;
   const name = path.basename(resolvedPath);
   if (name === "_shared-cache") return { kind: "shared-cache", scopeId: name, adapter: null, path: resolvedPath };
-  const task = name.match(/^task-(.+)-([^-]+)$/);
-  if (task) return { kind: "task", scopeId: task[1], adapter: task[2], path: resolvedPath };
-  const probe = name.match(/^probe-(.+)-(.+)$/);
-  if (probe) return { kind: "probe", scopeId: probe[2], adapter: probe[1], path: resolvedPath };
-  const goal = name.match(/^goal-(.+)-([^-]+)$/);
-  if (goal) return { kind: "goal-supervisor", scopeId: goal[1], adapter: goal[2], path: resolvedPath };
+  const task = parseDelimitedScopeName(name, "task");
+  if (task) return { kind: "task", scopeId: task.scopeId, adapter: task.adapter, path: resolvedPath };
+  const probe = parseDelimitedScopeName(name, "probe");
+  if (probe) return { kind: "probe", scopeId: probe.scopeId, adapter: probe.adapter, path: resolvedPath };
+  const goal = parseDelimitedScopeName(name, "goal");
+  if (goal) return { kind: "goal-supervisor", scopeId: goal.scopeId, adapter: goal.adapter, path: resolvedPath };
   return { kind: "unknown", scopeId: name, adapter: null, path: resolvedPath };
+}
+
+function parseDelimitedScopeName(name: string, prefix: "task" | "probe" | "goal"): { scopeId: string; adapter: string } | null {
+  const body = name.startsWith(`${prefix}-`) ? name.slice(prefix.length + 1) : null;
+  if (!body) return null;
+  const delimiter = body.lastIndexOf("--");
+  if (delimiter >= 0) {
+    const left = body.slice(0, delimiter);
+    const right = body.slice(delimiter + 2);
+    if (left && right) {
+      return prefix === "probe"
+        ? { adapter: left, scopeId: right }
+        : { scopeId: left, adapter: right };
+    }
+  }
+  const knownAdapters = ["claude-code", "openai-codex", "openclaw-session", "openclaw", "gemini", "codex", "ollama"];
+  for (const adapter of knownAdapters.sort((a, b) => b.length - a.length)) {
+    const suffix = `-${adapter}`;
+    if ((prefix === "task" || prefix === "goal") && body.endsWith(suffix) && body.length > suffix.length) {
+      return { scopeId: body.slice(0, -suffix.length), adapter };
+    }
+    const prefixText = `${adapter}-`;
+    if (prefix === "probe" && body.startsWith(prefixText) && body.length > prefixText.length) {
+      return { adapter, scopeId: body.slice(prefixText.length) };
+    }
+  }
+  const legacy = prefix === "probe" ? body.match(/^(.+)-(.+)$/) : body.match(/^(.+)-([^-]+)$/);
+  if (!legacy) return null;
+  return prefix === "probe"
+    ? { adapter: legacy[1], scopeId: legacy[2] }
+    : { scopeId: legacy[1], adapter: legacy[2] };
 }
 
 export function defaultTerminalStateChecker(sql: Sql): AgentEnvironmentTerminalStateChecker {

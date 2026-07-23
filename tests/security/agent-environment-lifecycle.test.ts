@@ -9,6 +9,7 @@ import {
   collectAgentEnvironmentInventory,
   reconcileAgentEnvironmentOrphans,
   simulateAgentEnvironmentRetention,
+  parseScopePath,
   type AgentEnvironmentProcessInspector,
   type AgentEnvironmentTerminalStateChecker,
 } from "@/security/agent-environment-lifecycle";
@@ -166,6 +167,67 @@ describe("agent environment lifecycle", () => {
     expect(inventory.age.oldestMs).toBe(3 * 86_400_000);
     expect(inventory.watermark?.mode).toBe("warning");
     expect(inventory.lastCleanup?.reclaimedBytes).toBe(55);
+  });
+
+
+  it("parses hyphenated task ids, adapters, and probe models without truncating segments", async () => {
+    const root = await tempRoot();
+    const taskScope = await createScope(root, "task-task-alpha-42--claude-code", 1);
+    const probeScope = await createScope(root, "probe-claude-code--anthropic-claude-sonnet-4-6", 1);
+    const goalScope = await createScope(root, "goal-goal-alpha-42--openclaw", 1);
+
+    expect(parseScopePath(root, taskScope)).toMatchObject({
+      kind: "task",
+      scopeId: "task-alpha-42",
+      adapter: "claude-code",
+    });
+    expect(parseScopePath(root, probeScope)).toMatchObject({
+      kind: "probe",
+      scopeId: "anthropic-claude-sonnet-4-6",
+      adapter: "claude-code",
+    });
+    expect(parseScopePath(root, goalScope)).toMatchObject({
+      kind: "goal-supervisor",
+      scopeId: "goal-alpha-42",
+      adapter: "openclaw",
+    });
+  });
+
+  it("enforces shared-cache, per-scope, and global byte caps during disk-pressure checks", async () => {
+    const root = await tempRoot();
+    const sharedOld = await createScope(path.join(root, "_shared-cache"), "old-cache", 60);
+    const oversizedProbe = await createScope(root, "probe-codex--gpt-5-5", 90);
+    const oldTask = await createScope(root, "task-old-task--codex", 70);
+    const activeTask = await createScope(root, "task-active-task--codex", 70);
+    const staleAt = new Date("2026-07-22T00:00:00.000Z");
+    await Promise.all([sharedOld, oversizedProbe, oldTask, activeTask].map((scope) => utimes(scope, staleAt, staleAt)));
+    const now = new Date("2026-07-23T00:00:00.000Z");
+
+    const result = await checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig({
+        runtimeRoot: root,
+        dryRun: false,
+        warningFreeBytes: 10,
+        warningFreeRatio: 0.01,
+        hardFreeBytes: 1,
+        hardFreeRatio: 0.001,
+        perScopeByteCap: 80,
+        globalByteCap: 190,
+        sharedCacheByteCap: 50,
+      }),
+      now,
+      statfs: async () => ({ freeBytes: 500, totalBytes: 1_000 }),
+      terminalStateChecker: async (scope) => ({ terminal: scope.scopeId !== "active-task", proof: scope.scopeId }),
+      processInspector: async () => ({ referenced: false, pids: [] }),
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.cleanup?.deleted.map((item) => path.basename(item.path))).toEqual(expect.arrayContaining([
+      "old-cache",
+      "probe-codex--gpt-5-5",
+      "task-old-task--codex",
+    ]));
+    await expect(readFile(path.join(activeTask, "home", ".npm", "payload.bin"))).resolves.toBeInstanceOf(Buffer);
   });
 
   it("hard-stops below disk watermark, performs warning cleanup below warning watermark, and resumes after recovery", async () => {

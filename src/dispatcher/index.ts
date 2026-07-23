@@ -127,6 +127,7 @@ import type { AdapterResult } from "../adapters/types";
 import {
   buildAgentEnvironmentLifecycleConfig,
   checkAgentEnvironmentDiskPressure,
+  cleanupTaskAgentEnvironmentIfTerminal,
   defaultTerminalStateChecker,
 } from "../security/agent-environment-lifecycle";
 
@@ -787,10 +788,7 @@ export class Dispatcher {
         const task = await claimNextTask(this.sql, process.pid);
         if (!task) break;
 
-        const diskGate = await checkAgentEnvironmentDiskPressure({
-          config: buildAgentEnvironmentLifecycleConfig(),
-          terminalStateChecker: defaultTerminalStateChecker(this.sql),
-        }).catch((err) => ({ allowed: true, reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}` }));
+        const diskGate = await this.checkAgentEnvironmentSpawnDiskGate();
         if (!diskGate.allowed) {
           console.warn(`[dispatcher] Disk pressure blocked task ${task.id} before spawn: ${diskGate.reason}`);
           await blockTask(this.sql, task.id, diskGate.reason);
@@ -812,7 +810,18 @@ export class Dispatcher {
     }
   }
 
+  private async checkAgentEnvironmentSpawnDiskGate(): Promise<{ allowed: boolean; reason: string }> {
+    return checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig(),
+      terminalStateChecker: defaultTerminalStateChecker(this.sql),
+    }).catch((err) => ({
+      allowed: false,
+      reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}`,
+    }));
+  }
+
   private async executeTask(task: ClaimedTask) {
+    let adapterTypeForCleanup: string | null = null;
     try {
       try {
         await emitTaskEvent(this.sql, { type: "task_claimed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId });
@@ -955,6 +964,16 @@ export class Dispatcher {
         ctx.model = route.model;
         // Null the fallback to prevent the adapter from trying to fall back again to itself.
         if (route.clearFallbackModel) ctx.fallbackModel = null;
+      }
+
+      adapterTypeForCleanup = route.adapterType;
+
+      const executionDiskGate = await this.checkAgentEnvironmentSpawnDiskGate();
+      if (!executionDiskGate.allowed) {
+        const reason = `runtime_blocked: Agent environment disk gate blocked task before spawn. ${executionDiskGate.reason}`;
+        console.warn(`[dispatcher] ${reason} task=${task.id}`);
+        await blockTask(this.sql, task.id, reason);
+        return;
       }
 
       if (!route.canRun) {
@@ -1817,6 +1836,15 @@ export class Dispatcher {
 
     } catch (err) {
       console.error("[dispatcher] Error processing task:", err);
+    } finally {
+      if (adapterTypeForCleanup) {
+        await cleanupTaskAgentEnvironmentIfTerminal(this.sql, {
+          taskId: task.id,
+          adapter: adapterTypeForCleanup,
+        }).catch((err) => {
+          console.warn(`[agent-environment] task cleanup skipped for ${task.id}/${adapterTypeForCleanup}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
     }
   }
 
