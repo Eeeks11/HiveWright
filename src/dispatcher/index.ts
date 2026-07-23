@@ -124,6 +124,11 @@ import {
   type ExecutionRunRecord,
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
+import {
+  buildAgentEnvironmentLifecycleConfig,
+  checkAgentEnvironmentDiskPressure,
+  defaultTerminalStateChecker,
+} from "../security/agent-environment-lifecycle";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 const CODEX_RUNTIME_CONTEXT_BYTE_CAP = 16_384;
@@ -781,6 +786,16 @@ export class Dispatcher {
       while (!this.shuttingDown && !this.drainRequested && this.activeTasks < liveMaxConcurrent) {
         const task = await claimNextTask(this.sql, process.pid);
         if (!task) break;
+
+        const diskGate = await checkAgentEnvironmentDiskPressure({
+          config: buildAgentEnvironmentLifecycleConfig(),
+          terminalStateChecker: defaultTerminalStateChecker(this.sql),
+        }).catch((err) => ({ allowed: true, reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}` }));
+        if (!diskGate.allowed) {
+          console.warn(`[dispatcher] Disk pressure blocked task ${task.id} before spawn: ${diskGate.reason}`);
+          await blockTask(this.sql, task.id, diskGate.reason);
+          continue;
+        }
 
         this.activeTasks++;
         console.log(`[dispatcher] Claimed task: ${task.id} (${task.title}) -> ${task.assignedTo} [${this.activeTasks}/${liveMaxConcurrent} active]`);

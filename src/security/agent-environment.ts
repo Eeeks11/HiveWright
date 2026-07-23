@@ -1,5 +1,6 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
+import { buildAgentEnvironmentLifecycleConfig } from "./agent-environment-lifecycle";
 
 const RUNTIME_ENV_ALLOWLIST = [
   "PATH",
@@ -93,6 +94,8 @@ export function buildAgentEnvironment(input: BuildAgentEnvironmentInput): NodeJS
   env.XDG_CONFIG_HOME = path.join(home, ".config");
   env.XDG_CACHE_HOME = path.join(home, ".cache");
   env.XDG_DATA_HOME = path.join(home, ".local", "share");
+
+  Object.assign(env, buildAgentEnvironmentLifecycleConfig({ runtimeRoot }).buildSharedCacheEnv());
 
   copyExplicitValues(env, input.credentials);
   copyExplicitValues(env, input.adapterEnv);

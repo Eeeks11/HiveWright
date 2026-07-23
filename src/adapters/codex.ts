@@ -15,6 +15,7 @@ import {
 } from "../audit/agent-events";
 import { assertNotForbiddenHiveWrightWorkspace } from "../dispatcher/workspace-policy";
 import { buildAgentEnvironment } from "../security/agent-environment";
+import { cleanupProbeAgentEnvironment } from "../security/agent-environment-lifecycle";
 
 /**
  * Direct codex CLI adapter — bypasses openclaw entirely.
@@ -62,6 +63,9 @@ export class CodexAdapter implements Adapter {
       proc.stdin.end();
 
       proc.on("close", (code) => {
+        void cleanupProbeAgentEnvironment({ adapter: "codex", model: modelName }).catch((err) => {
+          console.warn(`[agent-environment] probe cleanup skipped for codex/${modelName}: ${err instanceof Error ? err.message : String(err)}`);
+        });
         const latencyMs = Date.now() - startedAt;
         if (isCodexRolloutThreadNotFound(stderr)) {
           resolve(probeResultFromBoundaryError({ stderr, stdout, latencyMs }));
