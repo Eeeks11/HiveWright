@@ -631,6 +631,7 @@ export function buildModelRoutePoolCapacityDiagnostic(
 export { setLastAgentEnvironmentCleanupResultForTests };
 
 async function defaultAgentEnvironmentStatfs(targetPath: string): Promise<{ freeBytes: number; totalBytes: number }> {
+  await fs.promises.mkdir(targetPath, { recursive: true });
   const stat = await fs.promises.statfs(targetPath);
   const bsize = Number((stat as { bsize?: number | bigint }).bsize ?? 0);
   const bavail = Number((stat as { bavail?: number | bigint }).bavail ?? 0);

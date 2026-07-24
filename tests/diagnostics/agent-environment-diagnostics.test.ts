@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm } from "fs/promises";
+import { mkdir, writeFile, rm, stat } from "fs/promises";
 import path from "path";
 import { tmpdir } from "os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +29,22 @@ afterEach(async () => {
 });
 
 describe("collectAgentEnvironmentDiagnostics", () => {
+  it("creates a missing runtime root before collecting filesystem stats", async () => {
+    const root = await tempRoot();
+    const missingRuntimeRoot = path.join(root, "agent-environments");
+
+    const diagnostics = await collectAgentEnvironmentDiagnostics({
+      runtimeRoot: missingRuntimeRoot,
+      terminalStateChecker: async () => ({ terminal: false, proof: "not needed" }),
+      processInspector: async () => ({ referenced: false, pids: [] }),
+    });
+
+    await expect(stat(missingRuntimeRoot)).resolves.toMatchObject({ mode: expect.any(Number) });
+    expect(diagnostics.runtimeRoot).toBe(missingRuntimeRoot);
+    expect(diagnostics.counts.total).toBe(0);
+    expect(diagnostics.watermark.totalBytes).toBeGreaterThan(0);
+  });
+
   it("reports inventory counts, reclaimable bytes, watermarks, and last cleanup evidence", async () => {
     const root = await tempRoot();
     const oldTask = await createScope(root, "task-done-task--codex", 33);

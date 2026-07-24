@@ -349,7 +349,7 @@ export async function checkAgentEnvironmentDiskPressure(input: {
     rememberCleanupResult(cleanup.deleted, cleanup.deleted.length > 0 ? "disk_pressure_hard_cleanup_attempt" : "disk_pressure_hard_stop");
     return {
       allowed: false,
-      reason: formatDiskPressureReason(cleanup.deleted.length > 0 ? "disk_pressure_hard_cleanup_attempt" : "disk_pressure_hard_stop", finalWatermark, config),
+      reason: formatDiskPressureReason("disk_pressure_hard_stop", finalWatermark, config),
       watermark: finalWatermark,
       cleanup: cleanup.deleted.length > 0 || cleanup.skipped.length > 0 ? cleanup : undefined,
     };
@@ -398,7 +398,12 @@ async function enforceAgentEnvironmentByteCaps(input: {
   }
   for (const entry of sharedSized.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
     if (sharedBytes <= config.sharedCacheByteCap) break;
-    const cleanup = await cleanupSharedCacheEntry({ config, entryPath: entry.path, reason: "shared_cache_byte_cap" });
+    const cleanup = await cleanupSharedCacheEntry({
+      config,
+      entryPath: entry.path,
+      reason: "shared_cache_byte_cap",
+      processInspector: input.processInspector,
+    });
     (cleanup.deleted ? deleted : skipped).push(cleanup);
     if (cleanup.deleted) sharedBytes -= entry.bytes;
   }
@@ -454,7 +459,12 @@ async function enforceAgentEnvironmentByteCaps(input: {
   return { deleted, skipped };
 }
 
-async function cleanupSharedCacheEntry(input: { config: AgentEnvironmentLifecycleConfig; entryPath: string; reason: string }): Promise<CleanupEvidence> {
+async function cleanupSharedCacheEntry(input: {
+  config: AgentEnvironmentLifecycleConfig;
+  entryPath: string;
+  reason: string;
+  processInspector?: AgentEnvironmentProcessInspector;
+}): Promise<CleanupEvidence> {
   const entryPath = path.resolve(input.entryPath);
   const base: CleanupEvidence = { path: entryPath, reason: input.reason, dryRun: input.config.dryRun, deleted: false, bytes: await directorySize(entryPath) };
   const sharedRootReal = await realpathOrNull(input.config.sharedCacheRoot);
@@ -463,6 +473,8 @@ async function cleanupSharedCacheEntry(input: { config: AgentEnvironmentLifecycl
   if (!sharedRootReal) return { ...base, skippedReason: "shared_cache_missing" };
   if (!entryReal || !stat) return { ...base, skippedReason: "scope_missing" };
   if (stat.isSymbolicLink() || !pathWithin(entryReal, sharedRootReal) || entryReal === sharedRootReal) return { ...base, skippedReason: "outside_shared_cache" };
+  const proc = await (input.processInspector ?? defaultProcessInspector)(entryPath);
+  if (proc.referenced) return { ...base, skippedReason: "active_process_reference", pids: proc.pids };
   if (input.config.dryRun) return base;
   await fsp.rm(entryPath, { recursive: true, force: false });
   return { ...base, deleted: true };

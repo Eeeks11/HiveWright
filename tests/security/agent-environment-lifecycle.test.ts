@@ -297,6 +297,38 @@ describe("agent environment lifecycle", () => {
     await expect(readFile(path.join(activeTask, "home", ".npm", "payload.bin"))).resolves.toBeInstanceOf(Buffer);
   });
 
+  it("preserves active shared-cache entries while enforcing shared-cache byte caps", async () => {
+    const root = await tempRoot();
+    const activeShared = await createScope(path.join(root, "_shared-cache"), "playwright", 60);
+    const oldShared = await createScope(path.join(root, "_shared-cache"), "npm", 60);
+    const staleAt = new Date("2026-07-22T00:00:00.000Z");
+    await Promise.all([activeShared, oldShared].map((scope) => utimes(scope, staleAt, staleAt)));
+
+    const result = await checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig({
+        runtimeRoot: root,
+        dryRun: false,
+        warningFreeBytes: 10,
+        warningFreeRatio: 0.01,
+        hardFreeBytes: 1,
+        hardFreeRatio: 0.001,
+        sharedCacheByteCap: 50,
+      }),
+      statfs: async () => ({ freeBytes: 500, totalBytes: 1_000 }),
+      processInspector: async (scopePath) => scopePath === activeShared
+        ? { referenced: true, pids: [4242] }
+        : { referenced: false, pids: [] },
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.cleanup?.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: activeShared, skippedReason: "active_process_reference", pids: [4242] }),
+    ]));
+    expect(result.cleanup?.deleted.map((item) => path.basename(item.path))).toContain("npm");
+    await expect(readFile(path.join(activeShared, "home", ".npm", "payload.bin"))).resolves.toBeInstanceOf(Buffer);
+    await expect(readFile(path.join(oldShared, "home", ".npm", "payload.bin"))).rejects.toThrow();
+  });
+
   it("cleans reclaimable scopes before a hard stop, recovers when cleanup lifts free space, and still hard-stops when pressure remains", async () => {
     const root = await tempRoot();
     const oldScope = await createScope(root, "probe-codex-old", 10);

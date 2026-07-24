@@ -984,7 +984,9 @@ export class Dispatcher {
 
       const executionDiskGate = await this.checkAgentEnvironmentSpawnDiskGate();
       if (!executionDiskGate.allowed) {
-        const reason = `runtime_blocked: Agent environment disk gate blocked task before spawn. ${executionDiskGate.reason}`;
+        const reason = executionDiskGate.reason.startsWith("disk_pressure_hard_stop:")
+          ? `${executionDiskGate.reason} runtime_blocked: Agent environment disk gate blocked task before spawn.`
+          : `runtime_blocked: Agent environment disk gate blocked task before spawn. ${executionDiskGate.reason}`;
         console.warn(`[dispatcher] ${reason} task=${task.id}`);
         await blockTask(this.sql, task.id, reason);
         return;
