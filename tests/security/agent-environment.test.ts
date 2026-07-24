@@ -115,7 +115,7 @@ describe("buildAgentEnvironment", () => {
     const runtimeRoot = await mkdtemp(path.join(process.cwd(), ".hw-agent-env-test-"));
     roots.push(runtimeRoot);
     const outside = path.join(runtimeRoot, "outside");
-    const scopeRoot = path.join(runtimeRoot, "task-task-one-codex");
+    const scopeRoot = path.join(runtimeRoot, "task-task-one--codex");
     await symlink(outside, scopeRoot);
 
     expect(() => buildAgentEnvironment({

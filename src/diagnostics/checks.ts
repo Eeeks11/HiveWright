@@ -8,6 +8,17 @@ import { canonicalModelIdForAdapter } from "@/model-health/model-identity";
 import { createRuntimeCredentialFingerprint } from "@/model-health/probe-runner";
 import { getModelHealthProbePolicy } from "@/model-health/probe-policy";
 import {
+  buildAgentEnvironmentLifecycleConfig,
+  collectAgentEnvironmentInventory,
+  defaultProcessInspector,
+  defaultTerminalStateChecker,
+  getLastAgentEnvironmentCleanupResult,
+  setLastAgentEnvironmentCleanupResultForTests,
+  type AgentEnvironmentLastCleanupResult,
+  type AgentEnvironmentProcessInspector,
+  type AgentEnvironmentTerminalStateChecker,
+} from "@/security/agent-environment-lifecycle";
+import {
   buildFailureFingerprint,
   groupFailureFingerprints,
   type FailureFingerprintGroup,
@@ -21,12 +32,38 @@ import {
 } from "./types";
 import { resolveHiveWrightBuildProvenance } from "./build-provenance";
 
+export type AgentEnvironmentDiagnosticsSnapshot = {
+  checkedAt: string;
+  runtimeRoot: string;
+  counts: {
+    task: number;
+    goalSupervisor: number;
+    probe: number;
+    total: number;
+  };
+  bytes: {
+    total: number;
+    reclaimable: number;
+  };
+  age: {
+    oldestMs: number | null;
+  };
+  watermark: {
+    freeBytes: number;
+    totalBytes: number;
+    freeRatio: number;
+    mode: "ok" | "warning" | "hard";
+  };
+  lastCleanup: AgentEnvironmentLastCleanupResult | null;
+};
+
 export type HiveWrightDiagnosticsSnapshot = {
   checkedAt: string;
   scope: HiveWrightDiagnosticsScope;
   summary: DiagnosticSummary;
   diagnostics: DiagnosticStatus[];
   recentFailureGroups: FailureFingerprintGroup[];
+  agentEnvironment: AgentEnvironmentDiagnosticsSnapshot;
 };
 
 export type HiveWrightHealthSnapshot = {
@@ -42,6 +79,17 @@ export type HiveWrightDiagnosticsOptions = {
   env?: NodeJS.ProcessEnv;
   now?: Date;
   repoRoot?: string;
+};
+
+export type AgentEnvironmentDiagnosticsOptions = {
+  sql?: Sql;
+  now?: Date;
+  runtimeRoot?: string;
+  entries?: Array<{ path: string; mtimeMs?: number }>;
+  terminalStateChecker?: AgentEnvironmentTerminalStateChecker;
+  processInspector?: AgentEnvironmentProcessInspector;
+  statfs?: (path: string) => Promise<{ freeBytes: number; totalBytes: number }>;
+  lastCleanup?: AgentEnvironmentLastCleanupResult | null;
 };
 
 const REQUIRED_ENV = ["DATABASE_URL", "ENCRYPTION_KEY", "INTERNAL_SERVICE_TOKEN"] as const;
@@ -70,6 +118,47 @@ export function getHiveWrightHealthSnapshot(input: { env?: NodeJS.ProcessEnv; no
   };
 }
 
+export async function collectAgentEnvironmentDiagnostics(
+  input: AgentEnvironmentDiagnosticsOptions = {},
+): Promise<AgentEnvironmentDiagnosticsSnapshot> {
+  const sql = input.sql ?? apiSql;
+  const now = input.now ?? new Date();
+  const config = buildAgentEnvironmentLifecycleConfig(input.runtimeRoot ? { runtimeRoot: input.runtimeRoot } : {});
+  const runtimeRoot = config.runtimeRoot;
+  const lastCleanup = input.lastCleanup ?? getLastAgentEnvironmentCleanupResult();
+  const inventory = await collectAgentEnvironmentInventory({
+    runtimeRoot,
+    now,
+    entries: input.entries,
+    terminalStateChecker: input.terminalStateChecker ?? defaultTerminalStateChecker(sql),
+    processInspector: input.processInspector ?? defaultProcessInspector,
+    lastCleanup: lastCleanup ?? undefined,
+  });
+  const statfs = input.statfs ?? defaultAgentEnvironmentStatfs;
+  const disk = await statfs(runtimeRoot);
+  const freeRatio = disk.totalBytes > 0 ? disk.freeBytes / disk.totalBytes : 0;
+  const mode = disk.freeBytes < config.hardFreeBytes || freeRatio < config.hardFreeRatio
+    ? "hard"
+    : disk.freeBytes < config.warningFreeBytes || freeRatio < config.warningFreeRatio
+      ? "warning"
+      : "ok";
+
+  return {
+    checkedAt: now.toISOString(),
+    runtimeRoot,
+    counts: inventory.counts,
+    bytes: inventory.bytes,
+    age: inventory.age,
+    watermark: {
+      freeBytes: disk.freeBytes,
+      totalBytes: disk.totalBytes,
+      freeRatio,
+      mode,
+    },
+    lastCleanup,
+  };
+}
+
 export async function collectHiveWrightDiagnostics(
   input: HiveWrightDiagnosticsOptions = {},
 ): Promise<HiveWrightDiagnosticsSnapshot> {
@@ -79,6 +168,7 @@ export async function collectHiveWrightDiagnostics(
   const repoRoot = input.repoRoot ?? process.cwd();
   const checkedAt = now.toISOString();
   const diagnostics: DiagnosticStatus[] = [];
+  const agentEnvironment = await collectAgentEnvironmentDiagnostics({ sql, now });
 
   diagnostics.push(checkRuntimeConfig(env, now));
   diagnostics.push(checkWorkspace(repoRoot, now));
@@ -116,6 +206,7 @@ export async function collectHiveWrightDiagnostics(
     summary: summarizeDiagnostics(diagnostics),
     diagnostics,
     recentFailureGroups,
+    agentEnvironment,
   };
 }
 
@@ -535,6 +626,19 @@ export function buildModelRoutePoolCapacityDiagnostic(
         : undefined,
     checkedAt: now,
   });
+}
+
+export { setLastAgentEnvironmentCleanupResultForTests };
+
+async function defaultAgentEnvironmentStatfs(targetPath: string): Promise<{ freeBytes: number; totalBytes: number }> {
+  const stat = await fs.promises.statfs(targetPath);
+  const bsize = Number((stat as { bsize?: number | bigint }).bsize ?? 0);
+  const bavail = Number((stat as { bavail?: number | bigint }).bavail ?? 0);
+  const blocks = Number((stat as { blocks?: number | bigint }).blocks ?? 0);
+  return {
+    freeBytes: bavail * bsize,
+    totalBytes: blocks * bsize,
+  };
 }
 
 function formatRoutePoolInventoryDetails(counts: ModelRoutePoolCapacityCounts): string {

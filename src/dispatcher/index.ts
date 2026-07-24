@@ -9,6 +9,7 @@ import {
   findStuckTasks,
   findDeadEndReviewTasks,
   findStuckBlockedTasks,
+  recoverDiskPressureBlockedTasks,
   recoverInterruptedActiveTasks,
 } from "./watchdog";
 import { checkAndFireSchedules } from "./schedule-timer";
@@ -124,6 +125,12 @@ import {
   type ExecutionRunRecord,
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
+import {
+  buildAgentEnvironmentLifecycleConfig,
+  checkAgentEnvironmentDiskPressure,
+  cleanupTaskAgentEnvironmentIfTerminal,
+  defaultTerminalStateChecker,
+} from "../security/agent-environment-lifecycle";
 
 const DATABASE_URL = process.env.DATABASE_URL || "postgresql://hivewright@localhost:5432/hivewrightv2";
 const CODEX_RUNTIME_CONTEXT_BYTE_CAP = 16_384;
@@ -778,9 +785,17 @@ export class Dispatcher {
 
     this.claimingTask = true;
     try {
+      await this.recoverDiskPressureBlockedTasksIfHealthy();
       while (!this.shuttingDown && !this.drainRequested && this.activeTasks < liveMaxConcurrent) {
         const task = await claimNextTask(this.sql, process.pid);
         if (!task) break;
+
+        const diskGate = await this.checkAgentEnvironmentSpawnDiskGate();
+        if (!diskGate.allowed) {
+          console.warn(`[dispatcher] Disk pressure blocked task ${task.id} before spawn: ${diskGate.reason}`);
+          await blockTask(this.sql, task.id, diskGate.reason);
+          continue;
+        }
 
         this.activeTasks++;
         console.log(`[dispatcher] Claimed task: ${task.id} (${task.title}) -> ${task.assignedTo} [${this.activeTasks}/${liveMaxConcurrent} active]`);
@@ -797,7 +812,30 @@ export class Dispatcher {
     }
   }
 
+  private async checkAgentEnvironmentSpawnDiskGate(): Promise<{ allowed: boolean; reason: string }> {
+    return checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig(),
+      terminalStateChecker: defaultTerminalStateChecker(this.sql),
+    }).catch((err) => ({
+      allowed: false,
+      reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}`,
+    }));
+  }
+
+  private async recoverDiskPressureBlockedTasksIfHealthy(): Promise<void> {
+    const diskState = await checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig(),
+      terminalStateChecker: defaultTerminalStateChecker(this.sql),
+    }).catch(() => null);
+    if (!diskState || diskState.allowed !== true || diskState.watermark.mode !== "ok") return;
+    const recovered = await recoverDiskPressureBlockedTasks(this.sql);
+    if (recovered.length > 0) {
+      console.log(`[dispatcher] Recovered ${recovered.length} disk-pressure blocked task(s) after free space returned above watermark.`);
+    }
+  }
+
   private async executeTask(task: ClaimedTask) {
+    let adapterTypeForCleanup: string | null = null;
     try {
       try {
         await emitTaskEvent(this.sql, { type: "task_claimed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId });
@@ -940,6 +978,16 @@ export class Dispatcher {
         ctx.model = route.model;
         // Null the fallback to prevent the adapter from trying to fall back again to itself.
         if (route.clearFallbackModel) ctx.fallbackModel = null;
+      }
+
+      adapterTypeForCleanup = route.adapterType;
+
+      const executionDiskGate = await this.checkAgentEnvironmentSpawnDiskGate();
+      if (!executionDiskGate.allowed) {
+        const reason = `runtime_blocked: Agent environment disk gate blocked task before spawn. ${executionDiskGate.reason}`;
+        console.warn(`[dispatcher] ${reason} task=${task.id}`);
+        await blockTask(this.sql, task.id, reason);
+        return;
       }
 
       if (!route.canRun) {
@@ -1802,6 +1850,15 @@ export class Dispatcher {
 
     } catch (err) {
       console.error("[dispatcher] Error processing task:", err);
+    } finally {
+      if (adapterTypeForCleanup) {
+        await cleanupTaskAgentEnvironmentIfTerminal(this.sql, {
+          taskId: task.id,
+          adapter: adapterTypeForCleanup,
+        }).catch((err) => {
+          console.warn(`[agent-environment] task cleanup skipped for ${task.id}/${adapterTypeForCleanup}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
     }
   }
 
