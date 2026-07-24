@@ -116,6 +116,7 @@ export function buildAgentEnvironmentLifecycleConfig(input: Partial<{
     buildSharedCacheEnv(base: Record<string, string | undefined> = {}) {
       fs.mkdirSync(path.join(sharedCacheRoot, "npm"), { recursive: true, mode: 0o700 });
       fs.mkdirSync(path.join(sharedCacheRoot, "playwright"), { recursive: true, mode: 0o700 });
+      fs.mkdirSync(path.join(sharedCacheRoot, "huggingface", "hub"), { recursive: true, mode: 0o700 });
       fs.mkdirSync(path.join(sharedCacheRoot, "huggingface", "transformers"), { recursive: true, mode: 0o700 });
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(base)) {
@@ -123,7 +124,7 @@ export function buildAgentEnvironmentLifecycleConfig(input: Partial<{
       }
       env.npm_config_cache = path.join(sharedCacheRoot, "npm");
       env.PLAYWRIGHT_BROWSERS_PATH = path.join(sharedCacheRoot, "playwright");
-      env.HF_HOME = path.join(sharedCacheRoot, "huggingface");
+      env.HF_HUB_CACHE = path.join(sharedCacheRoot, "huggingface", "hub");
       env.TRANSFORMERS_CACHE = path.join(sharedCacheRoot, "huggingface", "transformers");
       return env;
     },
@@ -319,16 +320,7 @@ export async function checkAgentEnvironmentDiskPressure(input: {
   const config = input.config ?? buildAgentEnvironmentLifecycleConfig();
   const stat = input.statfs ?? defaultStatfs;
   const before = await stat(config.runtimeRoot);
-  const freeRatio = before.totalBytes > 0 ? before.freeBytes / before.totalBytes : 0;
-  const mode = before.freeBytes < config.hardFreeBytes || freeRatio < config.hardFreeRatio
-    ? "hard"
-    : before.freeBytes < config.warningFreeBytes || freeRatio < config.warningFreeRatio
-      ? "warning"
-      : "ok";
-  const watermark: DiskWatermark = { freeBytes: before.freeBytes, totalBytes: before.totalBytes, freeRatio, mode };
-  if (mode === "hard") {
-    return { allowed: false, reason: formatDiskPressureReason("disk_pressure_hard_stop", watermark, config), watermark };
-  }
+  const watermark = classifyDiskWatermark(before, config);
 
   const cleanup = await enforceAgentEnvironmentByteCaps({
     config,
@@ -337,8 +329,8 @@ export async function checkAgentEnvironmentDiskPressure(input: {
     processInspector: input.processInspector,
   });
 
-  if (mode === "warning") {
-    const warningCleanup = await reconcileAgentEnvironmentOrphans({
+  if (watermark.mode === "hard" || watermark.mode === "warning") {
+    const reclaimed = await reconcileAgentEnvironmentOrphans({
       runtimeRoot: config.runtimeRoot,
       dryRun: config.dryRun,
       now: input.now,
@@ -346,15 +338,42 @@ export async function checkAgentEnvironmentDiskPressure(input: {
       terminalStateChecker: input.terminalStateChecker,
       processInspector: input.processInspector,
     });
-    cleanup.deleted.push(...warningCleanup.deleted);
-    cleanup.skipped.push(...warningCleanup.skipped);
-    rememberCleanupResult(cleanup.deleted, "disk_pressure_warning_cleanup");
-    return { allowed: true, reason: formatDiskPressureReason("disk_pressure_warning_cleanup", watermark, config), watermark, cleanup };
+    cleanup.deleted.push(...reclaimed.deleted);
+    cleanup.skipped.push(...reclaimed.skipped);
   }
+
+  const after = await stat(config.runtimeRoot);
+  const finalWatermark = classifyDiskWatermark(after, config);
+
+  if (finalWatermark.mode === "hard") {
+    rememberCleanupResult(cleanup.deleted, cleanup.deleted.length > 0 ? "disk_pressure_hard_cleanup_attempt" : "disk_pressure_hard_stop");
+    return {
+      allowed: false,
+      reason: formatDiskPressureReason(cleanup.deleted.length > 0 ? "disk_pressure_hard_cleanup_attempt" : "disk_pressure_hard_stop", finalWatermark, config),
+      watermark: finalWatermark,
+      cleanup: cleanup.deleted.length > 0 || cleanup.skipped.length > 0 ? cleanup : undefined,
+    };
+  }
+
+  if (finalWatermark.mode === "warning") {
+    rememberCleanupResult(cleanup.deleted, "disk_pressure_warning_cleanup");
+    return { allowed: true, reason: formatDiskPressureReason("disk_pressure_warning_cleanup", finalWatermark, config), watermark: finalWatermark, cleanup };
+  }
+
   rememberCleanupResult(cleanup.deleted, cleanup.deleted.length > 0 ? "disk_pressure_caps_enforced" : "disk_pressure_recovered");
   return cleanup.deleted.length > 0 || cleanup.skipped.length > 0
-    ? { allowed: true, reason: "disk_pressure_caps_enforced", watermark, cleanup }
-    : { allowed: true, reason: "disk_pressure_recovered", watermark };
+    ? { allowed: true, reason: "disk_pressure_caps_enforced", watermark: finalWatermark, cleanup }
+    : { allowed: true, reason: "disk_pressure_recovered", watermark: finalWatermark };
+}
+
+function classifyDiskWatermark(stat: { freeBytes: number; totalBytes: number }, config: AgentEnvironmentLifecycleConfig): DiskWatermark {
+  const freeRatio = stat.totalBytes > 0 ? stat.freeBytes / stat.totalBytes : 0;
+  const mode = stat.freeBytes < config.hardFreeBytes || freeRatio < config.hardFreeRatio
+    ? "hard"
+    : stat.freeBytes < config.warningFreeBytes || freeRatio < config.warningFreeRatio
+      ? "warning"
+      : "ok";
+  return { freeBytes: stat.freeBytes, totalBytes: stat.totalBytes, freeRatio, mode };
 }
 
 async function enforceAgentEnvironmentByteCaps(input: {

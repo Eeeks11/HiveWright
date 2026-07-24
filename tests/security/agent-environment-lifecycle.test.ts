@@ -45,10 +45,35 @@ describe("agent environment lifecycle", () => {
 
     expect(env.npm_config_cache).toBe(path.join(root, "_shared-cache", "npm"));
     expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(path.join(root, "_shared-cache", "playwright"));
-    expect(env.HF_HOME).toBe(path.join(root, "_shared-cache", "huggingface"));
+    expect(env.HF_HUB_CACHE).toBe(path.join(root, "_shared-cache", "huggingface", "hub"));
     expect(env.TRANSFORMERS_CACHE).toBe(path.join(root, "_shared-cache", "huggingface", "transformers"));
+    expect(env.HF_HOME).toBeUndefined();
     expect(env.HOME).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
+  });
+
+  it("keeps hugging face auth/state scoped even while sharing bounded model caches", async () => {
+    const root = await tempRoot();
+    const taskA = buildAgentEnvironment({
+      runtimeRoot: root,
+      scope: { kind: "task", adapter: "openai-codex", taskId: "task-a", hiveId: "hive-a" },
+    });
+    const taskB = buildAgentEnvironment({
+      runtimeRoot: root,
+      scope: { kind: "task", adapter: "openai-codex", taskId: "task-b", hiveId: "hive-b" },
+    });
+
+    const taskAHfHome = path.join(taskA.XDG_CACHE_HOME!, "huggingface");
+    const taskBHfHome = path.join(taskB.XDG_CACHE_HOME!, "huggingface");
+    await mkdir(taskAHfHome, { recursive: true });
+    await writeFile(path.join(taskAHfHome, "token"), "hf-task-a-token");
+
+    expect(taskA.TRANSFORMERS_CACHE).toBe(taskB.TRANSFORMERS_CACHE);
+    expect(taskA.HF_HUB_CACHE).toBe(taskB.HF_HUB_CACHE);
+    expect(taskA.HF_HOME).toBeUndefined();
+    expect(taskB.HF_HOME).toBeUndefined();
+    await expect(readFile(path.join(taskBHfHome, "token"), "utf8")).rejects.toThrow();
+    await expect(readFile(path.join(taskAHfHome, "token"), "utf8")).resolves.toBe("hf-task-a-token");
   });
 
   it("rejects symlink scope deletion and writes exact dry-run evidence without deleting", async () => {
@@ -272,7 +297,7 @@ describe("agent environment lifecycle", () => {
     await expect(readFile(path.join(activeTask, "home", ".npm", "payload.bin"))).resolves.toBeInstanceOf(Buffer);
   });
 
-  it("hard-stops below disk watermark, performs warning cleanup below warning watermark, and resumes after recovery", async () => {
+  it("cleans reclaimable scopes before a hard stop, recovers when cleanup lifts free space, and still hard-stops when pressure remains", async () => {
     const root = await tempRoot();
     const oldScope = await createScope(root, "probe-codex-old", 10);
     const staleAt = new Date("2026-07-22T00:00:00.000Z");
@@ -287,15 +312,22 @@ describe("agent environment lifecycle", () => {
       hardFreeBytes: 25,
     });
 
-    const hard = await checkAgentEnvironmentDiskPressure({
+    const recoveringStatfs = vi.fn()
+      .mockResolvedValueOnce({ freeBytes: 20, totalBytes: 1_000 })
+      .mockResolvedValueOnce({ freeBytes: 100, totalBytes: 1_000 });
+    const hardRecovered = await checkAgentEnvironmentDiskPressure({
       config,
       now,
-      statfs: async () => ({ freeBytes: 20, totalBytes: 1_000 }),
+      statfs: recoveringStatfs,
       terminalStateChecker: async () => ({ terminal: true, proof: "probe terminal" }),
       processInspector: async () => ({ referenced: false, pids: [] }),
     });
-    expect(hard.allowed).toBe(false);
-    expect(hard.reason).toContain("disk_pressure_hard_stop");
+    expect(hardRecovered.allowed).toBe(true);
+    expect(hardRecovered.reason).toContain("disk_pressure_warning_cleanup");
+    expect(hardRecovered.watermark.mode).toBe("warning");
+    expect(hardRecovered.cleanup?.deleted.map((item) => path.basename(item.path))).toContain("probe-codex-old");
+    await expect(readFile(path.join(oldScope, "home", ".npm", "payload.bin"))).rejects.toThrow();
+
     const warningScope = await createScope(root, "probe-codex-warning", 10);
     await utimes(warningScope, staleAt, staleAt);
 
@@ -308,6 +340,17 @@ describe("agent environment lifecycle", () => {
     });
     expect(warning.allowed).toBe(true);
     expect(warning.cleanup?.deleted.length).toBeGreaterThanOrEqual(1);
+
+    const hardStop = await checkAgentEnvironmentDiskPressure({
+      config,
+      now,
+      statfs: async () => ({ freeBytes: 20, totalBytes: 1_000 }),
+      terminalStateChecker: async () => ({ terminal: false, proof: "task active" }),
+      processInspector: async () => ({ referenced: true, pids: [999] }),
+    });
+    expect(hardStop.allowed).toBe(false);
+    expect(hardStop.reason).toContain("disk_pressure_hard_stop");
+    expect(hardStop.watermark.mode).toBe("hard");
 
     const recovered = await checkAgentEnvironmentDiskPressure({
       config,
