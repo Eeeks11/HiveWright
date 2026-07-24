@@ -60,6 +60,23 @@ export interface CleanupEvidence {
   pids?: number[];
 }
 
+export interface AgentEnvironmentLastCleanupResult {
+  at: string;
+  reclaimedBytes: number;
+  deletedPaths: string[];
+  reason: string;
+}
+
+let lastAgentEnvironmentCleanupResult: AgentEnvironmentLastCleanupResult | null = null;
+
+export function getLastAgentEnvironmentCleanupResult(): AgentEnvironmentLastCleanupResult | null {
+  return lastAgentEnvironmentCleanupResult;
+}
+
+export function setLastAgentEnvironmentCleanupResultForTests(value: AgentEnvironmentLastCleanupResult | null): void {
+  lastAgentEnvironmentCleanupResult = value;
+}
+
 export type AgentEnvironmentTerminalStateChecker = (scope: AgentEnvironmentScopeRef) => Promise<{ terminal: boolean; proof: string }>;
 export type AgentEnvironmentProcessInspector = (scopePath: string) => Promise<{ referenced: boolean; pids: number[] }>;
 
@@ -136,7 +153,9 @@ export async function cleanupAgentEnvironmentScope(input: {
   const bytes = await directorySize(scopePath);
   if (base.dryRun) return { ...base, bytes };
   await fsp.rm(scopePath, { recursive: true, force: false });
-  return { ...base, deleted: true, bytes };
+  const result = { ...base, deleted: true, bytes };
+  rememberCleanupResult([result], input.reason);
+  return result;
 }
 
 export async function cleanupAgentEnvironmentScopeByName(input: {
@@ -329,8 +348,10 @@ export async function checkAgentEnvironmentDiskPressure(input: {
     });
     cleanup.deleted.push(...warningCleanup.deleted);
     cleanup.skipped.push(...warningCleanup.skipped);
+    rememberCleanupResult(cleanup.deleted, "disk_pressure_warning_cleanup");
     return { allowed: true, reason: formatDiskPressureReason("disk_pressure_warning_cleanup", watermark, config), watermark, cleanup };
   }
+  rememberCleanupResult(cleanup.deleted, cleanup.deleted.length > 0 ? "disk_pressure_caps_enforced" : "disk_pressure_recovered");
   return cleanup.deleted.length > 0 || cleanup.skipped.length > 0
     ? { allowed: true, reason: "disk_pressure_caps_enforced", watermark, cleanup }
     : { allowed: true, reason: "disk_pressure_recovered", watermark };
@@ -342,7 +363,6 @@ async function enforceAgentEnvironmentByteCaps(input: {
   terminalStateChecker?: AgentEnvironmentTerminalStateChecker;
   processInspector?: AgentEnvironmentProcessInspector;
 }): Promise<{ deleted: CleanupEvidence[]; skipped: CleanupEvidence[] }> {
-  const now = input.now ?? new Date();
   const { config } = input;
   const entries = await listScopeEntries(config.runtimeRoot);
   const deleted: CleanupEvidence[] = [];
@@ -614,6 +634,17 @@ async function defaultStatfs(target: string): Promise<{ freeBytes: number; total
 
 function formatDiskPressureReason(prefix: string, watermark: DiskWatermark, config: AgentEnvironmentLifecycleConfig): string {
   return `${prefix}: free=${watermark.freeBytes} total=${watermark.totalBytes} ratio=${watermark.freeRatio.toFixed(4)} hard_bytes=${config.hardFreeBytes} hard_ratio=${config.hardFreeRatio} warning_bytes=${config.warningFreeBytes} warning_ratio=${config.warningFreeRatio}`;
+}
+
+function rememberCleanupResult(results: CleanupEvidence[], reason: string): void {
+  const deleted = results.filter((result) => result.deleted === true);
+  if (deleted.length === 0) return;
+  lastAgentEnvironmentCleanupResult = {
+    at: new Date().toISOString(),
+    reclaimedBytes: deleted.reduce((sum, result) => sum + result.bytes, 0),
+    deletedPaths: deleted.map((result) => result.path),
+    reason,
+  };
 }
 
 function safeSegment(value: string): string {

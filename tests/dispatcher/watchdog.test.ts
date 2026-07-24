@@ -3,6 +3,7 @@ import {
   findStuckTasks,
   findDeadEndReviewTasks,
   findStuckBlockedTasks,
+  recoverDiskPressureBlockedTasks,
   recoverInterruptedActiveTasks,
 } from "@/dispatcher/watchdog";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -307,6 +308,20 @@ describe("findStuckBlockedTasks", () => {
     expect(found.some((t) => t.title === "wd-fresh-blocked")).toBe(false);
   });
 
+  it("does not escalate disk-pressure blocked tasks while waiting for automatic recovery", async () => {
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at)
+      VALUES (
+        ${bizId}, 'dev-agent', 'owner', 'wd-disk-pressure-blocked', 'Brief', 'blocked',
+        'disk_pressure_hard_stop: free=20 total=100 ratio=0.0200 hard_bytes=25 hard_ratio=0.08 warning_bytes=50 warning_ratio=0.15',
+        NOW() - INTERVAL '6 hours'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-disk-pressure-blocked")).toBe(false);
+  });
+
   it("flags recent terminal adapter/preflight failures without waiting for the generic 240 minute threshold", async () => {
     await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at)
@@ -411,5 +426,39 @@ describe("findStuckBlockedTasks", () => {
 
     const found = await findStuckBlockedTasks(sql, 0);
     expect(found).toEqual([]);
+  });
+});
+
+describe("recoverDiskPressureBlockedTasks", () => {
+  it("requeues disk-pressure blocked tasks after space recovers without consuming retries", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status,
+        dispatcher_pid, started_at, last_heartbeat, retry_count, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId}, 'watchdog-test-role', 'owner', 'wd-recover-disk-pressure', 'Brief', 'blocked',
+        515151, NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '10 minutes', 2,
+        'disk_pressure_hard_stop: free=20 total=100 ratio=0.0200 hard_bytes=25 hard_ratio=0.08 warning_bytes=50 warning_ratio=0.15',
+        NOW() - INTERVAL '10 minutes'
+      )
+      RETURNING id
+    `;
+
+    const recovered = await recoverDiskPressureBlockedTasks(sql);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].title).toBe("wd-recover-disk-pressure");
+
+    const [updated] = await sql`
+      SELECT status, retry_count, dispatcher_pid, started_at, last_heartbeat, failure_reason
+      FROM tasks
+      WHERE id = ${task.id}
+    `;
+    expect(updated.status).toBe("pending");
+    expect(updated.retry_count).toBe(2);
+    expect(updated.dispatcher_pid).toBeNull();
+    expect(updated.started_at).toBeNull();
+    expect(updated.last_heartbeat).toBeNull();
+    expect(updated.failure_reason).toBeNull();
   });
 });

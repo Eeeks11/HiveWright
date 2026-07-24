@@ -9,6 +9,7 @@ import {
   findStuckTasks,
   findDeadEndReviewTasks,
   findStuckBlockedTasks,
+  recoverDiskPressureBlockedTasks,
   recoverInterruptedActiveTasks,
 } from "./watchdog";
 import { checkAndFireSchedules } from "./schedule-timer";
@@ -784,6 +785,7 @@ export class Dispatcher {
 
     this.claimingTask = true;
     try {
+      await this.recoverDiskPressureBlockedTasksIfHealthy();
       while (!this.shuttingDown && !this.drainRequested && this.activeTasks < liveMaxConcurrent) {
         const task = await claimNextTask(this.sql, process.pid);
         if (!task) break;
@@ -818,6 +820,18 @@ export class Dispatcher {
       allowed: false,
       reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}`,
     }));
+  }
+
+  private async recoverDiskPressureBlockedTasksIfHealthy(): Promise<void> {
+    const diskState = await checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig(),
+      terminalStateChecker: defaultTerminalStateChecker(this.sql),
+    }).catch(() => null);
+    if (!diskState || diskState.allowed !== true || diskState.watermark.mode !== "ok") return;
+    const recovered = await recoverDiskPressureBlockedTasks(this.sql);
+    if (recovered.length > 0) {
+      console.log(`[dispatcher] Recovered ${recovered.length} disk-pressure blocked task(s) after free space returned above watermark.`);
+    }
   }
 
   private async executeTask(task: ClaimedTask) {
