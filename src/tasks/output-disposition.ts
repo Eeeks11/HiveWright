@@ -11,6 +11,8 @@ export const ANALYST_OUTPUT_DISPOSITION_KIND = "analyst_output_disposition";
 const GITHUB_ROUTE_RE =
   /https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+|\bgithub\s+(?:issue|pr|pull request)\s*#?\d+\b|\b(?:issue|pr|pull request)\s*#\d+\b|(?<![\w/])#\d+\b/gi;
 
+const GITHUB_RELEASE_URL_RE = /https:\/\/github\.com\/[^\s)]+\/releases\/tag\/[^\s)]+/gi;
+
 const DELIBERATE_NO_FOLLOW_UP_RE =
   /\b(?:deliberate|explicit|intentional|accepted|bounded|terminal)\b.{0,80}\b(?:no[-\s]?follow[-\s]?up|no\s+follow\s+up|no[-\s]?action|no\s+new\s+(?:issue|pr|decision|follow[-\s]?up)|terminal\s+closeout|no\s+further\s+action)\b|\b(?:no[-\s]?follow[-\s]?up|no\s+follow\s+up|no[-\s]?action|no\s+new\s+(?:issue|pr|decision|follow[-\s]?up)|terminal\s+closeout|no\s+further\s+action)\b.{0,80}\b(?:deliberate|explicit|intentional|accepted|bounded|terminal|recorded)\b/i;
 
@@ -19,6 +21,8 @@ const NEGATED_CANONICAL_DISPOSITION_RE =
 
 const ROUTING_PUBLICATION_TASK_RE =
   /\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b.{0,90}\b(?:github|issue|pr|pull request|backlog)\b|\b(?:github|issue|pr|pull request|backlog)\b.{0,90}\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b|\bprior\s+findings?\b.{0,90}\b(?:github|issue|pr|pull request|publish|route|routing)\b/i;
+const GITHUB_RELEASE_PUBLICATION_TASK_RE =
+  /\b(?:publish|publication|promote|promotion|release)\b.{0,90}\bgithub\s+releases?\b|\bgithub\s+releases?\b.{0,90}\b(?:publish|publication|promote|promotion|release)\b|\breleases?\/tag\b/i;
 
 const ANALYST_OUTPUT_ROLE_RE =
   /(?:^|[-_])(analyst|auditor|coordinator)(?:$|[-_])|^(?:performance-analyst|research-analyst|system-health-auditor|operations-coordinator)$/i;
@@ -76,11 +80,22 @@ export function extractGithubRouteRefs(text: string): string[] {
   return Array.from(new Set(Array.from(text.matchAll(GITHUB_ROUTE_RE)).map((match) => match[0]))).slice(0, 10);
 }
 
+export function extractGithubReleaseArtifactRefs(text: string): string[] {
+  GITHUB_RELEASE_URL_RE.lastIndex = 0;
+  return Array.from(new Set(Array.from(text.matchAll(GITHUB_RELEASE_URL_RE)).map((match) => match[0]))).slice(0, 10);
+}
+
 export function hasDeliberateNoFollowUpDisposition(text: string): boolean {
   return DELIBERATE_NO_FOLLOW_UP_RE.test(text);
 }
 
+export function isGithubReleasePublicationTask(input: Pick<TaskDispositionContext, "title" | "brief">): boolean {
+  const text = [input.title, input.brief ?? ""].join("\n");
+  return GITHUB_RELEASE_PUBLICATION_TASK_RE.test(text);
+}
+
 export function isRoutingPublicationTask(input: Pick<TaskDispositionContext, "assignedTo" | "title" | "brief">): boolean {
+  if (isGithubReleasePublicationTask(input)) return false;
   const text = [input.assignedTo, input.title, input.brief ?? ""].join("\n");
   return ROUTING_PUBLICATION_TASK_RE.test(text);
 }
