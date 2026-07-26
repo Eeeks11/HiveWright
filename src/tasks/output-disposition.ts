@@ -21,8 +21,10 @@ const NEGATED_CANONICAL_DISPOSITION_RE =
 
 const ROUTING_PUBLICATION_TASK_RE =
   /\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b.{0,90}\b(?:github|issue|pr|pull request|backlog)\b|\b(?:github|issue|pr|pull request|backlog)\b.{0,90}\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b|\bprior\s+findings?\b.{0,90}\b(?:github|issue|pr|pull request|publish|route|routing)\b/i;
+const EXPLICIT_ROUTING_PUBLICATION_TASK_RE =
+  /\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b.{0,90}\b(?:issue|pr|pull request|backlog)\b|\b(?:issue|pr|pull request|backlog)\b.{0,90}\b(?:route|routing|publish|publication|promote|promotion|open|create|file)\b|\bprior\s+findings?\b.{0,90}\b(?:issue|pr|pull request|backlog|route|routing)\b/i;
 const GITHUB_RELEASE_PUBLICATION_TASK_RE =
-  /\b(?:publish|publication|promote|promotion|release)\b.{0,90}\bgithub\s+releases?\b|\bgithub\s+releases?\b.{0,90}\b(?:publish|publication|promote|promotion|release)\b|\breleases?\/tag\b/i;
+  /\b(?:create|publish|publication|promote|promotion|release)\b.{0,90}\bgithub\s+releases?\b|\bgithub\s+releases?\b.{0,90}\b(?:create|publish|publication|promote|promotion|release)\b|\breleases?\/tag\b/i;
 
 const ANALYST_OUTPUT_ROLE_RE =
   /(?:^|[-_])(analyst|auditor|coordinator)(?:$|[-_])|^(?:performance-analyst|research-analyst|system-health-auditor|operations-coordinator)$/i;
@@ -95,8 +97,9 @@ export function isGithubReleasePublicationTask(input: Pick<TaskDispositionContex
 }
 
 export function isRoutingPublicationTask(input: Pick<TaskDispositionContext, "assignedTo" | "title" | "brief">): boolean {
-  if (isGithubReleasePublicationTask(input)) return false;
   const text = [input.assignedTo, input.title, input.brief ?? ""].join("\n");
+  if (EXPLICIT_ROUTING_PUBLICATION_TASK_RE.test(text)) return true;
+  if (isGithubReleasePublicationTask(input)) return false;
   return ROUTING_PUBLICATION_TASK_RE.test(text);
 }
 

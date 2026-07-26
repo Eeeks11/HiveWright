@@ -50,6 +50,33 @@ describe("completeTask output disposition guard", () => {
     expect(updated.terminal_disposition).toBeNull();
   });
 
+  it("completes ordinary GitHub Release creation without analyst routing disposition", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${hiveId},
+        'output-disposition-test-role',
+        'owner',
+        'Create a GitHub Release for v1.0',
+        'Create the v1.0 GitHub Release and return the release artifact URL.',
+        'active'
+      )
+      RETURNING id
+    `;
+
+    const releaseUrl = "https://github.com/Eeeks11/HiveWright/releases/tag/v1.0";
+    await completeTask(sql, task.id, `Created GitHub Release v1.0: ${releaseUrl}`);
+
+    const [updated] = await sql`
+      SELECT status, result_summary, failure_reason, terminal_disposition
+      FROM tasks WHERE id = ${task.id}
+    `;
+    expect(updated.status).toBe("completed");
+    expect(updated.result_summary).toContain(releaseUrl);
+    expect(updated.failure_reason).toBeNull();
+    expect(updated.terminal_disposition).toBeNull();
+  });
+
   it("records canonical disposition for GitHub issue routing publication output", async () => {
     const [task] = await seedRoutingTask("Route prior analyst findings to a GitHub issue or record why no follow-up is needed.");
 
@@ -87,6 +114,32 @@ describe("completeTask output disposition guard", () => {
         githubRefs: expect.arrayContaining(["https://github.com/Eeeks11/HiveWright/pull/217"]),
       },
     });
+  });
+
+  it("keeps explicit issue routing guarded when the task also mentions GitHub Releases", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${hiveId},
+        'output-disposition-test-role',
+        'owner',
+        'Review GitHub Releases and publish findings to a GitHub issue',
+        'Inspect recent GitHub Releases, then publish actionable findings to a GitHub issue or record why no follow-up is needed.',
+        'active'
+      )
+      RETURNING id
+    `;
+
+    await completeTask(sql, task.id, "Reviewed the release notes and prepared findings, but no GitHub issue/PR or deliberate no-follow-up disposition was recorded.");
+
+    const [updated] = await sql`
+      SELECT status, failure_reason, completed_at, terminal_disposition
+      FROM tasks WHERE id = ${task.id}
+    `;
+    expect(updated.status).toBe("failed");
+    expect(updated.failure_reason).toContain("Routing/publication task completion rejected");
+    expect(updated.completed_at).toBeNull();
+    expect(updated.terminal_disposition).toBeNull();
   });
 
   it("records deliberate no-follow-up for routing publication output", async () => {
