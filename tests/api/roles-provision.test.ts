@@ -4,6 +4,14 @@ import os from "os";
 import path from "path";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
+const authMocks = vi.hoisted(() => ({
+  requireSystemOwner: vi.fn(),
+}));
+
+vi.mock("../../src/app/api/_lib/auth", () => ({
+  requireSystemOwner: authMocks.requireSystemOwner,
+}));
+
 // ---------------------------------------------------------------------------
 // Mock the provisioning registry so individual tests can inject a slow stub.
 // The factory runs once; per-test behaviour is set via mockImplementation.
@@ -22,6 +30,7 @@ import { POST } from "../../src/app/api/roles/[slug]/provision/route";
 import type { Provisioner, ProvisionProgress, ProvisionerInput } from "../../src/provisioning/types";
 
 const mockProvisionerFor = vi.mocked(provisionerFor);
+const mockRequireSystemOwner = vi.mocked(authMocks.requireSystemOwner);
 
 let tmp: string;
 
@@ -37,6 +46,10 @@ beforeEach(async () => {
     ON CONFLICT (slug) DO UPDATE SET adapter_type = 'openclaw', active = true
   `;
   // Reset per-test mock state; each test sets its own mockImplementation.
+  mockRequireSystemOwner.mockReset();
+  mockRequireSystemOwner.mockResolvedValue({
+    user: { id: "owner-1", email: "owner@example.com", isSystemOwner: true },
+  });
   mockProvisionerFor.mockReset();
 });
 
@@ -46,6 +59,37 @@ afterEach(() => {
 });
 
 describe("POST /api/roles/:slug/provision", () => {
+  it("returns 401 for unauthenticated callers before reading role templates", async () => {
+    mockRequireSystemOwner.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
+    });
+
+    const req = new Request("http://x/api/roles/dev-agent/provision", { method: "POST" });
+    const res = await POST(req, { params: Promise.resolve({ slug: "dev-agent" }) });
+
+    expect(res.status).toBe(401);
+    expect(mockRequireSystemOwner).toHaveBeenCalledTimes(1);
+    expect(mockProvisionerFor).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for authenticated non-owner callers before provisioning", async () => {
+    mockRequireSystemOwner.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({ error: "Forbidden: system owner role required" }),
+        { status: 403 },
+      ),
+    });
+
+    const req = new Request("http://x/api/roles/dev-agent/provision", { method: "POST" });
+    const res = await POST(req, { params: Promise.resolve({ slug: "dev-agent" }) });
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.error).toMatch(/system owner/i);
+    expect(mockRequireSystemOwner).toHaveBeenCalledTimes(1);
+    expect(mockProvisionerFor).not.toHaveBeenCalled();
+  });
+
   it("streams SSE ending in a done event with satisfied=true", async () => {
     // Use the real provisioner for this test.
     mockProvisionerFor.mockImplementation(() => new OpenClawProvisioner());
@@ -57,6 +101,28 @@ describe("POST /api/roles/:slug/provision", () => {
     const text = await res.text();
     expect(text).toMatch(/event: done/);
     expect(text).toMatch(/"satisfied":true/);
+    expect(mockRequireSystemOwner).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows trusted internal service principals accepted by the system-owner helper", async () => {
+    mockRequireSystemOwner.mockResolvedValueOnce({
+      user: {
+        id: "internal-service-account",
+        email: "service@hivewright.local",
+        isSystemOwner: true,
+      },
+    });
+    mockProvisionerFor.mockImplementation(() => new OpenClawProvisioner());
+
+    const req = new Request("http://x/api/roles/dev-agent/provision", { method: "POST" });
+    const res = await POST(req, { params: Promise.resolve({ slug: "dev-agent" }) });
+
+    expect(res.headers.get("content-type")).toMatch(/event-stream/);
+    const text = await res.text();
+    expect(text).toMatch(/event: done/);
+    expect(text).toMatch(/"satisfied":true/);
+    expect(mockRequireSystemOwner).toHaveBeenCalledTimes(1);
+    expect(mockProvisionerFor).toHaveBeenCalledTimes(1);
   });
 
   it("returns 404 for an unknown slug", async () => {

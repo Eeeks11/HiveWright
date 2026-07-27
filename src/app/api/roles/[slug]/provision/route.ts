@@ -1,6 +1,6 @@
 import { sql } from "../../../_lib/db";
 import { jsonError } from "../../../_lib/responses";
-import { requireApiAuth } from "../../../_lib/auth";
+import { requireSystemOwner } from "../../../_lib/auth";
 import { provisionerFor } from "../../../../../provisioning";
 import { invalidate as invalidateRoleStatus } from "../../../../../provisioning/status-cache";
 
@@ -8,8 +8,8 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ slug: string }> },
 ) {
-  const unauth = await requireApiAuth();
-  if (unauth) return unauth;
+  const authz = await requireSystemOwner();
+  if ("response" in authz) return authz.response;
   const { slug } = await params;
 
   const [row] = await sql`
