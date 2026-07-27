@@ -353,12 +353,7 @@ export function startPaidMarketingCampaign(input: {
     throw new Error("Paid ads budget approval must match the campaign and spend cap.");
   }
 
-  return {
-    ...input.campaign,
-    status: "running",
-    spendBudgetCents,
-    budgetApproval: approval,
-  };
+  throw new Error("Paid ads require durable live connector execution proof before HiveWright can mark them running.");
 }
 
 export function evaluatePaidCampaignPolicy(input: {
