@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { loadCredentials } from "@/credentials/manager";
 import { buildAgentEnvironment } from "@/security/agent-environment";
+import { buildAgentEnvironmentLifecycleConfig, checkAgentEnvironmentDiskPressure, cleanupAgentEnvironmentScopeByName } from "@/security/agent-environment-lifecycle";
 
 export type GoalSupervisorAdapter = "codex" | "openclaw";
 
@@ -49,4 +50,29 @@ export async function loadGoalSupervisorCredentials(
       agentId: `goal-supervisor:${input.goalId}`,
     },
   });
+}
+
+
+export async function checkGoalSupervisorDiskGate(): Promise<{ allowed: boolean; reason: string }> {
+  return checkAgentEnvironmentDiskPressure({
+    config: buildAgentEnvironmentLifecycleConfig(),
+  }).catch((err) => ({
+    allowed: false,
+    reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}`,
+  }));
+}
+
+export async function cleanupGoalSupervisorEnvironmentBestEffort(input: { adapter: GoalSupervisorAdapter; goalId: string; reason?: string }): Promise<void> {
+  await cleanupAgentEnvironmentScopeByName({
+    scopeName: `goal-${safeSegment(input.goalId)}--${safeSegment(input.adapter)}`,
+    reason: input.reason ?? "goal_supervisor_terminal",
+    proof: "goal supervisor process returned",
+  }).catch((err) => {
+    console.warn(`[agent-environment] goal supervisor cleanup skipped for ${input.goalId}/${input.adapter}: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
+
+function safeSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+  return (safe || "unknown").slice(0, 160);
 }

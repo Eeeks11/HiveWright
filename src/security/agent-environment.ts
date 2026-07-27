@@ -1,5 +1,6 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
+import { buildAgentEnvironmentLifecycleConfig, scopeDirectoryName } from "./agent-environment-lifecycle";
 
 const RUNTIME_ENV_ALLOWLIST = [
   "PATH",
@@ -94,6 +95,8 @@ export function buildAgentEnvironment(input: BuildAgentEnvironmentInput): NodeJS
   env.XDG_CACHE_HOME = path.join(home, ".cache");
   env.XDG_DATA_HOME = path.join(home, ".local", "share");
 
+  Object.assign(env, buildAgentEnvironmentLifecycleConfig({ runtimeRoot }).buildSharedCacheEnv());
+
   copyExplicitValues(env, input.credentials);
   copyExplicitValues(env, input.adapterEnv);
 
@@ -117,17 +120,6 @@ function copyExplicitValues(
     if (value === undefined || BOUNDARY_OWNED_KEYS.has(key)) continue;
     destination[key] = value;
   }
-}
-
-function scopeDirectoryName(scope: AgentEnvironmentScope): string {
-  if (scope.kind === "task") return `task-${safeSegment(scope.taskId)}-${safeSegment(scope.adapter)}`;
-  if (scope.kind === "goal-supervisor") return `goal-${safeSegment(scope.goalId)}-${safeSegment(scope.adapter)}`;
-  return `probe-${safeSegment(scope.adapter)}-${safeSegment(scope.model)}`;
-}
-
-function safeSegment(value: string): string {
-  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
-  return (safe || "unknown").slice(0, 160);
 }
 
 function ensurePrivateDirectory(directory: string): void {

@@ -5,7 +5,7 @@ import path from "path";
 import { buildSupervisorInitialPrompt, buildSprintWakeUpPrompt, buildCommentWakeUpPrompt } from "./supervisor-session";
 import { hiveGoalWorkspacePath } from "@/hives/workspace-root";
 import { codexCliModelName, resolveGoalSupervisorRuntime } from "./supervisor-routing";
-import { buildGoalSupervisorProcessEnv, loadGoalSupervisorCredentials } from "./supervisor-env";
+import { buildGoalSupervisorProcessEnv, checkGoalSupervisorDiskGate, cleanupGoalSupervisorEnvironmentBestEffort, loadGoalSupervisorCredentials } from "./supervisor-env";
 import { buildSupervisorToolsMd } from "./supervisor-tool-contract";
 import {
   captureGoalProgress,
@@ -224,6 +224,12 @@ ${initialPrompt}
   if (!claimed) return { agentId };
   const progressBaseline = await captureGoalProgress(sql, goalId);
 
+  const diskGate = await checkGoalSupervisorDiskGate();
+  if (!diskGate.allowed) {
+    await releaseGoalSupervisorStart(sql, goalId, supervisorSession);
+    return { agentId, error: `Supervisor disk gate blocked spawn: ${diskGate.reason}` };
+  }
+
   const args = [
     "exec",
     "--json",
@@ -239,6 +245,7 @@ ${initialPrompt}
     hiveId: goal.hive_id as string,
     supervisorSession,
   });
+  await cleanupGoalSupervisorEnvironmentBestEffort({ adapter: "codex", goalId });
 
   if (runResult.code !== 0) {
     console.warn(`[supervisor-codex] codex exec failed for goal ${goalId} (exit ${runResult.code}): ${runResult.stderr.slice(0, 500)}`);
@@ -305,12 +312,16 @@ export async function wakeUpSupervisor(
     wakeKind: "sprint",
   });
 
+  const diskGate = await checkGoalSupervisorDiskGate();
+  if (!diskGate.allowed) return { success: false, output: "", error: `Supervisor disk gate blocked spawn: ${diskGate.reason}` };
+
   const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
     credentials,
     goalId,
     hiveId: goal.hive_id as string,
     supervisorSession,
   });
+  await cleanupGoalSupervisorEnvironmentBestEffort({ adapter: "codex", goalId });
 
   const validated = validateCodexWakeResult({ wakeKind: "sprint", runResult });
   if (!validated.success) return validated;
@@ -368,12 +379,16 @@ export async function wakeUpSupervisorOnComment(
     wakeKind: "comment",
   });
 
+  const diskGate = await checkGoalSupervisorDiskGate();
+  if (!diskGate.allowed) return { success: false, output: "", error: `Supervisor disk gate blocked spawn: ${diskGate.reason}` };
+
   const runResult = await runCodex(args, workspacePath, wakeUpPrompt, {
     credentials,
     goalId,
     hiveId: goal.hive_id as string,
     supervisorSession,
   });
+  await cleanupGoalSupervisorEnvironmentBestEffort({ adapter: "codex", goalId });
 
   const validated = validateCodexWakeResult({ wakeKind: "comment", runResult });
   if (!validated.success) return validated;

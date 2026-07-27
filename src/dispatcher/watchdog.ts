@@ -1,5 +1,7 @@
 import type { Sql } from "postgres";
 
+const DISK_PRESSURE_HARD_STOP_PREFIX = "disk_pressure_hard_stop:";
+
 export interface InterruptedActiveTask {
   id: string;
   title: string;
@@ -200,6 +202,11 @@ export interface StuckBlockedTask {
   reason: "blocked_too_long" | "fast_terminal_failure";
 }
 
+export interface RecoverableBlockedTask {
+  id: string;
+  title: string;
+}
+
 function terminalAdapterFailureSqlPattern(): string {
   return [
     "OPENAI_API_KEY",
@@ -250,6 +257,7 @@ export async function findStuckBlockedTasks(
       END AS "reason"
     FROM tasks t
     WHERE t.status = 'blocked'
+      AND COALESCE(t.failure_reason, '') !~ ${`^${DISK_PRESSURE_HARD_STOP_PREFIX}`}
       AND (
         t.updated_at < NOW() - make_interval(secs => ${ageSeconds})
         OR (
@@ -278,5 +286,26 @@ export async function findStuckBlockedTasks(
     blockedSinceMs: Number(row["blockedSinceMs"] ?? row["blocked_since_ms"] ?? 0),
     failureReason: (row["failureReason"] ?? row["failure_reason"] ?? null) as string | null,
     reason: (row["reason"] as StuckBlockedTask["reason"]) ?? "blocked_too_long",
+  }));
+}
+
+export async function recoverDiskPressureBlockedTasks(sql: Sql): Promise<RecoverableBlockedTask[]> {
+  const rows = await sql`
+    UPDATE tasks
+    SET status = 'pending',
+        failure_reason = NULL,
+        dispatcher_pid = NULL,
+        started_at = NULL,
+        last_heartbeat = NULL,
+        retry_after = NULL,
+        updated_at = NOW()
+    WHERE status = 'blocked'
+      AND COALESCE(failure_reason, '') ~ ${`^${DISK_PRESSURE_HARD_STOP_PREFIX}`}
+    RETURNING id, title
+  `;
+
+  return (rows as unknown as Record<string, unknown>[]).map((row) => ({
+    id: row["id"] as string,
+    title: row["title"] as string,
   }));
 }

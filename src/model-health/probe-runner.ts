@@ -17,6 +17,7 @@ import {
 } from "@/model-health/probe-policy";
 import { loadModelHealthByIdentity } from "@/model-health/stored-health";
 import { getCanonicalOllamaHealthBaseUrl } from "@/ollama/endpoint";
+import { buildAgentEnvironmentLifecycleConfig, checkAgentEnvironmentDiskPressure } from "@/security/agent-environment-lifecycle";
 
 const DEFAULT_HEALTHY_TTL_MS = 60 * 60 * 1000;
 const DEFAULT_UNHEALTHY_RETRY_MS = 15 * 60 * 1000;
@@ -173,6 +174,18 @@ export async function runModelHealthProbes(
         result.skippedFresh += 1;
         continue;
       }
+    }
+
+    const diskGate = await checkAgentEnvironmentDiskPressure({
+      config: buildAgentEnvironmentLifecycleConfig(),
+    }).catch((err) => ({ allowed: false, reason: `disk_pressure_check_failed: ${err instanceof Error ? err.message : String(err)}` }));
+    if (!diskGate.allowed) {
+      result.errors.push({
+        modelId: row.model_id,
+        adapterType: row.adapter_type,
+        reason: diskGate.reason,
+      });
+      continue;
     }
 
     const adapter = await adapterFactory(row.adapter_type, sql);
