@@ -570,12 +570,12 @@ export function defaultTerminalStateChecker(sql: Sql): AgentEnvironmentTerminalS
       return { terminal: !!status && TERMINAL_TASK_STATUSES.has(status), proof: status ? `tasks.status=${status}` : "task row missing" };
     }
     if (scope.kind === "goal-supervisor") {
-      const rows = await sql<{ status: string | null; supervisor_status: string | null }[]>`
-        SELECT status, supervisor_status FROM goals WHERE id = ${scope.scopeId} LIMIT 1
-      `;
-      const row = rows[0];
-      const terminal = !!row && TERMINAL_GOAL_STATUSES.has(String(row.status)) && row.supervisor_status !== "running";
-      return { terminal, proof: row ? `goals.status=${row.status};supervisor_status=${row.supervisor_status}` : "goal row missing" };
+      const rows = await sql<{ status: string | null }[]>`SELECT status FROM goals WHERE id = ${scope.scopeId} LIMIT 1`;
+      const status = rows[0]?.status ?? null;
+      return {
+        terminal: !!status && TERMINAL_GOAL_STATUSES.has(String(status)),
+        proof: status ? `goals.status=${status}` : "goal row missing",
+      };
     }
     return { terminal: false, proof: "unknown scope" };
   };
