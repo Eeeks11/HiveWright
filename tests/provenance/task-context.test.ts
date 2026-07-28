@@ -5,6 +5,8 @@ import {
   TASK_CONTEXT_PROVENANCE_KIND,
 } from "@/provenance/task-context";
 
+const TASK_ID = "11111111-1111-1111-1111-111111111111";
+
 function sqlRows(rows: { chunk: unknown }[]): Sql {
   return vi.fn((strings: TemplateStringsArray) => {
     const query = strings.join("?");
@@ -18,6 +20,12 @@ function sqlRows(rows: { chunk: unknown }[]): Sql {
       throw new Error("reader should scan a bounded set of candidate provenance rows");
     }
     return Promise.resolve(rows);
+  }) as unknown as Sql;
+}
+
+function sqlShouldNotRun(): Sql {
+  return vi.fn(() => {
+    throw new Error("sql should not be called for synthetic non-UUID task ids");
   }) as unknown as Sql;
 }
 
@@ -42,7 +50,7 @@ describe("task context provenance", () => {
     const result = await readLatestTaskContextProvenance(sqlRows([
       { chunk: `plain diagnostic output mentioning ${TASK_CONTEXT_PROVENANCE_KIND} but not JSON` },
       { chunk: provenanceChunk },
-    ]), "task-1");
+    ]), TASK_ID);
 
     expect(result).toEqual({
       status: "available",
@@ -64,7 +72,17 @@ describe("task context provenance", () => {
     const result = await readLatestTaskContextProvenance(sqlRows([
       { chunk: "plain diagnostic output that is not JSON" },
       { chunk: JSON.stringify({ kind: "other_diagnostic", status: "available" }) },
-    ]), "task-1");
+    ]), TASK_ID);
+
+    expect(result).toEqual({
+      status: "unavailable",
+      entries: [],
+      disclaimer: expect.stringContaining("not model-internal reasoning"),
+    });
+  });
+
+  it("skips UUID-backed task log queries for synthetic non-task ids", async () => {
+    const result = await readLatestTaskContextProvenance(sqlShouldNotRun(), "llm-release-scan-websearch");
 
     expect(result).toEqual({
       status: "unavailable",

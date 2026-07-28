@@ -1,4 +1,5 @@
 import type { Sql } from "postgres";
+import { isUuidLike } from "@/lib/uuid";
 
 export interface NormalizedCodexEmptyOutputDiagnostic {
   codexEmptyOutput: true;
@@ -41,6 +42,9 @@ export async function readLatestCodexEmptyOutputDiagnostic(
   sql: Sql,
   taskId: string,
 ): Promise<NormalizedCodexEmptyOutputDiagnostic | null> {
+  if (!isUuidLike(taskId)) {
+    return null;
+  }
   const [row] = await sql<{ chunk: unknown }[]>`
     SELECT chunk
     FROM task_logs

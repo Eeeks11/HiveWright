@@ -4,6 +4,7 @@ import { requireApiUser } from "../../_lib/auth";
 import { requireStrictHiveTarget } from "@/app/api/_lib/hive-target";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { readLatestTaskContextProvenance } from "@/provenance/task-context";
+import { isUuidLike } from "@/lib/uuid";
 import { serializeGoalBudgetStatus } from "@/budget/status";
 import { toPublicUsageSummary } from "@/usage/billable-usage";
 
@@ -157,6 +158,9 @@ export async function GET(
     if ("response" in authz) return authz.response;
     const { user } = authz;
     const { id } = await params;
+    if (!isUuidLike(id)) {
+      return jsonError("Task not found", 404);
+    }
     const target = await requireStrictHiveTarget(sql, user, { kind: "query", request });
     if (!target.ok) return target.response;
 
