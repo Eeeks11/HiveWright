@@ -17,6 +17,11 @@ function isUuid(value: unknown): value is string {
   return typeof value === "string" && UUID_RE.test(value);
 }
 
+function hasAdsChannel(channels: unknown): boolean {
+  return Array.isArray(channels)
+    && channels.some((channel) => typeof channel === "string" && channel.toLowerCase().includes("ads"));
+}
+
 function mapExecutionLog(row: Record<string, unknown>) {
   return {
     id: row.id,
@@ -47,9 +52,11 @@ export async function POST(request: Request) {
 
     const assetRows = await sql`
       SELECT ma.id, ma.hive_id, ma.campaign_id, ma.external_action_request_id, ma.approval_status,
+             mc.channels AS campaign_channels,
              ear.decision_id AS external_action_decision_id, ear.state AS external_action_state,
              d.status AS decision_status, d.selected_option_key
       FROM marketing_assets ma
+      JOIN marketing_campaigns mc ON mc.id = ma.campaign_id AND mc.hive_id = ma.hive_id
       JOIN external_action_requests ear ON ear.id = ma.external_action_request_id AND ear.hive_id = ma.hive_id
       JOIN decisions d ON d.id = ear.decision_id AND d.hive_id = ma.hive_id
       WHERE ma.id = ${assetId}
@@ -118,14 +125,24 @@ export async function POST(request: Request) {
         throw new ConflictError("Marketing asset publication state could not be finalized");
       }
 
-      const campaignRows = await tx`
-        UPDATE marketing_campaigns
-        SET status = 'running', updated_at = now()
-        WHERE id = ${asset.campaign_id as string}
-          AND hive_id = ${hiveId}
-          AND status IN ('approved', 'draft', 'approval', 'running')
-        RETURNING id
-      `;
+      const isManualExecution = connector === "manual" || connector === "manual_import";
+      const campaignRows = isManualExecution && hasAdsChannel(asset.campaign_channels)
+        ? await tx`
+          UPDATE marketing_campaigns
+          SET status = CASE WHEN status IN ('draft', 'approval') THEN 'approved' ELSE status END, updated_at = now()
+          WHERE id = ${asset.campaign_id as string}
+            AND hive_id = ${hiveId}
+            AND status IN ('approved', 'draft', 'approval', 'running')
+          RETURNING id
+        `
+        : await tx`
+          UPDATE marketing_campaigns
+          SET status = 'running', updated_at = now()
+          WHERE id = ${asset.campaign_id as string}
+            AND hive_id = ${hiveId}
+            AND status IN ('approved', 'draft', 'approval', 'running')
+          RETURNING id
+        `;
       if ((campaignRows as unknown[]).length !== 1) {
         throw new ConflictError("Marketing campaign execution state could not be finalized");
       }

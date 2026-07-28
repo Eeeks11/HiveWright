@@ -46,6 +46,7 @@ function assetRow(overrides: Record<string, unknown> = {}) {
     external_action_state: "approved",
     decision_status: "resolved",
     selected_option_key: "approve",
+    campaign_channels: ["email"],
     ...overrides,
   };
 }
@@ -102,6 +103,27 @@ describe("POST /api/marketing/execution-logs", () => {
       externalActionRequestId: ACTION_ID,
     });
     expect(mocks.sql.begin).toHaveBeenCalledTimes(1);
+    expect(mocks.tx).toHaveBeenCalledTimes(5);
+    expect(mocks.tx.mock.calls[4][0].join(" ")).toContain("SET status = 'running'");
+  });
+
+  it("keeps approved ads campaigns non-running when recording a manual imported execution log", async () => {
+    mocks.sql.mockResolvedValueOnce([assetRow({ campaign_channels: ["ads"] })]);
+    mocks.tx
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([logRow()])
+      .mockResolvedValueOnce([{ id: ACTION_ID }])
+      .mockResolvedValueOnce([{ id: ASSET_ID }])
+      .mockResolvedValueOnce([{ id: CAMPAIGN_ID }]);
+
+    const res = await POST(request());
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.executionLog.id).toBe(LOG_ID);
+    const campaignUpdate = mocks.tx.mock.calls[4][0].join(" ");
+    expect(campaignUpdate).toContain("CASE WHEN status IN ('draft', 'approval') THEN 'approved' ELSE status END");
+    expect(campaignUpdate).not.toContain("SET status = 'running'");
     expect(mocks.tx).toHaveBeenCalledTimes(5);
   });
 
