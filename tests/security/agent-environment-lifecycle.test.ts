@@ -10,6 +10,7 @@ import {
   cleanupProbeAgentEnvironment,
   cleanupTaskAgentEnvironmentIfTerminal,
   collectAgentEnvironmentInventory,
+  defaultTerminalStateChecker,
   reconcileAgentEnvironmentOrphans,
   simulateAgentEnvironmentRetention,
   parseScopePath,
@@ -258,6 +259,28 @@ describe("agent environment lifecycle", () => {
       scopeId: "goal-alpha-42",
       adapter: "openclaw",
     });
+  });
+
+  it("checks goal-supervisor terminal state using the live goals schema", async () => {
+    const queries: string[] = [];
+    const sql = ((strings: TemplateStringsArray) => {
+      const query = strings.join("$");
+      queries.push(query);
+      if (query.includes("supervisor_status")) {
+        throw new Error("unexpected supervisor_status column read");
+      }
+      return Promise.resolve([{ status: "achieved" }]);
+    }) as never;
+
+    const result = await defaultTerminalStateChecker(sql)({
+      kind: "goal-supervisor",
+      scopeId: "goal-alpha-42",
+      adapter: "openclaw",
+      path: "/tmp/goal-goal-alpha-42--openclaw",
+    });
+
+    expect(result).toEqual({ terminal: true, proof: "goals.status=achieved" });
+    expect(queries).toEqual(["SELECT status FROM goals WHERE id = $ LIMIT 1"]);
   });
 
   it("enforces shared-cache, per-scope, and global byte caps during disk-pressure checks", async () => {
