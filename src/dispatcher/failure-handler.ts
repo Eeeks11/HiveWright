@@ -1,11 +1,15 @@
 import type { Sql } from "postgres";
 import type { DispatcherConfig } from "./types";
-import { releaseTask, failTask } from "./task-claimer";
+import { releaseTask, failTask, blockTask } from "./task-claimer";
 import { markUnresolvable } from "./mark-unresolvable";
 import { createDoctorTask } from "../doctor";
 import { escalateRecursionGuard } from "../doctor/escalate";
 import { inheritTaskWorkspaceFromParent } from "./worktree-manager";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
+import {
+  buildFastTerminalEnvironmentFixBrief,
+  createEnvironmentFixTask,
+} from "./environment-fix";
 
 const DOCTOR_RUNTIME_FALLBACK_ADAPTER = "auto";
 const DOCTOR_RUNTIME_FALLBACK_MODEL = "auto";
@@ -17,7 +21,7 @@ export enum FailureCategory {
   ExecutionSliceExceeded = "execution_slice_exceeded",
 }
 
-export type FailureResult = "retried" | "doctor" | "unresolvable";
+export type FailureResult = "retried" | "doctor" | "environment_fix" | "unresolvable";
 
 export function isRuntimeCrash(failureReason: string | null | undefined): boolean {
   const reason = failureReason?.trim();
@@ -32,6 +36,30 @@ export function isRuntimeCrash(failureReason: string | null | undefined): boolea
     /^Spawn error\b/i,
     /^Failed to start session\b/i,
     /^Session send failed\b/i,
+  ].some((pattern) => pattern.test(reason));
+}
+
+function shouldCreateDirectEnvironmentFixTask(
+  category: FailureCategory,
+  reason: string,
+): boolean {
+  if (
+    category !== FailureCategory.SpawnFailure
+    && category !== FailureCategory.AgentReported
+  ) {
+    return false;
+  }
+
+  return [
+    /^Pre-flight failed:/i,
+    /^runtime_blocked:/i,
+    /^Unsupported runtime adapter:/i,
+    /^Adapter execution threw:/i,
+    /^Spawn failed\b/i,
+    /^Spawn error\b/i,
+    /^Failed to start session\b/i,
+    /^Session send failed\b/i,
+    /^Codex image runtime completed but no predictable PNG\/JPEG artifact path was found\./i,
   ].some((pattern) => pattern.test(reason));
 }
 
@@ -78,6 +106,11 @@ export async function handleTaskFailure(
 
     await escalateRecursionGuard(sql, taskId, reason, task.hive_id as string);
     return "unresolvable";
+  }
+
+  if (shouldCreateDirectEnvironmentFixTask(category, reason)) {
+    await blockTask(sql, taskId, reason);
+    return "environment_fix";
   }
 
   // Check if doctor has exhausted attempts
@@ -253,6 +286,17 @@ export async function handleTaskFailureAndDoctor(
     const doctorTask = await createDoctorTask(sql, taskId);
     if (doctorTask) {
       console.log(`[dispatcher] Created doctor task ${doctorTask.id} for failed task ${taskId}`);
+    }
+  } else if (result === "environment_fix") {
+    const environmentFixTask = await createEnvironmentFixTask(sql, {
+      parentTaskId: taskId,
+      brief: buildFastTerminalEnvironmentFixBrief(reason),
+      createdBy: "dispatcher",
+    });
+    if (environmentFixTask) {
+      console.log(
+        `[dispatcher] Created environment-fix task ${environmentFixTask.id} (${environmentFixTask.assignedTo}) for blocked task ${taskId}`,
+      );
     }
   }
 

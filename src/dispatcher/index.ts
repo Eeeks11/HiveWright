@@ -126,6 +126,11 @@ import {
 } from "../execution-runs/ledger";
 import type { AdapterResult } from "../adapters/types";
 import {
+  isEnvironmentFixTask,
+  resumeBlockedParentAfterEnvironmentFix,
+  resumeBlockedParentsAwaitingEnvironmentFixHandoff,
+} from "./environment-fix";
+import {
   buildAgentEnvironmentLifecycleConfig,
   checkAgentEnvironmentDiskPressure,
   cleanupTaskAgentEnvironmentIfTerminal,
@@ -175,7 +180,14 @@ export async function applyStructuredDoctorDiagnosis(
   task: StructuredDoctorDiagnosisTask,
   output: string,
 ): Promise<boolean> {
-  if (task.assignedTo !== "doctor" || !task.parentTaskId) return false;
+  if (
+    task.assignedTo !== "doctor"
+    || !task.parentTaskId
+    || isEnvironmentFixTask(task)
+    || (!isQualityDoctorDiagnosisTask(task) && task.createdBy !== "dispatcher")
+  ) {
+    return false;
+  }
 
   if (isQualityDoctorDiagnosisTask(task)) {
     const {
@@ -1031,7 +1043,13 @@ export class Dispatcher {
           chunk: repeatedRuntimeBlockAlert ? `${reason} ${repeatedRuntimeBlockAlert}` : reason,
           type: "status",
         }).catch(() => {});
-        await blockTask(this.sql, task.id, reason);
+        await handleTaskFailureAndDoctor(
+          this.sql,
+          task.id,
+          FailureCategory.SpawnFailure,
+          reason,
+          this.config,
+        );
         return;
       }
 
@@ -1797,6 +1815,12 @@ export class Dispatcher {
           await completeTask(this.sql, task.id, result.output, completionOptions);
           await markCapsuleCompleted(this.sql, task.id);
           console.log(`[dispatcher] Task ${task.id} completed.`);
+          const environmentFixHandoff = await resumeBlockedParentAfterEnvironmentFix(this.sql, task);
+          if (environmentFixHandoff.resumed) {
+            console.log(
+              `[dispatcher] Environment-fix task ${task.id} resumed blocked parent ${environmentFixHandoff.parentTaskId}.`,
+            );
+          }
           try {
             await emitTaskEvent(this.sql, { type: "task_completed", taskId: task.id, title: task.title, assignedTo: task.assignedTo, hiveId: task.hiveId, deliverables: emittedDeliverables });
           } catch { /* ignore event emission errors */ }
@@ -1902,6 +1926,13 @@ export class Dispatcher {
           WHERE id = ${t.id}
         `;
         await notifyGoalSupervisorOfQaFailure(this.sql, t.id, reason);
+      }
+
+      const pendingEnvironmentFixHandoffs = await resumeBlockedParentsAwaitingEnvironmentFixHandoff(this.sql);
+      for (const handoff of pendingEnvironmentFixHandoffs) {
+        console.log(
+          `[dispatcher] Watchdog: resumed blocked task ${handoff.parentTaskId} from completed environment-fix task ${handoff.repairTaskId}.`,
+        );
       }
 
       // Rescue tasks that have been `blocked` for over 2x maxTaskRuntimeMs

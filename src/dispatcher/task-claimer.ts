@@ -1,4 +1,5 @@
 import type { Sql, TransactionSql } from "postgres";
+import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import {
   advancePipelineRunFromTaskInTransaction,
   lockPipelineStepRunForTask,
@@ -380,11 +381,29 @@ async function evaluateTaskDeploymentProof(
 }
 
 export async function blockTask(sql: Sql, taskId: string, reason?: string): Promise<void> {
-  await sql`
+  const [task] = await sql<{ hive_id: string; goal_id: string | null; status: string }[]>`
+    SELECT hive_id, goal_id, status
+    FROM tasks
+    WHERE id = ${taskId}
+    LIMIT 1
+  `;
+  const [updated] = await sql<{ status: string }[]>`
     UPDATE tasks
     SET status = 'blocked',
         failure_reason = COALESCE(${reason ?? null}, failure_reason),
         updated_at = NOW()
     WHERE id = ${taskId}
+    RETURNING status
   `;
+  if (!task || !updated) return;
+
+  await recordTaskLifecycleTransitionBestEffort(sql, {
+    taskId,
+    hiveId: task.hive_id,
+    goalId: task.goal_id,
+    previousStatus: task.status,
+    nextStatus: updated.status,
+    source: "dispatcher.blockTask",
+    reason,
+  });
 }

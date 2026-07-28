@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
 import {
   findStuckTasks,
   findDeadEndReviewTasks,
@@ -6,6 +7,8 @@ import {
   recoverDiskPressureBlockedTasks,
   recoverInterruptedActiveTasks,
 } from "@/dispatcher/watchdog";
+import { handleTaskFailureAndDoctor, FailureCategory } from "@/dispatcher/failure-handler";
+import { DEFAULT_CONFIG } from "@/dispatcher/types";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 
 let bizId: string;
@@ -279,6 +282,316 @@ describe("findStuckBlockedTasks", () => {
 
     const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000);
     expect(found.some((t) => t.title === "wd-blocked-with-repair")).toBe(false);
+  });
+
+  it("does not flag blocked tasks with a legacy standalone environment-fix task in flight", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, updated_at)
+      VALUES (${bizId}, 'dev-agent', 'owner', 'wd-blocked-with-legacy-env-fix', 'Brief', 'blocked',
+              NOW() - INTERVAL '6 hours')
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status)
+      VALUES (
+        ${bizId},
+        'doctor',
+        'doctor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'active'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-legacy-env-fix")).toBe(false);
+  });
+
+  it("does not flag blocked tasks whose environment-fix child already completed after the block", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-with-completed-env-fix',
+        'Brief',
+        'blocked',
+        'Pre-flight failed: Missing required credential',
+        NOW() - INTERVAL '6 minutes'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at)
+      VALUES (
+        ${bizId},
+        'doctor',
+        'doctor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '1 minute'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-completed-env-fix")).toBe(false);
+  });
+
+  it("does not flag blocked tasks whose non-doctor environment remediation child already completed after the block", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-with-completed-infra-env-fix',
+        'Brief',
+        'blocked',
+        'Pre-flight failed: Missing required credential',
+        NOW() - INTERVAL '6 minutes'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at)
+      VALUES (
+        ${bizId},
+        'infrastructure-agent',
+        'goal-supervisor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '1 minute'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-completed-infra-env-fix")).toBe(false);
+  });
+
+  it("does not flag blocked tasks when parent updated_at drifted after a completed remediation child", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-with-drifted-updated-at',
+        'Brief',
+        'blocked',
+        'Pre-flight failed: Missing required credential',
+        NOW() - INTERVAL '1 minute'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO agent_audit_events (
+        event_type, actor_type, actor_label, hive_id, task_id, target_type, target_id, outcome, metadata, created_at
+      )
+      VALUES (
+        ${AGENT_AUDIT_EVENTS.taskLifecycleTransition},
+        'system',
+        'test',
+        ${bizId},
+        ${parent.id},
+        'task',
+        ${parent.id},
+        'success',
+        ${sql.json({
+          taskId: parent.id,
+          previousStatus: "failed",
+          nextStatus: "blocked",
+          source: "test.watchdog",
+        })},
+        NOW() - INTERVAL '6 minutes'
+      )
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at)
+      VALUES (
+        ${bizId},
+        'infrastructure-agent',
+        'goal-supervisor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '4 minutes'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-drifted-updated-at")).toBe(false);
+  });
+
+  it("does not flag dispatcher-blocked fast-terminal parents when updated_at drifts after the remediation child completes", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, retry_count, doctor_attempts
+      )
+      VALUES (
+        ${bizId},
+        'watchdog-test-role',
+        'owner',
+        'wd-dispatcher-blocked-drift-anchor',
+        'Brief',
+        'active',
+        0,
+        0
+      )
+      RETURNING id
+    `;
+
+    const result = await handleTaskFailureAndDoctor(
+      sql,
+      parent.id as string,
+      FailureCategory.SpawnFailure,
+      "Pre-flight failed: Missing required credential",
+      DEFAULT_CONFIG,
+    );
+    expect(result).toBe("environment_fix");
+
+    await sql`
+      UPDATE agent_audit_events
+      SET created_at = NOW() - INTERVAL '6 minutes'
+      WHERE task_id = ${parent.id}
+        AND event_type = ${AGENT_AUDIT_EVENTS.taskLifecycleTransition}
+        AND COALESCE(metadata->>'nextStatus', '') = 'blocked'
+    `;
+    await sql`
+      UPDATE tasks
+      SET status = 'completed',
+          updated_at = NOW() - INTERVAL '4 minutes'
+      WHERE parent_task_id = ${parent.id}
+        AND title = ${`Fix environment for: ${parent.id}`}
+    `;
+    await sql`
+      UPDATE tasks
+      SET updated_at = NOW() - INTERVAL '1 minute'
+      WHERE id = ${parent.id}
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-dispatcher-blocked-drift-anchor")).toBe(false);
+  });
+
+  it("does not flag blocked tasks whose retried environment-fix child already completed after the block", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-with-completed-retried-env-fix',
+        'Brief',
+        'blocked',
+        'Codex exited code 1: codex reported error',
+        NOW() - INTERVAL '6 minutes'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at, adapter_override, model_override
+      )
+      VALUES (
+        ${bizId},
+        'doctor',
+        'dispatcher',
+        ${`[Doctor retry: auto] Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '1 minute',
+        'auto',
+        'auto'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-completed-retried-env-fix")).toBe(false);
+  });
+
+  it("still flags blocked tasks when only a completed doctor diagnosis child exists", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-with-completed-doctor-diagnosis',
+        'Brief',
+        'blocked',
+        'Pre-flight failed: Missing required credential',
+        NOW() - INTERVAL '6 minutes'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at)
+      VALUES (
+        ${bizId},
+        'doctor',
+        'dispatcher',
+        '[Doctor] Diagnose: wd-blocked-with-completed-doctor-diagnosis',
+        'diagnose runtime issue',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '1 minute'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 4 * 60 * 60 * 1000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-with-completed-doctor-diagnosis")).toBe(true);
+  });
+
+  it("still flags blocked tasks if the completed environment-fix task is stale relative to the current block", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, title, brief, status, failure_reason, updated_at
+      )
+      VALUES (
+        ${bizId},
+        'dev-agent',
+        'owner',
+        'wd-blocked-after-stale-env-fix',
+        'Brief',
+        'blocked',
+        'Pre-flight failed: Missing required credential',
+        NOW() - INTERVAL '1 minute'
+      )
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id, updated_at)
+      VALUES (
+        ${bizId},
+        'doctor',
+        'doctor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair runtime',
+        'completed',
+        ${parent.id},
+        NOW() - INTERVAL '6 minutes'
+      )
+    `;
+
+    const found = await findStuckBlockedTasks(sql, 30_000, 5 * 60 * 1000);
+    expect(found.some((t) => t.title === "wd-blocked-after-stale-env-fix")).toBe(true);
   });
 
   it("does not flag blocked tasks with an open runtime_guard decision", async () => {
