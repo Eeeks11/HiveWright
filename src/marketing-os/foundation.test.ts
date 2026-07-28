@@ -141,7 +141,7 @@ describe("Marketing OS foundation", () => {
     expect(snapshot.loopState.stageOrder).toEqual(["observe", "plan", "execute", "measure", "optimise"]);
   });
 
-  it("blocks paid ads from starting without an explicit approved spend cap", () => {
+  it("blocks paid ads from starting even after budget approval until live execution proof exists", () => {
     const draft = createMarketingObjectiveDraft({
       hiveId: "hive-1",
       objective: "Launch a winter retargeting ad",
@@ -161,11 +161,8 @@ describe("Marketing OS foundation", () => {
       now: new Date("2026-06-16T01:00:00.000Z"),
     });
 
-    const running = startPaidMarketingCampaign({ campaign: budgetApproval.campaign, budgetApproval: budgetApproval.budgetApproval });
-
     expect(budgetApproval.approvalStatus).toBe("approved");
-    expect(running.status).toBe("running");
-    expect(running.spendBudgetCents).toBe(50000);
+    expect(() => startPaidMarketingCampaign({ campaign: budgetApproval.campaign, budgetApproval: budgetApproval.budgetApproval })).toThrow(/execution proof/i);
   });
 
   it("pauses paid campaigns when spend policy detects bad CPL or weak downstream conversion", () => {
@@ -178,7 +175,12 @@ describe("Marketing OS foundation", () => {
       now: new Date("2026-06-16T00:00:00.000Z"),
     });
     const budgetApproval = approveMarketingBudgetChange({ campaign: draft.campaign, requestedBudgetCents: 100000, ownerId: "owner-1" });
-    const running = startPaidMarketingCampaign({ campaign: budgetApproval.campaign, budgetApproval: budgetApproval.budgetApproval });
+    const running = {
+      ...budgetApproval.campaign,
+      status: "running" as const,
+      spendBudgetCents: 100000,
+      budgetApproval: budgetApproval.budgetApproval,
+    };
 
     const policy = evaluatePaidCampaignPolicy({
       campaign: running,
@@ -211,7 +213,12 @@ describe("Marketing OS foundation", () => {
       now: new Date("2026-06-16T00:00:00.000Z"),
     });
     const budgetApproval = approveMarketingBudgetChange({ campaign: draft.campaign, requestedBudgetCents: 100000, ownerId: "owner-1" });
-    const running = startPaidMarketingCampaign({ campaign: budgetApproval.campaign, budgetApproval: budgetApproval.budgetApproval });
+    const running = {
+      ...budgetApproval.campaign,
+      status: "running" as const,
+      spendBudgetCents: 100000,
+      budgetApproval: budgetApproval.budgetApproval,
+    };
 
     const snapshot = buildMarketingDashboardSnapshot({
       campaigns: [running],
