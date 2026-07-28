@@ -28,10 +28,10 @@ const ACTION_ID = "44444444-4444-4444-4444-444444444444";
 const DECISION_ID = "55555555-5555-5555-5555-555555555555";
 const LOG_ID = "66666666-6666-6666-6666-666666666666";
 
-function request(assetId = ASSET_ID) {
+function request(assetId = ASSET_ID, connector = "manual_import") {
   return new Request("http://localhost/api/marketing/execution-logs", {
     method: "POST",
-    body: JSON.stringify({ assetId, action: "manual_owner_approved_marketing_execution", connector: "manual_import" }),
+    body: JSON.stringify({ assetId, action: "manual_owner_approved_marketing_execution", connector }),
   });
 }
 
@@ -124,6 +124,47 @@ describe("POST /api/marketing/execution-logs", () => {
     const campaignUpdate = mocks.tx.mock.calls[4][0].join(" ");
     expect(campaignUpdate).toContain("CASE WHEN status IN ('draft', 'approval') THEN 'approved' ELSE status END");
     expect(campaignUpdate).not.toContain("SET status = 'running'");
+    expect(mocks.tx).toHaveBeenCalledTimes(5);
+  });
+
+  it("keeps approved ads campaigns non-running when the client forges connector execution", async () => {
+    mocks.sql.mockResolvedValueOnce([assetRow({ campaign_channels: ["paid_ads"] })]);
+    mocks.tx
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([logRow()])
+      .mockResolvedValueOnce([{ id: ACTION_ID }])
+      .mockResolvedValueOnce([{ id: ASSET_ID }])
+      .mockResolvedValueOnce([{ id: CAMPAIGN_ID }]);
+
+    const res = await POST(request(ASSET_ID, "connector"));
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.data.executionLog.id).toBe(LOG_ID);
+    const campaignUpdate = mocks.tx.mock.calls[4][0].join(" ");
+    expect(campaignUpdate).toContain("CASE WHEN status IN ('draft', 'approval') THEN 'approved' ELSE status END");
+    expect(campaignUpdate).not.toContain("SET status = 'running'");
+    expect(mocks.tx).toHaveBeenCalledTimes(5);
+  });
+
+  it("marks ads campaigns running only when the external action already has durable connector proof", async () => {
+    mocks.sql.mockResolvedValueOnce([assetRow({
+      campaign_channels: ["paid_ads"],
+      external_action_state: "succeeded",
+      external_action_executed_at: new Date("2026-06-16T02:00:00Z"),
+      external_action_completed_at: new Date("2026-06-16T02:01:00Z"),
+    })]);
+    mocks.tx
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([logRow()])
+      .mockResolvedValueOnce([{ id: ACTION_ID }])
+      .mockResolvedValueOnce([{ id: ASSET_ID }])
+      .mockResolvedValueOnce([{ id: CAMPAIGN_ID }]);
+
+    const res = await POST(request(ASSET_ID, "manual_import"));
+
+    expect(res.status).toBe(201);
+    expect(mocks.tx.mock.calls[4][0].join(" ")).toContain("SET status = 'running'");
     expect(mocks.tx).toHaveBeenCalledTimes(5);
   });
 

@@ -22,6 +22,12 @@ function hasAdsChannel(channels: unknown): boolean {
     && channels.some((channel) => typeof channel === "string" && channel.toLowerCase().includes("ads"));
 }
 
+function hasDurableConnectorExecutionProof(row: Record<string, unknown>): boolean {
+  return row.external_action_state === "succeeded"
+    && row.external_action_executed_at != null
+    && row.external_action_completed_at != null;
+}
+
 function mapExecutionLog(row: Record<string, unknown>) {
   return {
     id: row.id,
@@ -54,6 +60,7 @@ export async function POST(request: Request) {
       SELECT ma.id, ma.hive_id, ma.campaign_id, ma.external_action_request_id, ma.approval_status,
              mc.channels AS campaign_channels,
              ear.decision_id AS external_action_decision_id, ear.state AS external_action_state,
+             ear.executed_at AS external_action_executed_at, ear.completed_at AS external_action_completed_at,
              d.status AS decision_status, d.selected_option_key
       FROM marketing_assets ma
       JOIN marketing_campaigns mc ON mc.id = ma.campaign_id AND mc.hive_id = ma.hive_id
@@ -125,8 +132,10 @@ export async function POST(request: Request) {
         throw new ConflictError("Marketing asset publication state could not be finalized");
       }
 
-      const isManualExecution = connector === "manual" || connector === "manual_import";
-      const campaignRows = isManualExecution && hasAdsChannel(asset.campaign_channels)
+      const isAdsCampaign = hasAdsChannel(asset.campaign_channels);
+      const hasTrustedAdsExecutionProof = isAdsCampaign && hasDurableConnectorExecutionProof(asset);
+      const shouldKeepAdsCampaignNonRunning = isAdsCampaign && !hasTrustedAdsExecutionProof;
+      const campaignRows = shouldKeepAdsCampaignNonRunning
         ? await tx`
           UPDATE marketing_campaigns
           SET status = CASE WHEN status IN ('draft', 'approval') THEN 'approved' ELSE status END, updated_at = now()
