@@ -80,7 +80,7 @@ import { loadDeliverableManifest } from "../work-products/manifest";
 import { writeTaskLog } from "./task-log-writer";
 import { recordTaskCost, checkGoalBudget, checkAiBudget } from "./cost-tracker";
 import { calculateCostCents } from "../adapters/provider-config";
-import { routeToQa, processQaResult, notifyGoalSupervisorOfQaFailure, parseQaVerdict } from "./qa-router";
+import { routeToQa, processQaResult, notifyGoalSupervisorOfQaFailure, parseQaVerdict, prepareQaCompletionOutput } from "./qa-router";
 import {
   buildQaReworkPrompt,
   findReusableExecutionCapsule,
@@ -1787,7 +1787,8 @@ export class Dispatcher {
           console.log(`[dispatcher] QA task ${task.id} ${failureClass} — blocking parent ${task.parentTaskId} instead of triggering QA rework.`);
           await processQaResult(this.sql, task.parentTaskId, { passed: false, feedback: reason, failureClass });
         }
-        await completeTask(this.sql, task.id, result.output, completionOptions);
+        const qaCompletionOutput = await prepareQaCompletionOutput(this.sql, task.parentTaskId, result.output);
+        await completeTask(this.sql, task.id, qaCompletionOutput, completionOptions);
         console.log(`[dispatcher] QA task ${task.id} completed.`);
 
       // 10. Regular QA routing or complete

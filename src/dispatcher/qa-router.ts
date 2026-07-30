@@ -10,6 +10,11 @@ import { findExistingQaReplanTask } from "./recovery-loop-guard";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import { advancePipelineRunFromTaskInTransaction, lockPipelineStepRunForTask } from "@/pipelines/service";
 import { ensureOwnerHandoffDecision } from "../decisions/owner-handoff";
+import {
+  buildQaOutputDispositionInstructions,
+  ensureQaNoFollowUpTerminalDispositionLine,
+  taskRequiresOutputDisposition,
+} from "@/tasks/output-disposition";
 
 const QA_DELIVERABLE_INLINE_LIMIT = 4000;
 
@@ -292,6 +297,13 @@ export async function routeToQa(
     "If the task claims deployment/live/operational completion, distinguish task-worktree proof from same-build live proof and fail unless the evidence names the expected work commit plus the live operational build hash containing that commit.",
     "Your first non-empty line must be exactly `pass` or `fail`.",
     "After that line, include only concise, evidence-based issues or confirmation.",
+    taskRequiresOutputDisposition({
+      title: task.title,
+      brief: task.brief,
+      acceptanceCriteria: task.acceptance_criteria as string | null,
+    })
+      ? buildQaOutputDispositionInstructions()
+      : "",
   ].join("\n");
 
   const [qaTask] = await sql`
@@ -311,6 +323,34 @@ export async function routeToQa(
   await inheritTaskWorkspaceFromParent(sql, taskId, qaTask.id as string);
 
   return qaTask;
+}
+
+export async function prepareQaCompletionOutput(
+  sql: Sql,
+  parentTaskId: string,
+  output: string,
+): Promise<string> {
+  const [parent] = await sql<{
+    title: string;
+    brief: string | null;
+    acceptance_criteria: string | null;
+  }[]>`
+    SELECT title, brief, acceptance_criteria
+    FROM tasks
+    WHERE id = ${parentTaskId}
+    LIMIT 1
+  `;
+  if (!parent) return output;
+
+  if (!taskRequiresOutputDisposition({
+    title: parent.title,
+    brief: parent.brief,
+    acceptanceCriteria: parent.acceptance_criteria,
+  })) {
+    return output;
+  }
+
+  return ensureQaNoFollowUpTerminalDispositionLine(output);
 }
 
 function renderQaDeliverableReference(

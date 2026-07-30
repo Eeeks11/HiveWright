@@ -7,6 +7,9 @@ import type {
 } from "@/closeout/registry";
 
 export const ANALYST_OUTPUT_DISPOSITION_KIND = "analyst_output_disposition";
+export const GITHUB_ISSUE_OR_PR_ROUTE_PREFIX = "GitHub issue/PR route:";
+export const DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX =
+  "Deliberate no-follow-up terminal disposition:";
 
 const GITHUB_ROUTE_RE =
   /https:\/\/github\.com\/[^\s)]+\/(?:issues|pull)\/\d+|\bgithub\s+(?:issue|pr|pull request)\s*#?\d+\b|\b(?:issue|pr|pull request)\s*#\d+\b|(?<![\w/])#\d+\b/gi;
@@ -28,6 +31,45 @@ const GITHUB_RELEASE_PUBLICATION_TASK_RE =
 
 const ANALYST_OUTPUT_ROLE_RE =
   /(?:^|[-_])(analyst|auditor|coordinator)(?:$|[-_])|^(?:performance-analyst|research-analyst|system-health-auditor|operations-coordinator)$/i;
+
+const SKILL_QA_TITLE_PATTERN = /^\[Skill QA\]\s*Review:/i;
+const SKILL_QA_COPIED_EVIDENCE_SECTION_PATTERNS = [
+  /(?:^|\n)(?:#{1,6}\s*)?Copied incident evidence(?:\s+from [^\n:]+)?\s*:\n[\s\S]*$/i,
+  /(?:^|\n)(?:#{1,6}\s*)?Accepted investigation evidence(?:\s+from [^\n:]+)?\s*:\n[\s\S]*$/i,
+] as const;
+
+const CLOSEOUT_SCOPE_PATTERNS = [
+  /\brouting\/publication\b/i,
+  /\bpublication-path contract\b/i,
+  /\b(?:routing|publication|improvement[-\s]?scan)\b[\s\S]{0,120}\b(?:closeout|completion|prompt|result|summary|final answer|task result|terminal disposition)\b/i,
+  /\b(?:closeout|completion|prompt|result summary|final answer|task result|terminal disposition)\b[\s\S]{0,120}\b(?:routing|publication|improvement[-\s]?scan)\b/i,
+] as const;
+
+const EXPLICIT_TERMINAL_DISPOSITION_CONTRACT_PATTERNS = [
+  /\b(?:final answer|final result|task result|result summary|qa result|review result)\b[\s\S]{0,160}\b(?:exactly one|one canonical)\b[\s\S]{0,80}\bterminal disposition line\b/i,
+  /\bterminal disposition line\b[\s\S]{0,160}\b(?:begin|beginning)\b[\s\S]{0,80}\b(?:github issue\/pr route|deliberate no-follow-up terminal disposition)\b/i,
+] as const;
+
+const DISPOSITION_REQUIREMENT_PATTERNS = [
+  /\bgithub\s+(?:issue|pr|pull request)\b/i,
+  /\bissue\/pr\b/i,
+  /\bterminal disposition\b/i,
+  /\bno downstream tracker\b/i,
+  /\bno-follow-up\b/i,
+] as const;
+
+const RESULT_SURFACE_PATTERNS = [
+  /\b(?:final answer|final result|task result|result summary|qa result|review result)\b/i,
+] as const;
+
+export interface OutputDispositionTaskLike {
+  title?: string | null;
+  brief?: string | null;
+  acceptanceCriteria?: string | null;
+}
+
+export const QA_NO_FOLLOW_UP_TERMINAL_DISPOSITION_LINE =
+  `${DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX} QA review is terminal; any required rework stays on the parent task instead of creating a downstream tracker from this QA task.`;
 
 export type AnalystOutputDisposition = {
   schemaVersion: 1;
@@ -76,6 +118,81 @@ export type TaskDispositionContext = {
   title: string;
   brief: string | null;
 };
+
+function matchesAny(text: string, patterns: readonly RegExp[]): boolean {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function buildDispositionHaystack(input: OutputDispositionTaskLike): string {
+  let brief = input.brief ?? "";
+  if (SKILL_QA_TITLE_PATTERN.test(input.title ?? "")) {
+    for (const pattern of SKILL_QA_COPIED_EVIDENCE_SECTION_PATTERNS) {
+      brief = brief.replace(pattern, "");
+    }
+  }
+
+  return [
+    input.title ?? "",
+    brief,
+    input.acceptanceCriteria ?? "",
+  ].join("\n");
+}
+
+export function taskRequiresOutputDisposition(
+  input: OutputDispositionTaskLike,
+): boolean {
+  const haystack = buildDispositionHaystack(input);
+  return (
+    matchesAny(haystack, CLOSEOUT_SCOPE_PATTERNS)
+    || matchesAny(haystack, EXPLICIT_TERMINAL_DISPOSITION_CONTRACT_PATTERNS)
+  )
+    && matchesAny(haystack, DISPOSITION_REQUIREMENT_PATTERNS)
+    && matchesAny(haystack, RESULT_SURFACE_PATTERNS);
+}
+
+export function buildTaskOutputDispositionInstructions(): string {
+  return [
+    "## Terminal Disposition Line",
+    "This task carries a terminal disposition closeout contract.",
+    "The final result must end with exactly one terminal disposition line.",
+    `That last line must begin exactly \`${GITHUB_ISSUE_OR_PR_ROUTE_PREFIX}\` or \`${DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX}\`.`,
+    `If using \`${GITHUB_ISSUE_OR_PR_ROUTE_PREFIX}\`, include a concrete GitHub issue/PR number like \`#123\` or a full GitHub issue/PR URL.`,
+    `Otherwise use \`${DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX} <reason no downstream tracker is needed>\`.`,
+    "Do not omit this line. Do not include more than one terminal disposition line.",
+  ].join("\n");
+}
+
+export function buildQaOutputDispositionInstructions(): string {
+  return [
+    "### QA Terminal Disposition",
+    "This QA task inherits a terminal disposition closeout contract from the reviewed task.",
+    "Keep the first non-empty line exactly `pass` or `fail`.",
+    "After the evidence notes, end the QA result with exactly one terminal disposition line.",
+    `That last line must begin exactly \`${GITHUB_ISSUE_OR_PR_ROUTE_PREFIX}\` or \`${DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX}\`.`,
+    `Do not use \`${GITHUB_ISSUE_OR_PR_ROUTE_PREFIX}\` unless this QA task itself created or updated a concrete GitHub issue or PR and can cite \`#123\` or a full GitHub issue/PR URL.`,
+    `Otherwise use exactly \`${QA_NO_FOLLOW_UP_TERMINAL_DISPOSITION_LINE}\``,
+  ].join("\n");
+}
+
+export function hasTerminalDispositionLine(output: string): boolean {
+  return output
+    .replace(/\r/g, "")
+    .split("\n")
+    .some((line) => {
+      const trimmed = line.trim();
+      return trimmed.startsWith(GITHUB_ISSUE_OR_PR_ROUTE_PREFIX)
+        || trimmed.startsWith(DELIBERATE_NO_FOLLOW_UP_TERMINAL_DISPOSITION_PREFIX);
+    });
+}
+
+export function ensureQaNoFollowUpTerminalDispositionLine(output: string): string {
+  if (hasTerminalDispositionLine(output)) return output;
+  const trimmed = output.trimEnd();
+  return [
+    trimmed,
+    QA_NO_FOLLOW_UP_TERMINAL_DISPOSITION_LINE,
+  ].filter(Boolean).join("\n\n");
+}
 
 export function extractGithubRouteRefs(text: string): string[] {
   GITHUB_ROUTE_RE.lastIndex = 0;
