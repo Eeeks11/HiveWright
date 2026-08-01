@@ -290,6 +290,44 @@ describe("buildSessionContext", () => {
     expect(ctx.contextPolicy).toEqual({ mode: "lean", reason: "executor_default" });
   });
 
+  it("injects normalized INTERNAL_SERVICE_TOKEN into executor credentials when present", async () => {
+    const previousToken = process.env.INTERNAL_SERVICE_TOKEN;
+    process.env.INTERNAL_SERVICE_TOKEN = "  session-builder-internal-token  ";
+
+    try {
+      const task: ClaimedTask = {
+        id: "00000000-0000-0000-0000-0000000000c1",
+        hiveId: bizId,
+        assignedTo: "dev-agent",
+        createdBy: "owner",
+        status: "active",
+        priority: 5,
+        title: "Inject internal auth",
+        brief: "Verify internal service auth env propagation",
+        parentTaskId: null,
+        goalId: null,
+        sprintNumber: null,
+        qaRequired: false,
+        acceptanceCriteria: null,
+        retryCount: 0,
+        doctorAttempts: 0,
+        failureReason: null,
+        projectId: null,
+      };
+
+      const ctx = await buildSessionContext(sql, task);
+
+      expect(ctx.credentials.INTERNAL_SERVICE_TOKEN).toBe("session-builder-internal-token");
+      expect(ctx.credentials.HIVEWRIGHT_RUNTIME_ROOT).toBeTruthy();
+      expect(ctx.credentials.HIVEWRIGHT_ENV_FILE).toContain("/config/.env");
+      expect(ctx.credentials.HIVEWRIGHT_SECRETS_FILE).toContain("/secrets.env");
+      expect(ctx.credentials.HIVEWRIGHT_TASK_ID).toBe(task.id);
+    } finally {
+      if (previousToken === undefined) delete process.env.INTERNAL_SERVICE_TOKEN;
+      else process.env.INTERNAL_SERVICE_TOKEN = previousToken;
+    }
+  });
+
   it("injects goal-supervisor hivewright-ops as a preloaded skill reference", async () => {
     await sql`
       UPDATE adapter_config
