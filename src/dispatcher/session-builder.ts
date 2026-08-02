@@ -21,11 +21,11 @@ import {
 import { MCP_CATALOG } from "../tools/mcp-catalog";
 import { loadStandingInstructions } from "../standing-instructions/manager";
 import { buildHiveContextBlock } from "../hives/context";
-import { hiveProjectsPath } from "../hives/workspace-root";
+import { HIVES_WORKSPACE_ROOT_ENV, hiveProjectsPath } from "../hives/workspace-root";
 import { normalizeInternalServiceToken } from "../lib/internal-service-auth";
 import { parseCustomRoleMetadata } from "../roles/custom-roles";
 import { applyHiveRoleOverride, loadHiveRoleOverride } from "../roles/hive-overrides";
-import { resolveHivewrightEnvFilePath, resolveHivewrightRuntimeRoot } from "../runtime/paths";
+import { HIVEWRIGHT_RUNTIME_ROOT_ENV, resolveHivewrightEnvFilePath, resolveHivewrightRuntimeRoot } from "../runtime/paths";
 import fs from "node:fs/promises";
 import path from "path";
 
@@ -170,10 +170,11 @@ export async function buildSessionContext(
   const hivewrightRuntimeRoot = inferRuntimeRootFromHiveWorkspace(hiveWorkspacePath) ?? resolveHivewrightRuntimeRoot();
   credentials.HIVEWRIGHT_RUNTIME_ROOT = hivewrightRuntimeRoot;
   credentials.HIVEWRIGHT_ENV_FILE = resolveHivewrightEnvFilePath({
-    ...process.env,
-    HIVEWRIGHT_RUNTIME_ROOT: hivewrightRuntimeRoot,
+    [HIVEWRIGHT_RUNTIME_ROOT_ENV]: hivewrightRuntimeRoot,
   });
   credentials.HIVEWRIGHT_SECRETS_FILE = path.join(hivewrightRuntimeRoot, "secrets.env");
+  credentials.HIVEWRIGHT_TASK_WORKSPACE_ROOT = path.join(hivewrightRuntimeRoot, "task-workspaces");
+  credentials[HIVES_WORKSPACE_ROOT_ENV] = path.join(hivewrightRuntimeRoot, "hives");
   const internalServiceToken = normalizeInternalServiceToken(process.env.INTERNAL_SERVICE_TOKEN);
   if (internalServiceToken) {
     credentials.INTERNAL_SERVICE_TOKEN = internalServiceToken;
