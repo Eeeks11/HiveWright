@@ -2,6 +2,7 @@ import type { Sql } from "postgres";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { inheritTaskWorkspaceFromParent } from "@/dispatcher/worktree-manager";
 import { findExistingDoctorRecoveryTask } from "@/dispatcher/recovery-loop-guard";
+import { createEnvironmentFixTask } from "@/dispatcher/environment-fix";
 import { parkTaskIfRecoveryBudgetExceeded } from "@/recovery/recovery-budget";
 import { recordTaskLifecycleTransitionBestEffort } from "@/audit/task-lifecycle";
 import type { DoctorDiagnosis, ParseDoctorDiagnosisResult } from "./types";
@@ -254,20 +255,15 @@ export async function applyDoctorDiagnosis(
       const [original] = await sql<{
         hive_id: string;
         goal_id: string | null;
-        project_id: string | null;
         status: string;
       }[]>`
-        SELECT hive_id, goal_id, project_id, status FROM tasks WHERE id = ${taskId}
+        SELECT hive_id, goal_id, status FROM tasks WHERE id = ${taskId}
       `;
-      const [envFixTask] = await sql`
-        INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, project_id)
-        VALUES (${original.hive_id}, 'doctor', 'doctor',
-          ${"Fix environment for: " + taskId},
-          ${diagnosis.details},
-          ${original.project_id})
-        RETURNING id
-      `;
-      await inheritTaskWorkspaceFromParent(sql, taskId, envFixTask.id as string);
+      await createEnvironmentFixTask(sql, {
+        parentTaskId: taskId,
+        brief: diagnosis.details,
+        createdBy: "doctor",
+      });
       const [updated] = await sql<{ status: string }[]>`
         UPDATE tasks
         SET status = 'blocked', doctor_attempts = doctor_attempts + 1, updated_at = NOW()

@@ -5,6 +5,7 @@ import { decideProviderFailoverRoute } from "@/dispatcher/provider-failover";
 import { runPreFlightChecks } from "@/dispatcher/pre-flight";
 import { completeTask } from "@/dispatcher/task-claimer";
 import { writeTaskLog } from "@/dispatcher/task-log-writer";
+import { evaluateTaskWorkspacePolicy } from "@/dispatcher/workspace-policy";
 import { provisionTaskWorkspace } from "@/dispatcher/worktree-manager";
 import { readLatestCodexEmptyOutputDiagnostic } from "@/runtime-diagnostics/codex-empty-output";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -90,6 +91,10 @@ vi.mock("@/dispatcher/pre-flight", () => ({
   runPreFlightChecks: vi.fn(async () => ({ passed: true, failures: [] })),
 }));
 
+vi.mock("@/dispatcher/workspace-policy", () => ({
+  evaluateTaskWorkspacePolicy: vi.fn(() => ({ allowed: true, signals: [], reason: "test-allowed" })),
+}));
+
 vi.mock("@/dispatcher/provider-failover", () => ({
   decideProviderFailoverRoute: vi.fn((input) => ({
     usedFallback: false,
@@ -100,6 +105,10 @@ vi.mock("@/dispatcher/provider-failover", () => ({
     clearFallbackModel: false,
     diagnostic: `Final route selection: ${input.primaryAdapterType}/${input.primaryModel} (primary; reason=primary healthy).`,
   })),
+}));
+
+vi.mock("@/memory/extractor", () => ({
+  extractAndStore: vi.fn(async () => ({ factsStored: 0, skipped: true })),
 }));
 
 function createDispatcherWithAdapter(adapter: Adapter) {
@@ -243,6 +252,11 @@ function readDiagnosticRows(rows: { type: string; chunk: string }[]) {
 beforeEach(async () => {
   await truncateAll(sql);
   vi.clearAllMocks();
+  vi.mocked(evaluateTaskWorkspacePolicy).mockReturnValue({
+    allowed: true,
+    signals: [],
+    reason: "test-allowed",
+  });
   vi.mocked(decideProviderFailoverRoute).mockImplementation((input) => ({
     usedFallback: false,
     adapterType: input.primaryAdapterType,
@@ -256,6 +270,11 @@ beforeEach(async () => {
 
 describe("dispatcher codex runtime diagnostics", () => {
   it("blocks code-changing tasks without git-backed project routing before worktree provisioning, preflight, adapter execution, or execution-run creation", async () => {
+    vi.mocked(evaluateTaskWorkspacePolicy).mockReturnValueOnce({
+      allowed: false,
+      signals: ["code_changing_task"],
+      reason: "no approved git-backed project_id. Supervisor/operator must route this through an approved Git development workflow.",
+    });
     const execute = vi.fn(async () => ({
       success: true,
       output: "should not run",
@@ -336,6 +355,14 @@ describe("dispatcher codex runtime diagnostics", () => {
     expect(row.status).toBe("blocked");
     expect(row.failure_reason).toContain("Runtime health gate blocked task before spawn.");
     expect(row.failure_reason).toContain("no_declared_fallback_route");
+    const envFixChildren = await sql`
+      SELECT id, assigned_to, brief FROM tasks
+      WHERE parent_task_id = ${task.id}
+        AND title = ${`Fix environment for: ${task.id}`}
+    `;
+    expect(envFixChildren).toHaveLength(1);
+    expect(envFixChildren[0].assigned_to).toBe("infrastructure-agent");
+    expect(envFixChildren[0].brief).toContain("watchdog completion handoff");
     const logs = await sql<{ type: string; chunk: string }[]>`
       SELECT type, chunk
       FROM task_logs
@@ -346,6 +373,106 @@ describe("dispatcher codex runtime diagnostics", () => {
       entry.type === "status" &&
       entry.chunk.includes("[runtime-route] Final route selection: codex/openai-codex/gpt-5.5 (blocked; reason=no_declared_fallback_route)."),
     )).toBe(true);
+  });
+
+  it("resumes a blocked parent when an environment-fix child completes successfully", async () => {
+    await sql`
+      INSERT INTO role_templates (slug, name, type, adapter_type)
+      VALUES ('infrastructure-agent', 'Infrastructure Agent', 'executor', 'codex')
+      ON CONFLICT (slug) DO UPDATE
+      SET name = EXCLUDED.name,
+          type = EXCLUDED.type,
+          adapter_type = EXCLUDED.adapter_type,
+          active = true
+    `;
+
+    const [hive] = await sql`
+      INSERT INTO hives (slug, name, type)
+      VALUES ('dispatcher-env-fix-handoff', 'Dispatcher Env Fix Handoff', 'digital')
+      RETURNING id
+    `;
+    const [parent] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, status, title, brief, failure_reason
+      )
+      VALUES (
+        ${hive.id},
+        'dev-agent',
+        'owner',
+        'blocked',
+        'dispatcher env-fix parent',
+        'Brief',
+        'Pre-flight failed: Missing required credential'
+      )
+      RETURNING id
+    `;
+    const [repair] = await sql`
+      INSERT INTO tasks (
+        hive_id, assigned_to, created_by, status, title, brief, parent_task_id
+      )
+      VALUES (
+        ${hive.id},
+        'infrastructure-agent',
+        'dispatcher',
+        'active',
+        ${`Fix environment for: ${parent.id}`},
+        'Repair the runtime path and hand control back to the parent task.',
+        ${parent.id}
+      )
+      RETURNING *
+    `;
+
+    const adapter: Adapter = {
+      supportsPersistence: false,
+      probe: healthyProbe,
+      translate: () => "",
+      execute: async (_ctx, onChunk) => {
+        await onChunk?.({ type: "stdout", text: "Environment fixed." });
+        return {
+          success: true,
+          output: "Environment repaired and child tracking validated.",
+        };
+      },
+    };
+    const { dispatcher, close } = createDispatcherWithAdapter(adapter);
+    await close();
+
+    await dispatcher.executeTask({
+      id: repair.id,
+      hiveId: repair.hive_id,
+      assignedTo: repair.assigned_to,
+      createdBy: repair.created_by,
+      status: repair.status,
+      priority: repair.priority,
+      title: repair.title,
+      brief: repair.brief,
+      parentTaskId: repair.parent_task_id,
+      goalId: repair.goal_id,
+      sprintNumber: repair.sprint_number,
+      qaRequired: repair.qa_required,
+      acceptanceCriteria: repair.acceptance_criteria,
+      retryCount: repair.retry_count,
+      doctorAttempts: repair.doctor_attempts,
+      failureReason: repair.failure_reason,
+      adapterOverride: repair.adapter_override,
+      modelOverride: repair.model_override,
+      projectId: repair.project_id,
+    });
+
+    const [updatedParent] = await sql`
+      SELECT status, failure_reason
+      FROM tasks
+      WHERE id = ${parent.id}
+    `;
+    expect(updatedParent.status).toBe("pending");
+    expect(updatedParent.failure_reason).toBeNull();
+
+    const [updatedRepair] = await sql`
+      SELECT status
+      FROM tasks
+      WHERE id = ${repair.id}
+    `;
+    expect(updatedRepair.status).toBe("completed");
   });
 
   it("resumes the original Codex task session when QA sends work back", async () => {

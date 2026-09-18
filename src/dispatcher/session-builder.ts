@@ -21,8 +21,12 @@ import {
 import { MCP_CATALOG } from "../tools/mcp-catalog";
 import { loadStandingInstructions } from "../standing-instructions/manager";
 import { buildHiveContextBlock } from "../hives/context";
+import { HIVES_WORKSPACE_ROOT_ENV, hiveProjectsPath } from "../hives/workspace-root";
+import { normalizeInternalServiceToken } from "../lib/internal-service-auth";
 import { parseCustomRoleMetadata } from "../roles/custom-roles";
 import { applyHiveRoleOverride, loadHiveRoleOverride } from "../roles/hive-overrides";
+import { HIVEWRIGHT_RUNTIME_ROOT_ENV, resolveHivewrightEnvFilePath, resolveHivewrightRuntimeRoot } from "../runtime/paths";
+import fs from "node:fs/promises";
 import path from "path";
 
 type ToolsConfig = { mcps?: string[]; allowedTools?: string[]; customRole?: unknown };
@@ -85,16 +89,23 @@ export async function buildSessionContext(
   const [biz] = await sql`
     SELECT slug, workspace_path FROM hives WHERE id = ${task.hiveId}
   `;
+  const hiveSlug = (biz?.slug as string | null) ?? null;
+  const configuredHiveWorkspace = (biz?.workspace_path as string | null) ?? null;
+  const hiveWorkspacePath = await resolveHiveWorkspacePath(hiveSlug, configuredHiveWorkspace);
 
   // 4b. If task has a projectId, use project workspace instead
-  let projectWorkspace: string | null = biz?.workspace_path ?? null;
+  let projectWorkspace: string | null = hiveWorkspacePath;
   let gitBackedProject = false;
   if (task.projectId) {
     const [proj] = await sql`
       SELECT workspace_path, git_repo FROM projects WHERE id = ${task.projectId}
     `;
     if (proj?.workspace_path) {
-      projectWorkspace = proj.workspace_path as string;
+      projectWorkspace = await resolveProjectWorkspacePath({
+        configuredProjectWorkspace: proj.workspace_path as string,
+        configuredHiveWorkspace,
+        hiveWorkspacePath,
+      });
     }
     gitBackedProject = proj?.git_repo === true;
   }
@@ -107,8 +118,8 @@ export async function buildSessionContext(
   const roleSkillSlugs = await sql`SELECT skills FROM role_templates WHERE slug = ${task.assignedTo}`;
   const skillSlugs = normalizeSkillSlugs(roleSkillSlugs[0]?.skills);
   const systemSkills = loadSystemSkills(path.resolve(process.cwd(), "skills-library"));
-  const hiveSkillsPath = biz?.workspace_path
-    ? path.join(path.dirname(biz.workspace_path as string), "skills")
+  const hiveSkillsPath = hiveWorkspacePath
+    ? path.join(path.dirname(hiveWorkspacePath), "skills")
     : null;
   const hiveSkills = hiveSkillsPath ? loadHiveSkills(hiveSkillsPath) : [];
   const allSkills = [...systemSkills, ...hiveSkills];
@@ -155,6 +166,18 @@ export async function buildSessionContext(
   const credentials: Record<string, string> = {};
   for (const cred of credentialsList) {
     credentials[cred.key] = cred.value;
+  }
+  const hivewrightRuntimeRoot = inferRuntimeRootFromHiveWorkspace(hiveWorkspacePath) ?? resolveHivewrightRuntimeRoot();
+  credentials.HIVEWRIGHT_RUNTIME_ROOT = hivewrightRuntimeRoot;
+  credentials.HIVEWRIGHT_ENV_FILE = resolveHivewrightEnvFilePath({
+    [HIVEWRIGHT_RUNTIME_ROOT_ENV]: hivewrightRuntimeRoot,
+  });
+  credentials.HIVEWRIGHT_SECRETS_FILE = path.join(hivewrightRuntimeRoot, "secrets.env");
+  credentials.HIVEWRIGHT_TASK_WORKSPACE_ROOT = path.join(hivewrightRuntimeRoot, "task-workspaces");
+  credentials[HIVES_WORKSPACE_ROOT_ENV] = path.join(hivewrightRuntimeRoot, "hives");
+  const internalServiceToken = normalizeInternalServiceToken(process.env.INTERNAL_SERVICE_TOKEN);
+  if (internalServiceToken) {
+    credentials.INTERNAL_SERVICE_TOKEN = internalServiceToken;
   }
   credentials.HIVEWRIGHT_TASK_ID = task.id;
   credentials.HIVEWRIGHT_HIVE_ID = task.hiveId;
@@ -332,9 +355,9 @@ export async function buildSessionContext(
     projectWorkspace,
     gitBackedProject,
     baseProjectWorkspace: projectWorkspace,
-    hiveWorkspacePath: (biz?.workspace_path as string | null) ?? null,
+    hiveWorkspacePath,
     imageWorkProducts: await buildImageWorkProductContext(sql, task),
-    hiveSlug: (biz?.slug as string | null) ?? null,
+    hiveSlug,
     hiveContext,
     model,
     fallbackModel,
@@ -346,6 +369,74 @@ export async function buildSessionContext(
       ? { mode: "lean", reason: roleType === "executor" ? "executor_default" : "review_replan_cost_control" }
       : { mode: "full", reason: "non_executor" },
   };
+}
+
+async function pathExists(pathname: string | null | undefined): Promise<boolean> {
+  if (!pathname) return false;
+  try {
+    await fs.access(pathname);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveHiveWorkspacePath(
+  hiveSlug: string | null,
+  configuredHiveWorkspace: string | null,
+): Promise<string | null> {
+  if (!configuredHiveWorkspace) return null;
+  if (await pathExists(configuredHiveWorkspace)) return configuredHiveWorkspace;
+
+  const runtimeHiveWorkspace = hiveSlug ? hiveProjectsPath(hiveSlug) : null;
+  if (runtimeHiveWorkspace && await pathExists(runtimeHiveWorkspace)) {
+    return runtimeHiveWorkspace;
+  }
+
+  return configuredHiveWorkspace;
+}
+
+async function resolveProjectWorkspacePath(input: {
+  configuredProjectWorkspace: string;
+  configuredHiveWorkspace: string | null;
+  hiveWorkspacePath: string | null;
+}): Promise<string> {
+  const { configuredProjectWorkspace, configuredHiveWorkspace, hiveWorkspacePath } = input;
+  if (await pathExists(configuredProjectWorkspace)) return configuredProjectWorkspace;
+  if (!configuredHiveWorkspace || !hiveWorkspacePath) return configuredProjectWorkspace;
+
+  const relativeProjectPath = path.relative(
+    path.resolve(configuredHiveWorkspace),
+    path.resolve(configuredProjectWorkspace),
+  );
+  if (
+    relativeProjectPath === ""
+    || relativeProjectPath.startsWith("..")
+    || path.isAbsolute(relativeProjectPath)
+  ) {
+    return configuredProjectWorkspace;
+  }
+
+  const runtimeProjectWorkspace = path.join(hiveWorkspacePath, relativeProjectPath);
+  if (await pathExists(runtimeProjectWorkspace)) {
+    return runtimeProjectWorkspace;
+  }
+
+  return configuredProjectWorkspace;
+}
+
+function inferRuntimeRootFromHiveWorkspace(hiveWorkspacePath: string | null): string | null {
+  if (!hiveWorkspacePath) return null;
+  const normalizedWorkspace = path.resolve(hiveWorkspacePath);
+  const projectsDir = path.basename(normalizedWorkspace);
+  const hiveDir = path.dirname(normalizedWorkspace);
+  const hivesRoot = path.dirname(hiveDir);
+
+  if (projectsDir !== "projects" || path.basename(hivesRoot) !== "hives") {
+    return null;
+  }
+
+  return path.dirname(hivesRoot);
 }
 
 const KNOWN_MCP_SLUGS = MCP_CATALOG.map((entry) => entry.slug).sort();

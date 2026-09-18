@@ -98,6 +98,44 @@ describe("handleTaskFailure", () => {
     expect(updated.status).toBe("unresolvable");
   });
 
+  it("routes deterministic pre-flight failures directly to an environment-fix child", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, retry_count, doctor_attempts)
+      VALUES (${bizId}, 'fail-test-role', 'owner', 'fail-test-preflight-block', 'Brief', 'active', 0, 2)
+      RETURNING *
+    `;
+
+    const result = await handleTaskFailureAndDoctor(
+      sql,
+      task.id,
+      FailureCategory.SpawnFailure,
+      "Pre-flight failed: Missing required openai-image credential: OPENAI_API_KEY",
+      DEFAULT_CONFIG,
+    );
+    expect(result).toBe("environment_fix");
+
+    const [updated] = await sql`
+      SELECT status, failure_reason, doctor_attempts
+      FROM tasks
+      WHERE id = ${task.id}
+    `;
+    expect(updated.status).toBe("blocked");
+    expect(updated.failure_reason).toContain("Pre-flight failed:");
+    expect(updated.doctor_attempts).toBe(2);
+
+    const envFixTasks = await sql`
+      SELECT assigned_to, created_by, title, brief, parent_task_id
+      FROM tasks
+      WHERE parent_task_id = ${task.id}
+        AND title = ${`Fix environment for: ${task.id}`}
+    `;
+    expect(envFixTasks).toHaveLength(1);
+    expect(envFixTasks[0].assigned_to).toBe("infrastructure-agent");
+    expect(envFixTasks[0].created_by).toBe("dispatcher");
+    expect(envFixTasks[0].brief).toContain("child-process resolution");
+    expect(envFixTasks[0].parent_task_id).toBe(task.id);
+  });
+
   it("sends agent-reported failures directly to doctor", async () => {
     const [task] = await sql`
       INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, retry_count)
@@ -150,6 +188,37 @@ describe("handleTaskFailure", () => {
     const [updated] = await sql`SELECT status, failure_reason FROM tasks WHERE id = ${task.id}`;
     expect(updated.status).toBe("unresolvable");
     expect(updated.failure_reason).toContain("Recovery budget exhausted");
+  });
+
+  it("falls back to doctor when infrastructure-agent is unavailable for environment repair", async () => {
+    await sql`
+      UPDATE role_templates
+      SET active = false
+      WHERE slug = 'infrastructure-agent'
+    `;
+
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, retry_count)
+      VALUES (${bizId}, 'fail-test-role', 'owner', 'fail-test-env-fallback', 'Brief', 'active', 0)
+      RETURNING *
+    `;
+
+    const result = await handleTaskFailureAndDoctor(
+      sql,
+      task.id,
+      FailureCategory.SpawnFailure,
+      "runtime_blocked: Runtime health gate blocked task before spawn. no fallback route.",
+      DEFAULT_CONFIG,
+    );
+    expect(result).toBe("environment_fix");
+
+    const [envFix] = await sql`
+      SELECT assigned_to
+      FROM tasks
+      WHERE parent_task_id = ${task.id}
+        AND title = ${`Fix environment for: ${task.id}`}
+    `;
+    expect(envFix.assigned_to).toBe("doctor");
   });
 
   it("parks a task family instead of creating doctor work when a recovery decision is already open", async () => {

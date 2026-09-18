@@ -1,4 +1,9 @@
 import type { Sql } from "postgres";
+import { AGENT_AUDIT_EVENTS } from "@/audit/agent-events";
+import {
+  ENVIRONMENT_FIX_RETRY_TITLE_PREFIX,
+  ENVIRONMENT_FIX_TASK_TITLE_PREFIX,
+} from "./environment-fix";
 
 const DISK_PRESSURE_HARD_STOP_PREFIX = "disk_pressure_hard_stop:";
 
@@ -246,30 +251,72 @@ export async function findStuckBlockedTasks(
       t.id AS "id",
       t.title AS "title",
       t.goal_id AS "goalId",
-      EXTRACT(EPOCH FROM (NOW() - t.updated_at)) * 1000 AS "blockedSinceMs",
+      EXTRACT(EPOCH FROM (NOW() - block_anchor.blocked_since_at)) * 1000 AS "blockedSinceMs",
       t.failure_reason AS "failureReason",
       CASE
         WHEN ${fastFailureSeconds} > 0
-          AND t.updated_at < NOW() - make_interval(secs => ${fastFailureSeconds})
+          AND block_anchor.blocked_since_at < NOW() - make_interval(secs => ${fastFailureSeconds})
           AND COALESCE(t.failure_reason, '') ~* ${fastFailurePattern}
         THEN 'fast_terminal_failure'
         ELSE 'blocked_too_long'
       END AS "reason"
     FROM tasks t
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(
+        (
+          SELECT MAX(a.created_at)
+          FROM agent_audit_events a
+          WHERE a.task_id = t.id
+            AND a.event_type = ${AGENT_AUDIT_EVENTS.taskLifecycleTransition}
+            AND COALESCE(a.metadata->>'nextStatus', '') = 'blocked'
+        ),
+        t.updated_at
+      ) AS blocked_since_at
+    ) block_anchor
     WHERE t.status = 'blocked'
       AND COALESCE(t.failure_reason, '') !~ ${`^${DISK_PRESSURE_HARD_STOP_PREFIX}`}
       AND (
-        t.updated_at < NOW() - make_interval(secs => ${ageSeconds})
+        block_anchor.blocked_since_at < NOW() - make_interval(secs => ${ageSeconds})
         OR (
           ${fastFailureSeconds} > 0
-          AND t.updated_at < NOW() - make_interval(secs => ${fastFailureSeconds})
+          AND block_anchor.blocked_since_at < NOW() - make_interval(secs => ${fastFailureSeconds})
           AND COALESCE(t.failure_reason, '') ~* ${fastFailurePattern}
         )
       )
       AND NOT EXISTS (
         SELECT 1 FROM tasks child
-        WHERE child.parent_task_id = t.id
-          AND child.status IN ('pending', 'active')
+        WHERE (
+            child.parent_task_id = t.id
+            OR (
+              child.parent_task_id IS NULL
+              AND (
+                child.title = ${ENVIRONMENT_FIX_TASK_TITLE_PREFIX} || t.id::text
+                OR child.title LIKE ${`${ENVIRONMENT_FIX_RETRY_TITLE_PREFIX}%] ${ENVIRONMENT_FIX_TASK_TITLE_PREFIX}`} || t.id::text
+              )
+            )
+          )
+          AND child.status IN ('pending', 'active', 'claimed', 'running', 'in_review')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tasks child
+        WHERE (
+            (
+              child.parent_task_id = t.id
+              AND (
+                child.title LIKE ${`${ENVIRONMENT_FIX_TASK_TITLE_PREFIX}%`}
+                OR child.title LIKE ${`${ENVIRONMENT_FIX_RETRY_TITLE_PREFIX}%] ${ENVIRONMENT_FIX_TASK_TITLE_PREFIX}%`}
+              )
+            )
+            OR (
+              child.parent_task_id IS NULL
+              AND (
+                child.title = ${ENVIRONMENT_FIX_TASK_TITLE_PREFIX} || t.id::text
+                OR child.title LIKE ${`${ENVIRONMENT_FIX_RETRY_TITLE_PREFIX}%] ${ENVIRONMENT_FIX_TASK_TITLE_PREFIX}`} || t.id::text
+              )
+            )
+          )
+          AND child.status = 'completed'
+          AND child.updated_at >= block_anchor.blocked_since_at
       )
       AND NOT EXISTS (
         SELECT 1 FROM decisions d

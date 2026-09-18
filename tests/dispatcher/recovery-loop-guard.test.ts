@@ -57,6 +57,41 @@ describe("recovery loop guards", () => {
     expect(doctorTask?.id).toBe(existingDoctor.id);
   });
 
+  it("does not mistake an active environment-fix task for the parent diagnosis task", async () => {
+    const [parent] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, failure_reason)
+      VALUES (${hiveId}, 'loop-executor', 'owner', 'loop failed env-fix parent', 'Do work', 'failed', 'agent failed')
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, parent_task_id)
+      VALUES (
+        ${hiveId},
+        'doctor',
+        'doctor',
+        ${`Fix environment for: ${parent.id}`},
+        'repair the runtime',
+        'active',
+        ${parent.id}
+      )
+    `;
+
+    const doctorTask = await createDoctorTask(sql, parent.id as string);
+
+    const rows = await sql`
+      SELECT title
+      FROM tasks
+      WHERE parent_task_id = ${parent.id}
+        AND assigned_to = 'doctor'
+      ORDER BY created_at ASC
+    `;
+    expect(rows.map((row) => row.title)).toEqual([
+      `Fix environment for: ${parent.id}`,
+      "[Doctor] Diagnose: loop failed env-fix parent",
+    ]);
+    expect(doctorTask?.title).toBe("[Doctor] Diagnose: loop failed env-fix parent");
+  });
+
   it("reuses an existing active QA replan task for the same failed parent", async () => {
     const [goal] = await sql`
       INSERT INTO goals (hive_id, title, description, status)

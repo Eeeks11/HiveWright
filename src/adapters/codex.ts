@@ -508,10 +508,16 @@ export function resolveCodexEffectiveWorkspace(ctx: SessionContext): string | nu
 }
 
 function resolveCleanNonGitTaskWorkspace(ctx: SessionContext): string {
-  const configuredRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT?.trim();
+  const configuredRoot = ctx.credentials.HIVEWRIGHT_TASK_WORKSPACE_ROOT?.trim()
+    || process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT?.trim();
+  const runtimeRoot = ctx.credentials.HIVEWRIGHT_RUNTIME_ROOT?.trim()
+    || process.env.HIVEWRIGHT_RUNTIME_ROOT?.trim();
   const root = configuredRoot && configuredRoot.length > 0
     ? configuredRoot
-    : path.join(os.homedir(), ".hivewright", "task-workspaces");
+    : path.join(
+        runtimeRoot && runtimeRoot.length > 0 ? runtimeRoot : path.join(os.homedir(), ".hivewright"),
+        "task-workspaces",
+      );
   const safeTaskId = ctx.task.id.replace(/[^a-zA-Z0-9._-]/g, "_");
   return path.join(root, safeTaskId);
 }

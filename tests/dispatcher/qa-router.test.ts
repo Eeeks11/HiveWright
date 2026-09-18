@@ -4,7 +4,9 @@ import {
   routeToQa,
   processQaResult,
   parseQaVerdict,
+  prepareQaCompletionOutput,
 } from "@/dispatcher/qa-router";
+import { QA_NO_FOLLOW_UP_TERMINAL_DISPOSITION_LINE } from "@/tasks/output-disposition";
 import { completeTask } from "@/dispatcher/task-claimer";
 import { emitWorkProduct } from "@/work-products/emitter";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
@@ -122,6 +124,37 @@ describe("routeToQa", () => {
     expect(qaTask!.brief).toContain("work_products.id");
     expect(qaTask!.brief).not.toContain("codex-output-250");
     expect(qaTask!.brief).not.toContain(tail);
+  });
+
+  it("prepares QA completion output with the no-follow-up line for inherited closeout contracts", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, acceptance_criteria)
+      VALUES (
+        ${bizId},
+        'qa-test-role',
+        'owner',
+        'routing-closeout',
+        ${`Review this routing/publication closeout. The final result must end with exactly one terminal disposition line using a concrete GitHub issue/PR route or Deliberate no-follow-up terminal disposition.`},
+        'in_review',
+        'Result must include the canonical closeout line.'
+      )
+      RETURNING *
+    `;
+
+    const prepared = await prepareQaCompletionOutput(sql, task.id, "pass\n\nEvidence reviewed.");
+
+    expect(prepared).toBe(`pass\n\nEvidence reviewed.\n\n${QA_NO_FOLLOW_UP_TERMINAL_DISPOSITION_LINE}`);
+  });
+
+  it("does not add terminal disposition text to ordinary QA completion output", async () => {
+    const [task] = await sql`
+      INSERT INTO tasks (hive_id, assigned_to, created_by, title, brief, status, acceptance_criteria)
+      VALUES (${bizId}, 'qa-test-role', 'owner', 'ordinary-work', 'Build thing', 'in_review', 'It must work')
+      RETURNING *
+    `;
+    const output = "pass\n\nEvidence reviewed.";
+
+    await expect(prepareQaCompletionOutput(sql, task.id, output)).resolves.toBe(output);
   });
 });
 

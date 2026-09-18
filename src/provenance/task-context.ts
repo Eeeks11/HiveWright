@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import type { ContextProvenance, ContextProvenanceEntry, ContextSourceClass, SessionContext } from "@/adapters/types";
 import { writeTaskLog } from "@/dispatcher/task-log-writer";
+import { isUuidLike } from "@/lib/uuid";
 
 export const TASK_CONTEXT_PROVENANCE_KIND = "task_context_provenance";
 export const TASK_CONTEXT_PROVENANCE_SCHEMA_VERSION = 1;
@@ -109,6 +110,9 @@ export async function readLatestTaskContextProvenance(
   sql: Sql,
   taskId: string,
 ): Promise<ContextProvenance> {
+  if (!isUuidLike(taskId)) {
+    return emptyTaskContextProvenance("unavailable");
+  }
   const marker = TASK_CONTEXT_PROVENANCE_KIND;
   const rows = await sql<{ chunk: unknown }[]>`
     SELECT chunk

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, symlink, utimes, writeFile } from "fs/promises";
 import path from "path";
 import { tmpdir } from "os";
+import type { Sql } from "postgres";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAgentEnvironment } from "@/security/agent-environment";
 import {
@@ -10,6 +11,7 @@ import {
   cleanupProbeAgentEnvironment,
   cleanupTaskAgentEnvironmentIfTerminal,
   collectAgentEnvironmentInventory,
+  defaultTerminalStateChecker,
   reconcileAgentEnvironmentOrphans,
   simulateAgentEnvironmentRetention,
   parseScopePath,
@@ -200,13 +202,14 @@ describe("agent environment lifecycle", () => {
 
   it("cleanup helpers delete the canonical double-delimited directories created by buildAgentEnvironment", async () => {
     const root = await tempRoot();
+    const taskId = "11111111-1111-1111-1111-111111111111";
     const probeEnv = buildAgentEnvironment({
       runtimeRoot: root,
       scope: { kind: "probe", adapter: "claude-code", model: "anthropic/claude sonnet 4.6" },
     });
     const taskEnv = buildAgentEnvironment({
       runtimeRoot: root,
-      scope: { kind: "task", adapter: "openai-codex", taskId: "task/alpha 42", hiveId: "hive-one" },
+      scope: { kind: "task", adapter: "openai-codex", taskId, hiveId: "hive-one" },
     });
     const probeScope = path.dirname(probeEnv.HOME!);
     const taskScope = path.dirname(taskEnv.HOME!);
@@ -214,7 +217,7 @@ describe("agent environment lifecycle", () => {
     await writeFile(path.join(taskEnv.HOME!, "payload.txt"), "task payload");
 
     expect(path.basename(probeScope)).toBe("probe-claude-code--anthropic-claude-sonnet-4.6");
-    expect(path.basename(taskScope)).toBe("task-task-alpha-42--openai-codex");
+    expect(path.basename(taskScope)).toBe(`task-${taskId}--openai-codex`);
 
     const probeResult = await cleanupProbeAgentEnvironment({
       runtimeRoot: root,
@@ -224,7 +227,7 @@ describe("agent environment lifecycle", () => {
     const sql = (async () => [{ status: "completed" }]) as never;
     const taskResult = await cleanupTaskAgentEnvironmentIfTerminal(sql, {
       runtimeRoot: root,
-      taskId: "task/alpha 42",
+      taskId,
       adapter: "openai-codex",
       graceMs: 0,
     });
@@ -258,6 +261,23 @@ describe("agent environment lifecycle", () => {
       scopeId: "goal-alpha-42",
       adapter: "openclaw",
     });
+  });
+
+  it("skips UUID-backed terminal-state SQL for synthetic task scopes", async () => {
+    const sqlShouldNotRun = vi.fn(() => {
+      throw new Error("sql should not be called for synthetic non-UUID task scopes");
+    }) as unknown as Sql;
+
+    await expect(defaultTerminalStateChecker(sqlShouldNotRun)({
+      kind: "task",
+      scopeId: "llm-release-scan-websearch",
+      adapter: "codex",
+      path: "/tmp/llm-release-scan-websearch",
+    })).resolves.toEqual({
+      terminal: false,
+      proof: "synthetic non-UUID task scope",
+    });
+    expect(sqlShouldNotRun).not.toHaveBeenCalled();
   });
 
   it("enforces shared-cache, per-scope, and global byte caps during disk-pressure checks", async () => {

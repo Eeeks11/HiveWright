@@ -162,6 +162,23 @@ function runUpdater(fixture: Fixture, mode: "apply" | "status-json", extraEnv: T
 }
 
 describe("privileged operational updater failure recovery", () => {
+  it("exits cleanly after a successful dashboard health verification", () => {
+    const fixture = makeFixture();
+    try {
+      const result = runUpdater(fixture, "apply");
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).toContain(`head_after=${fixture.targetCommit}`);
+
+      const cutoverPath = path.join(fixture.runtimeRoot, "logs", "deployments", "latest-runtime-cutover.json");
+      expect(existsSync(cutoverPath)).toBe(true);
+      const cutover = JSON.parse(readFileSync(cutoverPath, "utf8"));
+      expect(cutover.deployedCommit).toBe(fixture.targetCommit);
+      expect(cutover.buildHash).toBe(fixture.targetCommit);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it.each([
     ["dependency-install", "dependency-install", 41, false],
     ["dashboard-build", "dashboard-build", 42, false],

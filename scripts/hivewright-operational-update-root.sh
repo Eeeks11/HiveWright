@@ -59,7 +59,6 @@ verify_dashboard_health() {
   local health_url="${DASHBOARD_URL%/}/api/health"
   local attempt http_code tmp_file build_hash
   tmp_file="$(mktemp)"
-  trap 'rm -f "$tmp_file"' RETURN
 
   for attempt in $(seq 1 "$HEALTH_RETRY_COUNT"); do
     : > "$tmp_file"
@@ -69,6 +68,7 @@ verify_dashboard_health() {
     if [ "$http_code" = "200" ] && [ -n "$build_hash" ]; then
       DASHBOARD_HTTP_CODE="$http_code"
       DASHBOARD_BUILD_HASH="$build_hash"
+      rm -f "$tmp_file"
       return 0
     fi
     [ "$attempt" -lt "$HEALTH_RETRY_COUNT" ] && sleep "$HEALTH_RETRY_DELAY_SECONDS"
@@ -78,6 +78,7 @@ verify_dashboard_health() {
   if [ -s "$tmp_file" ]; then
     echo "dashboard_health_body=$(tr '\n' ' ' < "$tmp_file")" >&2
   fi
+  rm -f "$tmp_file"
   return 31
 }
 

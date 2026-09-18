@@ -3,6 +3,7 @@ import {
   applyStructuredDoctorDiagnosis,
   isQualityDoctorDiagnosisTask,
 } from "../../src/dispatcher";
+import { isEnvironmentFixTask } from "../../src/dispatcher/environment-fix";
 import * as regularDoctor from "../../src/doctor";
 import * as qualityDoctor from "../../src/quality/doctor";
 
@@ -20,17 +21,28 @@ vi.mock("../../src/quality/doctor", () => ({
 }));
 
 /**
- * The dispatcher only applies a doctor diagnosis when both:
- *   - task.assignedTo === 'doctor'
- *   - task.parentTaskId is truthy
+ * The dispatcher only applies a structured doctor diagnosis when the task is
+ * a diagnostic doctor child, not any doctor-authored repair task.
  *
- * Mirrors the condition at src/dispatcher/index.ts:422. Pinned here so
+ * Mirrors the condition at src/dispatcher/index.ts. Pinned here so
  * future refactors don't accidentally broaden the hook (which would
- * apply diagnoses against any task with a parentTaskId — catastrophic)
+ * apply diagnoses against environment-fix tasks — catastrophic)
  * or narrow it (which would silently skip real doctor tasks).
  */
-function shouldApplyDoctorHook(task: { assignedTo: string; parentTaskId: string | null }): boolean {
-  return task.assignedTo === "doctor" && !!task.parentTaskId;
+function shouldApplyDoctorHook(task: {
+  assignedTo: string;
+  createdBy: string;
+  parentTaskId: string | null;
+  title: string;
+}): boolean {
+  return task.assignedTo === "doctor"
+    && !!task.parentTaskId
+    && (task.createdBy === "dispatcher" || task.title.includes("Quality diagnosis:"))
+    && !isEnvironmentFixTask({
+      assignedTo: task.assignedTo,
+      title: task.title,
+      parentTaskId: task.parentTaskId,
+    });
 }
 
 describe("dispatcher doctor-hook gate", () => {
@@ -40,22 +52,51 @@ describe("dispatcher doctor-hook gate", () => {
 
   it("fires for a doctor task with a parent", () => {
     expect(
-      shouldApplyDoctorHook({ assignedTo: "doctor", parentTaskId: "00000000-0000-0000-0000-000000000001" }),
+      shouldApplyDoctorHook({
+        assignedTo: "doctor",
+        createdBy: "dispatcher",
+        parentTaskId: "00000000-0000-4000-8000-000000000001",
+        title: "[Doctor] Diagnose: something",
+      }),
     ).toBe(true);
   });
 
-  it("does NOT fire for a doctor task with no parent (e.g. doctor-initiated env-fix task)", () => {
-    expect(shouldApplyDoctorHook({ assignedTo: "doctor", parentTaskId: null })).toBe(false);
+  it("does NOT fire for an environment-fix task even when linked to a parent", () => {
+    expect(shouldApplyDoctorHook({
+      assignedTo: "doctor",
+      createdBy: "doctor",
+      parentTaskId: "00000000-0000-4000-8000-000000000001",
+      title: "Fix environment for: 00000000-0000-4000-8000-000000000001",
+    })).toBe(false);
+  });
+
+  it("does NOT fire for a retried environment-fix task", () => {
+    expect(shouldApplyDoctorHook({
+      assignedTo: "doctor",
+      createdBy: "dispatcher",
+      parentTaskId: "00000000-0000-4000-8000-000000000001",
+      title: "[Doctor retry: auto] Fix environment for: 00000000-0000-4000-8000-000000000001",
+    })).toBe(false);
   });
 
   it("does NOT fire for a non-doctor task with a parent (e.g. split subtask)", () => {
     expect(
-      shouldApplyDoctorHook({ assignedTo: "dev-agent", parentTaskId: "00000000-0000-0000-0000-000000000001" }),
+      shouldApplyDoctorHook({
+        assignedTo: "dev-agent",
+        createdBy: "dispatcher",
+        parentTaskId: "00000000-0000-4000-8000-000000000001",
+        title: "ordinary child task",
+      }),
     ).toBe(false);
   });
 
   it("does NOT fire for a regular task", () => {
-    expect(shouldApplyDoctorHook({ assignedTo: "dev-agent", parentTaskId: null })).toBe(false);
+    expect(shouldApplyDoctorHook({
+      assignedTo: "dev-agent",
+      createdBy: "owner",
+      parentTaskId: null,
+      title: "ordinary task",
+    })).toBe(false);
   });
 
   it("routes retried quality-doctor tasks to the quality parser", async () => {

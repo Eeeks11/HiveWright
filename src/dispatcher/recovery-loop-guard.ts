@@ -6,6 +6,7 @@ export async function findExistingDoctorRecoveryTask(sql: Sql, failedTaskId: str
     FROM tasks
     WHERE parent_task_id = ${failedTaskId}
       AND assigned_to = 'doctor'
+      AND title LIKE '[Doctor%'
       AND status IN ('pending', 'active', 'running', 'claimed', 'in_review')
     ORDER BY created_at ASC
     LIMIT 1

@@ -282,18 +282,58 @@ describe("CodexAdapter.translate + buildCommand", () => {
   });
 
   it("uses a clean dispatcher-owned workspace for non-git business tasks", () => {
+    const previousRuntimeRoot = process.env.HIVEWRIGHT_RUNTIME_ROOT;
+    const previousTaskWorkspaceRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+    delete process.env.HIVEWRIGHT_RUNTIME_ROOT;
+    delete process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
     const adapter = new CodexAdapter();
     const ctx = makeCtx();
     ctx.gitBackedProject = false;
     ctx.projectWorkspace = "/tmp/business-workspace-with-historical-agents";
     ctx.hiveWorkspacePath = "/tmp/business-workspace-with-historical-agents";
 
-    const args = adapter.buildCommand(ctx);
-    const cIdx = args.indexOf("-C");
+    try {
+      const args = adapter.buildCommand(ctx);
+      const cIdx = args.indexOf("-C");
 
-    expect(cIdx).toBeGreaterThanOrEqual(0);
-    expect(args[cIdx + 1]).toMatch(/\.hivewright\/task-workspaces\/t-1$/);
-    expect(args[cIdx + 1]).not.toBe("/tmp/business-workspace-with-historical-agents");
+      expect(cIdx).toBeGreaterThanOrEqual(0);
+      expect(args[cIdx + 1]).toMatch(/\.hivewright\/task-workspaces\/t-1$/);
+      expect(args[cIdx + 1]).not.toBe("/tmp/business-workspace-with-historical-agents");
+    } finally {
+      if (previousRuntimeRoot === undefined) delete process.env.HIVEWRIGHT_RUNTIME_ROOT;
+      else process.env.HIVEWRIGHT_RUNTIME_ROOT = previousRuntimeRoot;
+      if (previousTaskWorkspaceRoot === undefined) delete process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+      else process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = previousTaskWorkspaceRoot;
+    }
+  });
+
+  it("uses the session-injected runtime root for non-git task workspaces", () => {
+    const previousRuntimeRoot = process.env.HIVEWRIGHT_RUNTIME_ROOT;
+    const previousTaskWorkspaceRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+    process.env.HIVEWRIGHT_RUNTIME_ROOT = "/home/trent/.hivewright";
+    process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = "/home/trent/.hivewright/task-workspaces";
+    const adapter = new CodexAdapter();
+    const ctx = makeCtx();
+    ctx.gitBackedProject = false;
+    ctx.projectWorkspace = "/tmp/business-workspace-with-historical-agents";
+    ctx.hiveWorkspacePath = "/tmp/business-workspace-with-historical-agents";
+    ctx.credentials = {
+      HIVEWRIGHT_RUNTIME_ROOT: "/tmp/live-runtime",
+      HIVEWRIGHT_TASK_WORKSPACE_ROOT: "/tmp/live-runtime/task-workspaces",
+    };
+
+    try {
+      const args = adapter.buildCommand(ctx);
+      const cIdx = args.indexOf("-C");
+
+      expect(cIdx).toBeGreaterThanOrEqual(0);
+      expect(args[cIdx + 1]).toBe("/tmp/live-runtime/task-workspaces/t-1");
+    } finally {
+      if (previousRuntimeRoot === undefined) delete process.env.HIVEWRIGHT_RUNTIME_ROOT;
+      else process.env.HIVEWRIGHT_RUNTIME_ROOT = previousRuntimeRoot;
+      if (previousTaskWorkspaceRoot === undefined) delete process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+      else process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = previousTaskWorkspaceRoot;
+    }
   });
 
   it("injects output-discipline instructions so persisted results do not become tool chatter", () => {

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import { promises as fsp } from "fs";
 import * as path from "path";
 import type { Sql } from "postgres";
+import { isUuidLike } from "@/lib/uuid";
 
 const DEFAULT_WARNING_FREE_RATIO = 0.15;
 const DEFAULT_HARD_FREE_RATIO = 0.08;
@@ -565,11 +566,17 @@ export function defaultTerminalStateChecker(sql: Sql): AgentEnvironmentTerminalS
   return async (scope) => {
     if (scope.kind === "probe") return { terminal: true, proof: "probe scope" };
     if (scope.kind === "task") {
+      if (!isUuidLike(scope.scopeId)) {
+        return { terminal: false, proof: "synthetic non-UUID task scope" };
+      }
       const rows = await sql<{ status: string | null }[]>`SELECT status FROM tasks WHERE id = ${scope.scopeId} LIMIT 1`;
       const status = rows[0]?.status ?? null;
       return { terminal: !!status && TERMINAL_TASK_STATUSES.has(status), proof: status ? `tasks.status=${status}` : "task row missing" };
     }
     if (scope.kind === "goal-supervisor") {
+      if (!isUuidLike(scope.scopeId)) {
+        return { terminal: false, proof: "synthetic non-UUID goal scope" };
+      }
       const rows = await sql<{ status: string | null; supervisor_status: string | null }[]>`
         SELECT status, supervisor_status FROM goals WHERE id = ${scope.scopeId} LIMIT 1
       `;

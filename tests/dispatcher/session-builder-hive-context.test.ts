@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { renderSessionPrompt } from "../../src/adapters/context-renderer";
 import { testSql as sql, truncateAll } from "../_lib/test-db";
 import { buildSessionContext } from "../../src/dispatcher/session-builder";
 import type { ClaimedTask } from "../../src/dispatcher/types";
@@ -100,5 +104,85 @@ describe("buildSessionContext — hive context injection", () => {
     const ctx = await buildSessionContext(sql, task);
     expect(ctx.projectWorkspace).toBeNull();
     expect(ctx.hiveContext).not.toContain("**Working in:**");
+  });
+
+  it("falls back to the live runtime hive workspace when the stored hive workspace path is stale", async () => {
+    const previousRuntimeRoot = process.env.HIVEWRIGHT_RUNTIME_ROOT;
+    const previousEnvFile = process.env.HIVEWRIGHT_ENV_FILE;
+    const previousTaskWorkspaceRoot = process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+    const previousHivesWorkspaceRoot = process.env.HIVES_WORKSPACE_ROOT;
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sb-runtime-"));
+    const hiveSlug = "sb-stale-hive";
+    const legacyWorkspace = path.join(tmpRoot, "legacy", "projects");
+    const runtimeWorkspace = path.join(tmpRoot, "runtime", "hives", hiveSlug, "projects");
+    const taskWorkspace = path.join(tmpRoot, "task-workspaces", "task-123");
+    fs.mkdirSync(runtimeWorkspace, { recursive: true });
+    fs.mkdirSync(taskWorkspace, { recursive: true });
+    process.env.HIVEWRIGHT_RUNTIME_ROOT = path.join(tmpRoot, "runtime");
+    process.env.HIVEWRIGHT_ENV_FILE = "/home/trent/.hivewright/config/.env";
+    process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = "/home/trent/.hivewright/task-workspaces";
+    delete process.env.HIVES_WORKSPACE_ROOT;
+
+    try {
+      const [hive] = await sql<{ id: string }[]>`
+        INSERT INTO hives (name, slug, type, description, mission, workspace_path)
+        VALUES ('Stale Hive', ${hiveSlug}, 'digital', 'desc', 'Ship safely.', ${legacyWorkspace})
+        RETURNING id
+      `;
+      await sql`
+        INSERT INTO role_templates (slug, name, department, type, role_md, soul_md, tools_md,
+                                     recommended_model, adapter_type, active)
+        VALUES ('test-role', 'Test Role', 'general', 'executor', '# Role', null, null,
+                'anthropic/claude-sonnet-4-6', 'claude-code', true)
+        ON CONFLICT (slug) DO UPDATE SET active = true
+      `;
+      const [taskRow] = await sql<{ id: string }[]>`
+        INSERT INTO tasks (hive_id, title, brief, assigned_to, created_by, status)
+        VALUES (${hive.id}, 'T', 'do things', 'test-role', 'test', 'active')
+        RETURNING id
+      `;
+
+      const task: ClaimedTask = {
+        id: taskRow.id,
+        hiveId: hive.id,
+        assignedTo: "test-role",
+        createdBy: "test",
+        status: "active",
+        priority: 0,
+        title: "T",
+        brief: "do things",
+        parentTaskId: null,
+        goalId: null,
+        sprintNumber: null,
+        qaRequired: false,
+        acceptanceCriteria: null,
+        retryCount: 0,
+        doctorAttempts: 0,
+        failureReason: null,
+        projectId: null,
+      };
+
+      const ctx = await buildSessionContext(sql, task);
+      const prompt = renderSessionPrompt(ctx, { workspace: taskWorkspace });
+
+      expect(ctx.projectWorkspace).toBe(runtimeWorkspace);
+      expect(ctx.hiveWorkspacePath).toBe(runtimeWorkspace);
+      expect(ctx.credentials.HIVEWRIGHT_RUNTIME_ROOT).toBe(path.join(tmpRoot, "runtime"));
+      expect(ctx.credentials.HIVEWRIGHT_ENV_FILE).toBe(path.join(tmpRoot, "runtime", "config", ".env"));
+      expect(ctx.credentials.HIVEWRIGHT_TASK_WORKSPACE_ROOT).toBe(path.join(tmpRoot, "runtime", "task-workspaces"));
+      expect(ctx.credentials.HIVES_WORKSPACE_ROOT).toBe(path.join(tmpRoot, "runtime", "hives"));
+      expect(prompt).toContain(`The owning hive/business workspace is: \`${runtimeWorkspace}\``);
+      expect(prompt).not.toContain(legacyWorkspace);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      if (previousRuntimeRoot === undefined) delete process.env.HIVEWRIGHT_RUNTIME_ROOT;
+      else process.env.HIVEWRIGHT_RUNTIME_ROOT = previousRuntimeRoot;
+      if (previousEnvFile === undefined) delete process.env.HIVEWRIGHT_ENV_FILE;
+      else process.env.HIVEWRIGHT_ENV_FILE = previousEnvFile;
+      if (previousTaskWorkspaceRoot === undefined) delete process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT;
+      else process.env.HIVEWRIGHT_TASK_WORKSPACE_ROOT = previousTaskWorkspaceRoot;
+      if (previousHivesWorkspaceRoot === undefined) delete process.env.HIVES_WORKSPACE_ROOT;
+      else process.env.HIVES_WORKSPACE_ROOT = previousHivesWorkspaceRoot;
+    }
   });
 });

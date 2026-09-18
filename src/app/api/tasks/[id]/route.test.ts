@@ -21,11 +21,13 @@ const mockSql = sql as unknown as ReturnType<typeof vi.fn>;
 const mockRequireApiUser = requireApiUser as unknown as ReturnType<typeof vi.fn>;
 const mockCanAccessHive = canAccessHive as unknown as ReturnType<typeof vi.fn>;
 
-const params = { params: Promise.resolve({ id: "task-1" }) };
+const TASK_ID = "11111111-1111-1111-1111-111111111111";
+const HIVE_ID = "11111111-1111-4111-8111-111111111111";
+const params = { params: Promise.resolve({ id: TASK_ID }) };
 
 const taskRow = {
-  id: "task-1",
-  hive_id: "11111111-1111-4111-8111-111111111111",
+  id: TASK_ID,
+  hive_id: HIVE_ID,
   assigned_to: "dev-agent",
   created_by: "owner",
   status: "pending",
@@ -85,9 +87,22 @@ describe("GET /api/tasks/[id]", () => {
       response: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
     });
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
 
     expect(res.status).toBe(401);
+    expect(mockSql).not.toHaveBeenCalled();
+    expect(mockCanAccessHive).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 without DB access for synthetic non-UUID task ids", async () => {
+    const res = await GET(
+      new Request(`http://localhost/api/tasks/llm-release-scan-websearch?hiveId=${HIVE_ID}`),
+      { params: Promise.resolve({ id: "llm-release-scan-websearch" }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toBe("Task not found");
     expect(mockSql).not.toHaveBeenCalled();
     expect(mockCanAccessHive).not.toHaveBeenCalled();
   });
@@ -96,45 +111,45 @@ describe("GET /api/tasks/[id]", () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "user-1", email: "user@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockSql.mockResolvedValueOnce([taskRow]);
     mockCanAccessHive.mockResolvedValueOnce(false);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(403);
     expect(body.error).toBe("Forbidden: caller cannot access this hive");
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", "11111111-1111-4111-8111-111111111111");
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "user-1", HIVE_ID);
   });
 
   it("allows hive members to read the task", async () => {
     mockRequireApiUser.mockResolvedValueOnce({
       user: { id: "member-1", email: "member@example.com", isSystemOwner: false },
     });
-    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
     mockCanAccessHive.mockResolvedValueOnce(true);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data).toMatchObject({ id: "task-1", hiveId: "11111111-1111-4111-8111-111111111111" });
-    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", "11111111-1111-4111-8111-111111111111");
+    expect(body.data).toMatchObject({ id: TASK_ID, hiveId: HIVE_ID });
+    expect(mockCanAccessHive).toHaveBeenCalledWith(mockSql, "member-1", HIVE_ID);
   });
 
   it("returns normalized usage and parent goal budget status", async () => {
-    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -158,7 +173,7 @@ describe("GET /api/tasks/[id]", () => {
   });
 
   it("includes image work product metadata and a safe download URL", async () => {
-    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
@@ -188,7 +203,7 @@ describe("GET /api/tasks/[id]", () => {
         created_at: new Date("2026-04-27T00:01:00Z"),
       }]);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -213,7 +228,7 @@ describe("GET /api/tasks/[id]", () => {
   });
 
   it("returns normalized codex empty-output runtimeDiagnostics from diagnostic task_logs", async () => {
-    mockSql.mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }]);
+    mockSql.mockResolvedValueOnce([{ id: HIVE_ID }]);
     mockSql.mockResolvedValueOnce([taskRow]);
     mockSql.mockResolvedValueOnce([{
       chunk: JSON.stringify({
@@ -235,7 +250,7 @@ describe("GET /api/tasks/[id]", () => {
     mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValueOnce([]);
 
-    const res = await GET(new Request("http://localhost/api/tasks/task-1?hiveId=11111111-1111-4111-8111-111111111111"), params);
+    const res = await GET(new Request(`http://localhost/api/tasks/${TASK_ID}?hiveId=${HIVE_ID}`), params);
     const body = await res.json();
 
     expect(res.status).toBe(200);
