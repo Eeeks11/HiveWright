@@ -197,24 +197,6 @@ export default function MarketingPage() {
     }
   }
 
-  async function startPaidCampaign(campaignId: string) {
-    if (!selected) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await readJson(await fetch(`/api/marketing/campaigns/${campaignId}/start`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ hiveId: selected.id }),
-      }));
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start paid ads campaign");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function evaluatePaidPolicy(campaignId: string) {
     if (!selected) return;
     setBusy(true);
@@ -363,9 +345,9 @@ export default function MarketingPage() {
                 <p className="mt-2 text-[13px] text-muted-foreground">Channels: {campaign.channels.map((channel) => channel.replaceAll("_", " ")).join(", ")}</p>
                 {campaign.channels.includes("ads") ? (
                   <div className="mt-3 flex flex-wrap gap-2 text-[12px]">
-                    <button disabled={busy || campaign.status !== "approved" || !campaign.spendBudgetCents} onClick={() => startPaidCampaign(campaign.id)} className="rounded bg-honey-500/20 px-2 py-1 text-honey-100 disabled:opacity-50">
-                      Start paid ads spend
-                    </button>
+                    <span className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-100">
+                      Execution proof required before HiveWright can mark paid ads as running.
+                    </span>
                     <button disabled={busy} onClick={() => evaluatePaidPolicy(campaign.id)} className="rounded bg-emerald-500/20 px-2 py-1 text-emerald-100 disabled:opacity-50">
                       Evaluate paid policy
                     </button>

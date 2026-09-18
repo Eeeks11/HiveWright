@@ -29,12 +29,12 @@ beforeEach(() => {
 });
 
 describe("POST /api/marketing/campaigns/[campaignId]/start", () => {
-  it("starts a paid ads campaign only from a persisted owner-approved cap", async () => {
+  it("refuses to mark a paid ads campaign running without durable external execution proof", async () => {
     mocks.sql.mockResolvedValueOnce([
       {
         id: CAMPAIGN_ID,
         hive_id: HIVE_ID,
-        status: "running",
+        status: "approved",
         spend_budget_cents: 50000,
         approval_policy: { paidAdsBudgetApproval: { approvalStatus: "approved", requestedBudgetCents: 50000, ownerId: "owner-1" } },
       },
@@ -43,11 +43,12 @@ describe("POST /api/marketing/campaigns/[campaignId]/start", () => {
     const res = await POST(request({ hiveId: HIVE_ID }), { params: Promise.resolve({ campaignId: CAMPAIGN_ID }) });
     const body = await res.json();
 
-    expect(res.status).toBe(200);
-    expect(body.data.campaign).toMatchObject({ id: CAMPAIGN_ID, status: "running", spendBudgetCents: 50000 });
+    expect(res.status).toBe(409);
+    expect(body.error).toMatch(/execution proof/i);
     expect(String(mocks.sql.mock.calls[0][0])).toContain("paidAdsBudgetApproval");
     expect(String(mocks.sql.mock.calls[0][0])).toContain("AND status = 'approved'");
-    expect(String(mocks.sql.mock.calls[0][0])).toContain("INSERT INTO marketing_execution_logs");
+    expect(String(mocks.sql.mock.calls[0][0])).not.toContain("SET status = 'running'");
+    expect(String(mocks.sql.mock.calls[0][0])).not.toContain("INSERT INTO marketing_execution_logs");
   });
 
   it("does not start spend when explicit cap and approval are missing", async () => {
